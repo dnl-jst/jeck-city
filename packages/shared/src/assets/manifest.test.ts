@@ -16,6 +16,8 @@ const valid = (): WorldManifest => ({
   models: [{ id: 'DENW3', chunk: '0_0', file: 'model_a.glb', bytes: 99 }],
   bikeRacks: [{ x: 4, z: 5, heading: 1.2, kind: 0 }],
   bikes: [{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }],
+  bikeModels: [{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }],
+  rackModels: [{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }],
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -85,4 +87,14 @@ test('manifest parse rejects bike type out of range and rack kind 2', () => {
   expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 5, color: 0 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 1.5, color: 0 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikeRacks: [{ x: 0, z: 0, heading: 0, kind: 2 }] })).toThrow();
+});
+
+test('manifest parse: bike and rack models, default [] and validated', () => {
+  const m = parseManifest(JSON.parse(JSON.stringify(valid())));
+  expect(m.bikeModels).toEqual([{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }]);
+  expect(m.rackModels).toEqual([{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }]);
+  const { bikeModels: _b, rackModels: _r, ...old } = valid();
+  expect(parseManifest(old).bikeModels).toEqual([]);
+  expect(parseManifest(old).rackModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), bikeModels: [{ type: 'unicycle', file: 'x.glb', bytes: 1 }] })).toThrow();
 });

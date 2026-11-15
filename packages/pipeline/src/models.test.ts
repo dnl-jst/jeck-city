@@ -1,7 +1,7 @@
 import { Document, NodeIO } from '@gltf-transform/core';
 import { expect, test } from 'vitest';
 import { buildCollision } from './chunks.js';
-import { prepareModel } from './models.js';
+import { prepareModel, prepareProp } from './models.js';
 
 /** GLB with a unit-triangle mesh `name` under a node translated by (tx, 0, tz). */
 async function glb(meshes: { name: string; tx: number; tz: number }[]): Promise<Uint8Array> {
@@ -68,4 +68,26 @@ test('lift moves render and collision', async () => {
   expect((await renderMinY(lifted.glb)) - (await renderMinY(flat.glb))).toBeCloseTo(2.5, 4);
   expect(colMinY(lifted.collision) - colMinY(flat.collision)).toBeCloseTo(2.5, 5);
   expect(lifted.centre).toEqual(flat.centre);
+});
+
+test('prepareProp keeps node names, hierarchy and empties, and compresses', async () => {
+  const doc = new Document();
+  const buf = doc.createBuffer();
+  const scene = doc.createScene();
+  const tri = (name: string) => doc.createMesh(name).addPrimitive(doc.createPrimitive().setAttribute('POSITION',
+    doc.createAccessor().setType('VEC3').setArray(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0])).setBuffer(buf)));
+  const frame = doc.createNode('frame').setMesh(tri('frame'));
+  const fork = doc.createNode('fork').setTranslation([0, 1, -0.4]).setMesh(tri('fork'));
+  const seat = doc.createNode('seat').setTranslation([0, 1, 0.3]);
+  frame.addChild(fork).addChild(seat);
+  scene.addChild(frame);
+  const out = await prepareProp(await new NodeIO().writeBinary(doc));
+  const { MeshoptDecoder } = await import('meshoptimizer');
+  const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');
+  await MeshoptDecoder.ready;
+  const back = await new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder }).readBinary(out);
+  const f = back.getRoot().listNodes().find((n) => n.getName() === 'frame')!;
+  expect(f.listChildren().map((n) => n.getName()).sort()).toEqual(['fork', 'seat']);
+  expect(f.listChildren().find((n) => n.getName() === 'seat')!.getTranslation()).toEqual([0, 1, 0.3]);
+  expect(back.getRoot().listExtensionsUsed().map((e) => e.extensionName)).toContain('EXT_meshopt_compression');
 });

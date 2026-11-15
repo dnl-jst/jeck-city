@@ -1,4 +1,4 @@
-import { BIKE_TYPES } from '../physics/biketypes';
+import { BIKE_TYPES, type BikeType } from '../physics/biketypes';
 
 /**
  * World manifest (apps/client/public/world/manifest.json), written by the pipeline.
@@ -68,6 +68,10 @@ export type WorldManifest = {
    * bikes[0] is the cargo bike at the spawn. Missing in older manifests → [].
    */
   bikes: { x: number; z: number; heading: number; type: number; color: number }[];
+  /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */
+  bikeModels: { type: BikeType; file: string; bytes: number }[];
+  /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
+  rackModels: { kind: 0 | 1; file: string; bytes: number }[];
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -155,6 +159,18 @@ export function parseManifest(json: unknown): WorldManifest {
       const b = nums(v, p, ['x', 'z', 'heading', 'type', 'color']);
       if (!Number.isInteger(b.type) || b.type < 0 || b.type >= BIKE_TYPE_COUNT) fail(`${p}.type`, `must be an integer 0..${BIKE_TYPE_COUNT - 1}`);
       return b;
+    }),
+    bikeModels: o.bikeModels === undefined ? [] : arr(o.bikeModels, 'bikeModels', (v, p) => {
+      const b = obj(v, p);
+      const type = str(b.type, `${p}.type`);
+      if (!(BIKE_TYPES as readonly string[]).includes(type)) fail(`${p}.type`, `must be one of ${BIKE_TYPES.join(', ')}`);
+      return { type: type as BikeType, file: str(b.file, `${p}.file`), bytes: num(b.bytes, `${p}.bytes`) };
+    }),
+    rackModels: o.rackModels === undefined ? [] : arr(o.rackModels, 'rackModels', (v, p) => {
+      const r = obj(v, p);
+      const kind = num(r.kind, `${p}.kind`);
+      if (kind !== 0 && kind !== 1) fail(`${p}.kind`, 'must be 0 or 1');
+      return { kind: kind as 0 | 1, file: str(r.file, `${p}.file`), bytes: num(r.bytes, `${p}.bytes`) };
     }),
     terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
     datum: num(o.datum, 'datum'),
