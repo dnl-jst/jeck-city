@@ -6,11 +6,13 @@ import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type Overrides } from './chunks.js';
 import { parseCityGml } from './citygml.js';
 import { fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
+import { generatedLamps } from './lamps.js';
 import { parseOsm } from './osm.js';
 import { parkedCarSpots } from './parking.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
+import { placeShelter } from './stops.js';
 import { buildStreetGeometry } from './streets.js';
 
 const RAW_DIR = 'data/raw';
@@ -92,6 +94,11 @@ async function main() {
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
 
+  const extraLamps = generatedLamps(f, active);
+  const lamps = [...f.lamps, ...extraLamps];
+  const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
+  console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
+
   const manifest: WorldManifest = {
     version: 1,
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
@@ -99,9 +106,12 @@ async function main() {
     chunks,
     spawn: { x: r2(spawn.x), y: spawn.y, z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
-    lamps: f.lamps.map((p) => [r2(p.x), r2(p.z)]),
+    lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
     trees: f.trees.map((p) => [r2(p.x), r2(p.z)]),
-    tramStops: graph.stops.map((s) => ({ name: s.name, x: r2(s.pos.x), z: r2(s.pos.z) })),
+    tramStops: graph.stops.map((s) => {
+      const p = placeShelter(s.pos, f);
+      return { name: s.name, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) };
+    }),
     shops: assignShops(f.shops, f.boundary, active).map((s) => ({ ...s, x: r2(s.x), z: r2(s.z) })),
     parked: parkedCars(parkedCarSpots(f, PARKING_SEED), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,

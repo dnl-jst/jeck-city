@@ -10,7 +10,7 @@ const valid = (): WorldManifest => ({
   boundary: [[0, 0], [1, 0], [1, 1]],
   lamps: [[1, 2]],
   trees: [[3, 4]],
-  tramStops: [{ name: 'Florastr.', x: 5, z: 6 }],
+  tramStops: [{ name: 'Florastr.', x: 5, z: 6, heading: -1.5 }],
   shops: [{ x: 1, z: 2, label: 'bakery', type: 'bakery', buildingId: 'DENW1' }, { x: 3, z: 4, label: 'kiosk', type: 'kiosk' }],
   parked: [{ x: 1, z: 2, heading: 0.5, color: 0xffffff }],
   attribution: '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude: Geobasis NRW (dl-de/zero-2.0)',
@@ -28,6 +28,7 @@ test('manifest parse rejects wrong version, bad chunk and bad shop', () => {
   expect(() => parseManifest({ ...valid(), chunks: [{ key: '0_0', x: 0, z: 0, file: 'a.glb' }] })).toThrow();
   expect(() => parseManifest({ ...valid(), shops: [{ x: 1, z: 2, label: 'a', type: 'b', buildingId: 7 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), lamps: [[1]] })).toThrow();
+  expect(() => parseManifest({ ...valid(), tramStops: [{ name: 'Florastr.', x: 5, z: 6 }] })).toThrow();
 });
 
 test('chunk key for point', () => expect(chunkKey(-1, 399)).toBe('-1_1'));

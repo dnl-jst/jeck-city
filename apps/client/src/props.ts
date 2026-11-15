@@ -96,7 +96,7 @@ function stopSignTexture(name: string): Texture {
   return t;
 }
 
-/** One tram stop: shelter (posts, roof, back glass, bench) and a sign post, facing +z before rotation. */
+/** One tram stop: shelter (posts, roof, back glass, bench) and a sign post, open towards +z before rotation. */
 function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStandardMaterial, glassMat: MeshStandardMaterial): Group {
   const box = (w: number, h: number, d: number, x: number, y: number, z: number) => new BoxGeometry(w, h, d).translate(x, y, z);
   const frame = merge([
@@ -116,8 +116,8 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   f.receiveShadow = true;
   group.add(f, glass, sign);
   group.position.set(stop.x, 0, stop.z);
-  // no street direction in the manifest: a stable seeded orientation in 90° steps
-  group.rotation.y = Math.floor(hash(stop.x, stop.z, 9) * 4) * (Math.PI / 2);
+  // open front (+z) faces the track, which lies left of the heading: left of (sin h, cos h) is (cos h, −sin h)
+  group.rotation.y = stop.heading + Math.PI / 2;
   group.name = `stop:${stop.name}`;
   return group;
 }

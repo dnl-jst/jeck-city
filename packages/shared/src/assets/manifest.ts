@@ -26,7 +26,11 @@ export type WorldManifest = {
   boundary: [number, number][];
   lamps: [number, number][];
   trees: [number, number][];
-  tramStops: { name: string; x: number; z: number }[];
+  /**
+   * Tram stop shelters: x/z = shelter centre (3.5 m beside the track); heading = track direction at the stop
+   * (forward = (sin h, cos h)), oriented so the track lies to the left of it.
+   */
+  tramStops: { name: string; x: number; z: number; heading: number }[];
   shops: { x: number; z: number; label: string; type: string; buildingId?: string }[];
   parked: { x: number; z: number; heading: number; color: number }[];
   attribution: string;
@@ -86,7 +90,7 @@ export function parseManifest(json: unknown): WorldManifest {
     boundary: arr(o.boundary, 'boundary', pair),
     lamps: arr(o.lamps, 'lamps', pair),
     trees: arr(o.trees, 'trees', pair),
-    tramStops: arr(o.tramStops, 'tramStops', (v, p) => ({ name: str(obj(v, p).name, `${p}.name`), ...nums(v, p, ['x', 'z']) })),
+    tramStops: arr(o.tramStops, 'tramStops', (v, p) => ({ name: str(obj(v, p).name, `${p}.name`), ...nums(v, p, ['x', 'z', 'heading']) })),
     shops: arr(o.shops, 'shops', (v, p) => {
       const s = obj(v, p);
       const shop: WorldManifest['shops'][number] = { ...nums(s, p, ['x', 'z']), label: str(s.label, `${p}.label`), type: str(s.type, `${p}.type`) };
