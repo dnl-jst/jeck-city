@@ -152,3 +152,34 @@ test('resume without prior playback creates nothing', () => {
   radio.resume();
   expect(els).toHaveLength(0);
 });
+
+test('retry budget resets after the stream reaches playing', () => {
+  const { els, calls, radio } = setup();
+  radio.tune('einslive');
+  els[0]!.fire('playing');
+  els[0]!.fire('error');
+  expect(els).toHaveLength(2);
+  els[1]!.fire('playing');
+  els[1]!.fire('error');
+  expect(els).toHaveLength(3);
+  expect(els[2]!.src).toBe(url('einslive'));
+  expect(calls.unreachable).toBe(0);
+});
+
+test('stalled before playing retries', () => {
+  const { els, radio } = setup();
+  radio.tune('einslive');
+  els[0]!.fire('stalled');
+  expect(els).toHaveLength(2);
+});
+
+test('stalled after playing is ignored', () => {
+  const { els, calls, radio } = setup();
+  radio.tune('einslive');
+  els[0]!.fire('playing');
+  els[0]!.fire('stalled');
+  expect(els).toHaveLength(1);
+  expect(els[0]!.src).toBe(url('einslive'));
+  expect(radio.playing).toBe('einslive');
+  expect(calls.unreachable).toBe(0);
+});

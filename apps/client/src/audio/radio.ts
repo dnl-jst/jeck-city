@@ -87,8 +87,11 @@ export class Radio {
     el.src = station.url;
     el.volume = RADIO_VOLUME;
     el.muted = this.muted;
+    let hasPlayed = false;
     el.addEventListener('playing', () => {
       if (gen !== this.gen) return;
+      hasPlayed = true;
+      this.retried = false;
       this.playing = station.id;
       this.events.onPlaying();
     });
@@ -97,7 +100,11 @@ export class Radio {
       this.onFailure(station.id);
     };
     el.addEventListener('error', failed);
-    el.addEventListener('stalled', failed);
+    el.addEventListener('ended', failed);
+    // Browsers fire 'stalled' on live streams during normal hiccups: only a failure while connecting.
+    el.addEventListener('stalled', () => {
+      if (!hasPlayed) failed();
+    });
     if (announce) this.events.onConnecting();
     this.play(el, gen);
   }
