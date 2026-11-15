@@ -43,6 +43,14 @@ describe('riding pose', () => {
     expect(f.foot(0).distanceTo(pedals(0.5)[0])).toBeLessThan(0.05);
   });
 
+  test('a far, low bar (MTB): the rider leans further forward until the hands are on the grips', () => {
+    const f = new PlayerFigure(new Scene());
+    const far: [Vector3, Vector3] = [new Vector3(0.36, 1.05, 0.58), new Vector3(-0.36, 1.05, 0.58)];
+    f.ride(seat, far, pedals(0), 'sport');
+    expect(f.hand(0).distanceTo(far[0])).toBeLessThan(0.08);
+    expect(f.hand(1).distanceTo(far[1])).toBeLessThan(0.08);
+  });
+
   test('hands reach towards the grips', () => {
     const f = new PlayerFigure(new Scene());
     f.ride(seat, grips, pedals(0), 'sport');

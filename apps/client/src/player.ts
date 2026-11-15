@@ -18,6 +18,10 @@ export type Posture = 'upright' | 'sport' | 'race';
 /** Upper-body pitch on the bike (rad, forward): Dutch/cargo upright, MTB sport, road race. */
 const POSTURE_PITCH: Record<Posture, number> = { upright: 0.17, sport: 0.52, race: 0.87 };
 
+/** Shoulder to the middle of the hand (m), and how much further than its posture a rider may lean to reach the bar. */
+const ARM_REACH = 0.6;
+const MAX_EXTRA_PITCH = 0.6;
+
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
 /**
@@ -146,6 +150,13 @@ export class PlayerFigure {
       shin.rotation.x = knee;
     }
     this.group.updateMatrixWorld(true);
+    // a far or low bar: lean further forward (up to MAX_EXTRA_PITCH) until both grips are within arm's reach
+    const gripsWorld = grips.map((g) => (this.group.parent ? this.group.parent.localToWorld(g.clone()) : g.clone()));
+    const reachOk = () => this.arms.every((a, i) => a.getWorldPosition(new Vector3()).distanceTo(gripsWorld[i]!) <= ARM_REACH);
+    for (let extra = 0; extra < MAX_EXTRA_PITCH && !reachOk(); extra += 0.02) {
+      this.torso.rotation.x += 0.02;
+      this.torso.updateMatrixWorld(true);
+    }
     for (let i = 0; i < 2; i++) {
       const arm = this.arms[i]!;
       arm.quaternion.identity();
