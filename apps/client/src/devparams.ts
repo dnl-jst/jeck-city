@@ -9,3 +9,12 @@ export function parseCamParam(s: string | null): DevCam | null {
   if (v.some((x) => !Number.isFinite(x))) return null;
   return { x: v[0]!, y: v[1]!, z: v[2]!, yawDeg: v[3] ?? 0, pitchDeg: v[4] ?? 0 };
 }
+
+/** `now` moved to the local date from `?date=YYYY-MM-DD`, keeping its local wall-clock time; `now` itself if absent or invalid. */
+export function withDateParam(now: Date, s: string | null): Date {
+  const r = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s ?? '');
+  if (!r) return now;
+  const y = Number(r[1]), m = Number(r[2]) - 1, d = Number(r[3]);
+  const out = new Date(y, m, d, now.getHours(), now.getMinutes(), now.getSeconds());
+  return out.getFullYear() === y && out.getMonth() === m && out.getDate() === d ? out : now;
+}

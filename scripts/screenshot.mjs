@@ -18,7 +18,8 @@ try {
   // let a few frames render after the last chunk arrived
   await page.waitForTimeout(1500);
   await page.screenshot({ path: out });
-  console.log(`saved ${out}`);
+  const info = await page.evaluate(() => window.__nnInfo?.());
+  console.log(`saved ${out}${info ? ` (draw calls ${info.calls}, triangles ${info.triangles})` : ''}`);
 } finally {
   await browser.close();
 }

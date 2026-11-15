@@ -268,7 +268,7 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
           vec3 goods = mix(vec3(0.07, 0.06, 0.05), vec3(0.11, 0.1, 0.09), item);
           col = mix(vec3(0.04, 0.042, 0.046), goods, step(p.y, 2.2) * (1.0 - shelf) * step(0.3, item));
           col *= 0.8 + 0.4 * smoothstep(3.0, 0.4, p.y);
-          glass = 1.0; lit = step(sh, 0.9) * (p.y < 2.45 ? 1.0 : 0.55) * (0.45 + 4.0 * dot(col, vec3(0.33))); warm = vec3(1.0, 0.84, 0.62) * 0.8; }
+          glass = 1.0; lit = step(sh, 0.9) * (p.y < 2.45 ? 1.0 : 0.55) * (0.45 + 4.0 * dot(col, vec3(0.33))); warm = vec3(1.0, 0.68, 0.4) * 0.45; }
         rough = 0.3;
       }
     } else {
@@ -318,19 +318,21 @@ totalEmissiveRadiance += nnGlass * nnSky * (0.03 + 0.3 * nnFres) * (1.0 - nightF
 totalEmissiveRadiance += nnEmit;
 `;
 
-export type FacadeMaterial = MeshStandardMaterial & { userData: { nightFactor: IUniform<number> } };
+export type FacadeMaterial = MeshStandardMaterial & { userData: { nightFactor: IUniform<number>; sky: IUniform<Color> } };
 
-/** MeshStandardMaterial with the procedural facade shader; drive `userData.nightFactor.value` (0..1). */
+/** MeshStandardMaterial with the procedural facade shader; drive `userData.nightFactor.value` (0..1) and `userData.sky.value` (glass reflection). */
 export function createFacadeMaterial(): FacadeMaterial {
   const mat = new MeshStandardMaterial({ roughness: 0.9, metalness: 0 }) as FacadeMaterial;
   const nightFactor: IUniform<number> = { value: 0 };
   mat.userData.nightFactor = nightFactor;
+  const sky: IUniform<Color> = { value: new Color(0x9cc3e8) };
+  mat.userData.sky = sky;
   const toLinear = (hex: number) => new Color(hex);
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.nightFactor = nightFactor;
     shader.uniforms.nnPalette = { value: PALETTE.map(toLinear) };
     shader.uniforms.nnSigns = { value: SIGNS.map(toLinear) };
-    shader.uniforms.nnSky = { value: new Color(0x9cc3e8) };
+    shader.uniforms.nnSky = sky;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${VERTEX_DECL}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERTEX_MAIN}`);

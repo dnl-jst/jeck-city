@@ -1,19 +1,27 @@
 import {
-  ACESFilmicToneMapping, Color, DirectionalLight, Euler, Fog, HemisphereLight, Mesh,
-  PerspectiveCamera, PlaneGeometry, Scene, Timer, Vector3, WebGLRenderer,
+  ACESFilmicToneMapping, Euler, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, Vector3, WebGLRenderer,
 } from 'three';
+import { sunState, type SunState } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { Hud } from './hud';
 import { WorldLoader } from './loader';
-import { parseCamParam } from './devparams';
+import { parseCamParam, withDateParam } from './devparams';
+import { Lighting } from './lighting';
+import { Props } from './props';
 
 declare global {
-  interface Window { __nnReady?: boolean | 'error' }
+  interface Window {
+    __nnReady?: boolean | 'error';
+    /** Dev: the renderer's per-frame statistics (draw calls, triangles). */
+    __nnInfo?: () => { calls: number; triangles: number };
+  }
 }
 
 const params = new URLSearchParams(location.search);
-// TEMPORARY dev hook until Task 9 drives nightFactor from the real clock
-const night = params.get('night') === '1';
+// dev hooks: ?time=HH:MM overrides the wall-clock time, ?date=YYYY-MM-DD the date (sun position)
+const timeOverride = params.get('time') ?? undefined;
+const dateOverride = params.get('date');
+const currentSun = (): SunState => sunState(withDateParam(new Date(), dateOverride), timeOverride);
 // dev hook: ?cam=x,y,z,yawDeg,pitchDeg places the fly camera (yaw: manifest heading convention)
 const devCam = parseCamParam(params.get('cam'));
 
@@ -26,19 +34,13 @@ try {
 }
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = ACESFilmicToneMapping;
-renderer.toneMappingExposure = night ? 1.0 : 1.05;
+renderer.toneMappingExposure = 1.05;
+// PCFSoftShadowMap was removed in three r18x (falls back with a warning); PCFShadowMap + radius is the soft path
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = PCFShadowMap;
+window.__nnInfo = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
 
-// placeholder lighting (Task 9 replaces it with sun position and night lighting)
-const sky = new Color(night ? 0x0a1230 : 0xa9c8e6);
 const scene = new Scene();
-scene.background = sky;
-scene.fog = new Fog(sky, night ? 80 : 150, 650);
-scene.add(night ? new HemisphereLight(0x3a4a80, 0x101018, 0.9) : new HemisphereLight(0xcfe0f5, 0x8a8070, 1.5));
-const sun = new DirectionalLight(night ? 0x8090c0 : 0xfff1dc, night ? 0.25 : 2.4);
-sun.position.set(-120, 160, 90); // from the south-west, afternoon
-scene.add(sun);
-
-// courtyards and gaps between buildings
 
 const camera = new PerspectiveCamera(60, 1, 0.3, 2000);
 function resize(): void {
@@ -96,15 +98,32 @@ const world = new WorldLoader(scene, '/world/');
 const ground = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
 ground.rotation.x = -Math.PI / 2;
 ground.renderOrder = -1;
+ground.receiveShadow = true;
 scene.add(ground);
-world.facade.userData.nightFactor.value = night ? 1 : 0;
 
-let worldReady = false;
+let lighting: Lighting | null = null;
+let props: Props | null = null;
+let propsRevision = -1;
+let sun = currentSun();
+let sunAge = 0;
 const timer = new Timer();
 renderer.setAnimationLoop((t: number) => {
   timer.update(t);
-  fly.update(Math.min(timer.getDelta(), 0.1));
-  if (worldReady) world.update(camera.position);
+  const dt = Math.min(timer.getDelta(), 0.1);
+  fly.update(dt);
+  if (lighting && props) {
+    world.update(camera.position);
+    if (world.revision !== propsRevision) {
+      propsRevision = world.revision;
+      props.rebuild(world.loadedKeys());
+    }
+    sunAge += dt;
+    if (sunAge >= 1) {
+      sunAge = 0;
+      sun = currentSun();
+    }
+    lighting.update(sun, camera.position);
+  }
   renderer.render(scene, camera);
 });
 
@@ -118,7 +137,8 @@ world.init((p) => hud.setProgress(p), start).then((m) => {
     camera.position.set(m.spawn.x, m.spawn.y + 1.7, m.spawn.z);
     fly.setHeading(m.spawn.heading);
   }
-  worldReady = true;
+  props = new Props(scene, m);
+  lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
   hud.hideLoading();
   window.__nnReady = true;
 }, (err: unknown) => {

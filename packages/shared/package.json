@@ -7,6 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "proj4": "2.22.0"
+    "proj4": "2.22.0",
+    "suncalc": "2.1.4"
   }
 }

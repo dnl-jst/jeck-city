@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseCamParam } from './devparams';
+import { parseCamParam, withDateParam } from './devparams';
 
 describe('parseCamParam', () => {
   it('parses x,y,z,yawDeg,pitchDeg', () => {
@@ -13,5 +13,19 @@ describe('parseCamParam', () => {
     expect(parseCamParam('1,2')).toBeNull();
     expect(parseCamParam('1,x,3')).toBeNull();
     expect(parseCamParam('1,2,3,4,5,6')).toBeNull();
+  });
+});
+
+describe('withDateParam', () => {
+  const now = new Date(2026, 10, 15, 21, 7, 30);
+  it('replaces the local date and keeps the local wall-clock time', () => {
+    const d = withDateParam(now, '2026-06-21');
+    expect([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()]).toEqual([2026, 5, 21, 21, 7, 30]);
+  });
+  it('returns now unchanged when missing or malformed', () => {
+    expect(withDateParam(now, null)).toBe(now);
+    expect(withDateParam(now, '2026-13-01')).toBe(now);
+    expect(withDateParam(now, '2026-02-30')).toBe(now);
+    expect(withDateParam(now, '21.06.2026')).toBe(now);
   });
 });

@@ -48,6 +48,8 @@ export class WorldLoader {
   private readonly failed = new Set<string>();
   private queue: string[] = [];
   private lastPos: XZ = { x: 0, z: 0 };
+  /** Incremented whenever a chunk is added to or removed from the scene. */
+  revision = 0;
   readonly facade = createFacadeMaterial();
   readonly street = createStreetMaterials();
 
@@ -117,13 +119,17 @@ export class WorldLoader {
         if (!mat) return;
         (mesh.material as Material).dispose();
         mesh.material = mat;
-        if (mesh.name === 'buildings') addEaveAttribute(mesh.geometry);
-        else mesh.renderOrder = STREET_RENDER_ORDER[mesh.name] ?? 0;
+        mesh.receiveShadow = true;
+        if (mesh.name === 'buildings') {
+          addEaveAttribute(mesh.geometry);
+          mesh.castShadow = true;
+        } else mesh.renderOrder = STREET_RENDER_ORDER[mesh.name] ?? 0;
       });
       root.matrixAutoUpdate = false;
       root.updateMatrixWorld(true);
       this.scene.add(root);
       this.loaded.set(key, root);
+      this.revision++;
     } finally {
       this.pending.delete(key);
     }
@@ -139,6 +145,7 @@ export class WorldLoader {
     geo.setIndex(Array.from(bed.index));
     const mesh = new Mesh(geo, this.street.trackbed);
     mesh.name = 'trackbed';
+    mesh.receiveShadow = true;
     mesh.renderOrder = STREET_RENDER_ORDER.trackbed ?? 0;
     return mesh;
   }
@@ -149,6 +156,12 @@ export class WorldLoader {
     this.scene.remove(root);
     disposeTree(root);
     this.loaded.delete(key);
+    this.revision++;
+  }
+
+  /** Keys of the chunks currently in the scene. */
+  loadedKeys(): ReadonlySet<string> {
+    return new Set(this.loaded.keys());
   }
 }
 
