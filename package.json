@@ -10,7 +10,7 @@
     "test": "vitest run",
     "dev": "npm run dev -w @nn/client",
     "build": "npm run build -w @nn/client",
-    "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared",
+    "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared && tsc --noEmit -p packages/pipeline",
     "pipeline": "tsx packages/pipeline/src/main.ts"
   },
   "devDependencies": {
