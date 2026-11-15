@@ -2,8 +2,8 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  createPhysicsWorld, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseMapData, parseTimeOverride, sunState, surfaceY,
-  type MapData, type PhysicsWorld, type SunState, type TerrainGrid,
+  decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, WorldSim,
+  type MapData, type SunState, type TerrainGrid, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
@@ -15,6 +15,7 @@ import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game } from './game';
+import { OfflineSession } from './session';
 import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
@@ -53,6 +54,10 @@ const dateOverride = params.get('date');
 const currentSun = (): SunState => sunState(withDateParam(new Date(), dateOverride), timeOverride);
 // dev hook: ?cam=x,y,z,yawDeg,pitchDeg spawns the player at x/z facing yaw (manifest heading convention), camera pitch
 const devCam = parseCamParam(params.get('cam'));
+// ?offline=1 asks for a local WorldSim without a server (to be allowed with DEV or ?debug=1 only once there is a
+// server). Until then offline is the only mode: the parameter is accepted and changes nothing.
+/** The local player's id in an offline session. */
+const OFFLINE_ME = 0;
 const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -161,11 +166,11 @@ renderer.setAnimationLoop((t: number) => {
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
     game.frame(dt, nightFactor);
-    for (const i of game.props.takeFallen()) {
+    for (const i of game.takeFallenLamps()) {
       props.knockDown(i);
       lighting.lampOut(i);
     }
-    props.syncFallen((i) => game!.props.lampPose(i));
+    props.syncFallen((i) => game!.session.sim.props.lampPose(i));
     radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     if (maps) {
       const flying = game.flying;
@@ -199,19 +204,22 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/** collision.bin + terrain.bin → physics world (runs while the spawn chunks stream in). */
+/** manifest.json, shared by the chunk loader and the simulation. */
+const manifestLoad: Promise<WorldManifest> = fetchOk('/world/manifest.json').then(async (r) => parseManifest(await r.json()));
+/** manifest + collision.bin + terrain.bin → the simulated world (built while the spawn chunks stream in). */
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
-async function loadPhysics(): Promise<{ pw: PhysicsWorld; terrain: TerrainGrid }> {
-  const [collision, terrain] = await Promise.all([
+async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
+  const [manifest, collision, terrain] = await Promise.all([
+    manifestLoad,
     fetchOk('/world/collision.bin').then(async (r) => decodeCollision(await r.arrayBuffer())),
     fetchOk('/world/terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
-  const pw = await createPhysicsWorld(collision, terrain);
+  const sim = await WorldSim.create({ manifest, collision, terrain });
   physicsLoading = false; // only once the world is built
   showStatus();
-  return { pw, terrain };
+  return { sim, terrain };
 }
 
 /** map.json → minimap and big map; a failure only means no map. */
@@ -226,7 +234,7 @@ async function loadMap(): Promise<MapData | null> {
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics(), loadMap()]).then(([m, { pw, terrain }, mapData]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap()]).then(([m, { sim, terrain }, mapData]) => {
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -235,7 +243,8 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio });
+  sim.addPlayer(OFFLINE_ME, start);
+  game = new Game(new OfflineSession(sim, OFFLINE_ME), m, { scene, camera, input, hud, debug, devCam, audio: gameAudio });
   if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -257,11 +266,11 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     return {
       mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
       radio: gameAudio.station,
-      engine: game!.ignition.state, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
+      engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
     };
   };
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
-  window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, heightAt(terrain, x, z) + 100);
+  window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);
   window.__nnReady = true;

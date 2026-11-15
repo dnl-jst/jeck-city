@@ -8,8 +8,6 @@ import type { SimEvent, WorldSim } from './world-sim';
 
 /** Below this ground speed (m/s) a person on foot counts as standing. */
 const WALK_MIN_SPEED = 0.3;
-/** A driven car slower than this (m/s) shows its brake lights (the controller's brake input is not observable). */
-const BRAKE_LIGHT_SPEED = 0.3;
 
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 const MODE = { walk: 0, drive: 1, down: 2 } as const;
@@ -51,7 +49,7 @@ export function buildSnapshot(
     const hasDriver = sim.cars.driver[i] !== null;
     cars.set(key, {
       id: i, x: s.x, y: s.y, z: s.z, qx: s.qx, qy: s.qy, qz: s.qz, qw: s.qw, vx: s.vx, vy: s.vy, vz: s.vz,
-      steer: s.steer, brakeLight: hasDriver && Math.abs(v.speed()) < BRAKE_LIGHT_SPEED, hasDriver,
+      steer: s.steer, brakeLight: sim.braking(i), hasDriver,
     });
     entities.push({ key, x: s.x, z: s.z });
   }

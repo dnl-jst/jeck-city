@@ -4,16 +4,7 @@ import {
   SRGBColorSpace, Vector3, type Scene,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import {
-  CAR_PHYSICS_FAR, CAR_PHYSICS_NEAR, headingOf, parkedPose, TUNING, Vehicle, VEHICLE_REST_Y, type CarPose, type PhysicsWorld, type TerrainGrid,
-  type WorldManifest,
-} from '@nn/shared';
-
-// moved to @nn/shared (sim/rules.ts, sim/cars.ts); re-exported for the client until Game runs on WorldSim
-export {
-  CAR_PHYSICS_FAR, CAR_PHYSICS_NEAR, canGetOut, EXIT_BEHIND, EXIT_MAX_SPEED, EXIT_SIDE, exitSpot, headingOf, nearestEnterableCar, parkedPose,
-  type CarPose,
-} from '@nn/shared';
+import { TUNING, VEHICLE_REST_Y, type CarPool, type CarPose } from '@nn/shared';
 
 type XZ = { x: number; z: number };
 
@@ -101,6 +92,9 @@ const BEAM_RANGE = 65;
 /** Red glow the tail lamps throw behind the car (cd per lamp): position lights at night, and brake lights. */
 export const TAIL_INTENSITY = 6;
 export const BRAKE_INTENSITY = 30;
+
+/** Lamp power 0..1 from the ignition's light level: dark, flickering while the starter turns (new each call), full. */
+export const lampPower = (level: 0 | 0.5 | 1, rand: () => number): number => (level === 0.5 ? 0.25 + 0.35 * rand() : level);
 
 /**
  * Low-beam pattern, linear 0..1, as a function of the direction off the beam axis given as tangents
@@ -392,20 +386,20 @@ export const needsCarRebuild = (last: XZ | null, x: number, z: number): boolean 
   !last || Math.hypot(x - last.x, z - last.z) > CAR_REBUILD_MOVE;
 
 /**
- * All manifest cars. Unoccupied ones within CAR_RENDER_RADIUS of the camera render as two InstancedMeshes (paint
- * coloured per instance, trim; updateVisibility packs them into the first instance slots);
- * a sleeping Rapier Vehicle exists only near the player. Poses of pushed cars live in `poses`, so a car
- * re-created after being disposed appears where it was left, not at its original spot.
+ * Draws the cars of the sim's CarPool. Those within CAR_RENDER_RADIUS of the camera render as two InstancedMeshes
+ * (paint coloured per instance, trim; update() packs them into the first instance slots); the own car is hidden
+ * (DrivenCar draws it). Poses come from pool.poses, which the sim replaces (new object) whenever a car moves.
  */
 export class ParkedCars {
-  readonly poses: CarPose[];
-  readonly colors: number[];
-  private readonly vehicles = new Map<number, Vehicle>();
   private readonly paint: InstancedMesh;
   private readonly trim: InstancedMesh;
-  private occupied: number | null = null;
+  /** The car the player drives: not drawn here. */
+  private own: number | null = null;
   /** Instance slot of each car, −1 while it is not drawn. */
   private readonly slots: Int32Array;
+  /** Cars with an instance slot, and the pose object last written for each car. */
+  private shown: number[] = [];
+  private readonly drawn: (CarPose | null)[];
   private lastRebuild: XZ | null = null;
   private readonly m = new Matrix4();
   private readonly q = new Quaternion();
@@ -413,13 +407,13 @@ export class ParkedCars {
   private readonly one = new Vector3(1, 1, 1);
   private readonly zero = new Vector3(0, 0, 0);
 
-  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid) {
-    this.poses = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
-    this.colors = parked.map((c) => c.color);
+  constructor(scene: Scene, private readonly pool: CarPool) {
+    const n = pool.count;
     const g = carGeometries();
-    this.paint = new InstancedMesh(g.paint, paintMaterial(), parked.length);
-    this.trim = new InstancedMesh(merged([g.trim, g.head, g.tail]), trimMaterial(), parked.length);
-    this.slots = new Int32Array(parked.length).fill(-1);
+    this.paint = new InstancedMesh(g.paint, paintMaterial(), n);
+    this.trim = new InstancedMesh(merged([g.trim, g.head, g.tail]), trimMaterial(), n);
+    this.slots = new Int32Array(n).fill(-1);
+    this.drawn = new Array<CarPose | null>(n).fill(null);
     this.paint.setColorAt(0, new Color()); // allocate instanceColor
     for (const im of [this.paint, this.trim]) {
       im.count = 0;
@@ -429,44 +423,65 @@ export class ParkedCars {
     }
   }
 
-  /** Cars that must have an instance slot regardless of distance: physics-active ones and the occupied one. */
+  get count(): number {
+    return this.pool.count;
+  }
+
+  /** Hides car i (the one the player now drives; null = none) and shows the previous one again. */
+  setOwn(i: number | null): void {
+    const old = this.own;
+    this.own = i;
+    for (const c of [old, i]) if (c !== null) this.drawn[c] = null; // rewritten (scale) by the next update()
+  }
+
+  /** Cars that must have an instance slot regardless of distance: those with physics (near a player) or a driver. */
   private always(): number[] {
-    return this.occupied === null ? [...this.vehicles.keys()] : [...this.vehicles.keys(), this.occupied];
+    const out: number[] = [];
+    for (let i = 0; i < this.pool.count; i++) if (this.pool.vehicle(i) || this.pool.driver[i] !== null) out.push(i);
+    return out;
   }
 
   /**
-   * Draws only the cars within CAR_RENDER_RADIUS of the camera at (x, z) plus every physics-active and the occupied
-   * car; rebuilt after CAR_REBUILD_MOVE of movement or when one of those always-drawn cars has no slot yet.
+   * Per frame, with the camera at (x, z): draws the cars within CAR_RENDER_RADIUS plus every always-drawn one
+   * (rebuilt after CAR_REBUILD_MOVE of movement or when an always-drawn car has no slot yet), and rewrites the
+   * matrices of the drawn cars whose pose changed.
    */
-  updateVisibility(x: number, z: number): void {
+  update(x: number, z: number): void {
     const always = this.always();
-    if (!needsCarRebuild(this.lastRebuild, x, z) && always.every((i) => this.slots[i]! >= 0)) return;
+    if (needsCarRebuild(this.lastRebuild, x, z) || !always.every((i) => this.slots[i]! >= 0)) this.rebuild(x, z, always);
+    let changed = false;
+    for (const i of this.shown) {
+      if (this.pool.poses[i] === this.drawn[i]) continue;
+      this.writeMatrix(i);
+      changed = true;
+    }
+    if (changed) this.flush();
+  }
+
+  private rebuild(x: number, z: number, always: number[]): void {
     this.lastRebuild = { x, z };
-    const shown = visibleCars(this.poses, x, z, CAR_RENDER_RADIUS, always);
+    this.shown = visibleCars(this.pool.poses, x, z, CAR_RENDER_RADIUS, always);
     this.slots.fill(-1);
     const col = new Color();
-    shown.forEach((i, k) => {
+    this.shown.forEach((i, k) => {
       this.slots[i] = k;
-      this.paint.setColorAt(k, col.setHex(this.colors[i]!));
+      this.paint.setColorAt(k, col.setHex(this.pool.colors[i]!));
       this.writeMatrix(i);
     });
     for (const im of [this.paint, this.trim]) {
-      im.count = shown.length;
+      im.count = this.shown.length;
       im.computeBoundingSphere();
     }
     this.paint.instanceColor!.needsUpdate = true;
     this.flush();
   }
 
-  get count(): number {
-    return this.poses.length;
-  }
-
   private writeMatrix(i: number): void {
     const k = this.slots[i]!;
     if (k < 0) return;
-    const s = this.poses[i]!;
-    this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.occupied ? this.zero : this.one);
+    const s = this.pool.poses[i]!;
+    this.drawn[i] = s;
+    this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own ? this.zero : this.one);
     this.paint.setMatrixAt(k, this.m);
     this.trim.setMatrixAt(k, this.m);
   }
@@ -474,73 +489,5 @@ export class ParkedCars {
   private flush(): void {
     this.paint.instanceMatrix.needsUpdate = true;
     this.trim.instanceMatrix.needsUpdate = true;
-  }
-
-  /** Creates physics cars within CAR_PHYSICS_NEAR of (x, z) and disposes those beyond CAR_PHYSICS_FAR (keeping their pose). */
-  updateProximity(x: number, z: number): void {
-    for (let i = 0; i < this.poses.length; i++) {
-      const s = this.poses[i]!;
-      const d = Math.hypot(s.x - x, s.z - z);
-      const v = this.vehicles.get(i);
-      if (!v && d <= CAR_PHYSICS_NEAR) this.vehicles.set(i, this.spawn(i));
-      else if (v && d > CAR_PHYSICS_FAR && i !== this.occupied) {
-        this.poses[i] = v.pose();
-        v.dispose();
-        this.vehicles.delete(i);
-      }
-    }
-  }
-
-  /** A sleeping Vehicle at the car's stored pose (its original spot or where it was pushed to). */
-  private spawn(i: number): Vehicle {
-    const s = this.poses[i]!;
-    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y });
-    // tilted on a slope (or left tilted after a push): keep the stored rotation
-    if (Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
-    return v;
-  }
-
-  /** Copies the poses of awake (pushed or driven) cars into the instances. */
-  sync(): void {
-    let changed = false;
-    for (const [i, v] of this.vehicles) {
-      if (v.chassis.isSleeping()) continue;
-      this.poses[i] = v.pose();
-      if (i !== this.occupied) { this.writeMatrix(i); changed = true; }
-    }
-    if (changed) this.flush();
-  }
-
-  /** Cars for nearestEnterableCar. */
-  candidates(): { id: number; x: number; z: number; occupied: boolean }[] {
-    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, occupied: id === this.occupied }));
-  }
-
-  /** Takes car i: hides its instance and returns its (occupied, awake) Vehicle. */
-  enter(i: number): Vehicle {
-    let v = this.vehicles.get(i);
-    if (!v) this.vehicles.set(i, (v = this.spawn(i)));
-    this.occupied = i;
-    v.setOccupied(true);
-    this.writeMatrix(i);
-    this.flush();
-    return v;
-  }
-
-  /** Leaves the occupied car where it is: parking brake on, instance shown again. */
-  exit(): void {
-    const i = this.occupied;
-    if (i === null) return;
-    const v = this.vehicles.get(i)!;
-    v.setOccupied(false);
-    this.poses[i] = v.pose();
-    this.occupied = null;
-    this.writeMatrix(i);
-    this.flush();
-  }
-
-  /** Number of physics cars (debug/tests). */
-  physicsCount(): number {
-    return this.vehicles.size;
   }
 }

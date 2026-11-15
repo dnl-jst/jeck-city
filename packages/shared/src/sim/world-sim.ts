@@ -64,6 +64,8 @@ export class WorldSim {
   tick = 0;
   private readonly list = new Map<PlayerId, Player>();
   private readonly ignitions: Ignition[];
+  /** Per car: whether the last applied driver input brakes (brake lights). */
+  private readonly brakes: boolean[];
   private readonly resets = new ResetTimers();
 
   private constructor(
@@ -71,6 +73,7 @@ export class WorldSim {
     private readonly foci: 'players' | readonly XZ[],
   ) {
     this.ignitions = cars.poses.map(() => new Ignition());
+    this.brakes = cars.poses.map(() => false);
   }
 
   /** Builds the world from the assets. foci: where cars get physics bodies ('players' = around every player, default). */
@@ -125,6 +128,11 @@ export class WorldSim {
     return this.ignitions[i]!;
   }
 
+  /** Whether car i's brake lights are on: its driver holds the brake or throttles against the direction of travel. */
+  braking(i: number): boolean {
+    return this.brakes[i]!;
+  }
+
   /** Sets the radio of the car player `id` drives; ignored on foot. */
   setRadio(id: PlayerId, station: StationId | null): void {
     const car = this.list.get(id)?.car;
@@ -170,8 +178,10 @@ export class WorldSim {
       if (pl.car === null) {
         pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
       } else {
+        const v = this.cars.vehicle(pl.car)!;
         const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
-        this.cars.vehicle(pl.car)!.applyInput({ throttle, steer: input.right, brake: input.brake });
+        v.applyInput({ throttle, steer: input.right, brake: input.brake });
+        this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
       }
     }
 
@@ -301,5 +311,6 @@ export class WorldSim {
   private leaveCar(i: number): void {
     this.cars.exit(i);
     this.ignitions[i]!.stop();
+    this.brakes[i] = false;
   }
 }

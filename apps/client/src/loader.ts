@@ -77,12 +77,14 @@ export class WorldLoader {
   constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
 
   /**
-   * Loads the manifest and every chunk within READY_RADIUS of `start` (default: the spawn);
-   * resolves when they are in the scene.
+   * Loads the manifest (unless given: already being loaded elsewhere) and every chunk within READY_RADIUS of `start`
+   * (default: the spawn); resolves when they are in the scene.
    */
-  async init(onProgress: (p: number) => void, start?: XZ, onStatus: (text: string) => void = () => {}): Promise<WorldManifest> {
+  async init(
+    onProgress: (p: number) => void, start?: XZ, onStatus: (text: string) => void = () => {}, manifestLoad?: Promise<WorldManifest>,
+  ): Promise<WorldManifest> {
     onStatus('Karte …');
-    const manifest = parseManifest(await (await fetchOk(`${this.baseUrl}manifest.json`)).json());
+    const manifest = await (manifestLoad ?? fetchOk(`${this.baseUrl}manifest.json`).then(async (r) => parseManifest(await r.json())));
     this.manifest = manifest;
     this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;

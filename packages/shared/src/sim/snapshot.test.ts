@@ -53,6 +53,18 @@ describe('buildSnapshot', () => {
     expect(mine.own.car).not.toBeNull();
   });
 
+  test('brake light follows the driver input, not the speed', async () => {
+    const sim = await world();
+    sim.addPlayer(3, { x: 6.5, z: 0 });
+    sim.step(new Map([[3, { ...N, use: true }]]));
+    const light = () => buildSnapshot(sim, 1, new Interest(), 0, [], slotOf).cars.find((c) => c.hasDriver)!.brakeLight;
+    expect(light()).toBe(false); // standing, no brake
+    sim.step(new Map([[3, { ...N, brake: true }]]));
+    expect(light()).toBe(true);
+    sim.step(new Map([[3, N]]));
+    expect(light()).toBe(false);
+  });
+
   test('events: knock for oneself always, others by range', async () => {
     const sim = await world();
     const ev = [

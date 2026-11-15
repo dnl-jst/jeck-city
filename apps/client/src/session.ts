@@ -1,0 +1,53 @@
+import { FixedStepper, TUNING, type PlayerId, type PlayerInput, type SimEvent, type StationId, type WorldSim } from '@nn/shared';
+
+/**
+ * Where the game's world comes from: a WorldSim the client steps (offline) or, later, one that follows a server.
+ * Game renders `sim` and feeds the local player's input in through frame().
+ */
+export interface Session {
+  readonly sim: WorldSim;
+  readonly me: PlayerId;
+  /**
+   * Adds dt seconds of frame time and runs the fixed steps due. `input.use` and `input.jump` mean "pressed since the
+   * last frame": they reach the sim as a one-tick pulse in the next step. radioCmd: the station to set in the own car
+   * (undefined = unchanged). Returns the events of all steps run.
+   */
+  frame(dt: number, input: PlayerInput, radioCmd?: StationId | null): SimEvent[];
+  /** Fraction (0..1) of a step accumulated since the last one: blend previous → current state by it. */
+  readonly alpha: number;
+  /** Fixed steps run so far. */
+  readonly steps: number;
+  /** Called after every fixed step (to sample states for interpolation). */
+  onStep: (() => void) | null;
+}
+
+/** Single player without a server: the local WorldSim is stepped directly at 60 Hz. */
+export class OfflineSession implements Session {
+  steps = 0;
+  onStep: (() => void) | null = null;
+  private readonly stepper = new FixedStepper(TUNING.world.dt, 5);
+  /** use/jump pressed but not yet sent in a step. */
+  private use = false;
+  private jump = false;
+
+  constructor(readonly sim: WorldSim, readonly me: PlayerId) {}
+
+  get alpha(): number {
+    return this.stepper.alpha;
+  }
+
+  frame(dt: number, input: PlayerInput, radioCmd?: StationId | null): SimEvent[] {
+    if (radioCmd !== undefined) this.sim.setRadio(this.me, radioCmd);
+    this.use ||= input.use;
+    this.jump ||= input.jump;
+    const ev: SimEvent[] = [];
+    this.stepper.advance(dt, () => {
+      const i: PlayerInput = { ...input, use: this.use, jump: this.jump };
+      this.use = this.jump = false;
+      for (const e of this.sim.step(new Map([[this.me, i]]))) ev.push(e);
+      this.steps++;
+      this.onStep?.();
+    });
+    return ev;
+  }
+}

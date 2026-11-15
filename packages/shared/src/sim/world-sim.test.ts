@@ -139,6 +139,26 @@ for (const [name, assets, skip] of worlds) {
       expect(sim.player(1).mode).toBe('drive');
     }, 30_000);
 
+    test('braking: brake held, or throttle against the direction of travel; off once the driver is out', async () => {
+      const { sim, car } = await nextToCar();
+      sim.step(new Map([[1, USE]]));
+      expect(sim.braking(car)).toBe(false);
+      sim.step(new Map([[1, { ...N, brake: true }]]));
+      expect(sim.braking(car)).toBe(true);
+      run(sim, 90);
+      expect(sim.braking(car)).toBe(false);
+      run(sim, 90, () => new Map([[1, GAS]]));
+      expect(sim.cars.vehicle(car)!.speed()).toBeGreaterThan(1);
+      expect(sim.braking(car)).toBe(false);
+      sim.step(new Map([[1, { ...N, forward: -1 }]]));
+      expect(sim.braking(car)).toBe(true);
+      run(sim, 200, () => new Map([[1, { ...N, brake: true }]]));
+      expect(sim.braking(car)).toBe(true);
+      sim.step(new Map([[1, USE]]));
+      expect(sim.player(1).mode).toBe('walk');
+      expect(sim.braking(car)).toBe(false);
+    }, 30_000);
+
     test('deterministic replay', async () => {
       const a = await assets();
       const car = pickCar(a);
