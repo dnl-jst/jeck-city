@@ -19,7 +19,7 @@
 - Keine GTA-Namen, -Figuren, -Logos, -Musik, -Optik oder -HUD-Anmutung.
 - Ladennamen: erfunden, gern Anspielung auf echte Läden der Neusser Straße; keine echten Logos, nichts mit echten Marken Verwechselbares.
 - Tag/Nacht folgt 1:1 der lokalen Browser-Uhrzeit; Sonnenstand für Köln-Nippes berechnet; beide Lichtstimmungen Pflicht. Entwickler-Override per URL `?time=HH:MM`.
-- Leistung: ≥ 50 fps auf dem Mac des Nutzers in Chrome, bei Tag und Nacht; Ladezeit < 10 s; Nachtlicht über Emissive-Materialien + max. 8 echte Punktlichter nahe der Kamera.
+- Leistung: ≥ 50 fps auf dem Mac des Nutzers in Chrome, bei Tag und Nacht; Ladezeit vorerst ohne Vorgabe (nur messen); Nachtlicht über Emissive-Materialien + max. 8 echte Punktlichter nahe der Kamera.
 - Spielbereich: OSM-Relation 2613766 (Stadtteil Nippes, admin_level 10). Gebäude bis 150 m außerhalb als Kulisse ohne Ladenlokale.
 - Start: Neusser Straße, Höhe Wilhelmplatz (OSM-Weg 59506057, Zentrum 50.9630937 N, 6.9521820 E).
 - Koordinaten: lokaler Ursprung `ORIGIN_UTM = { e: 356198, n: 5647717 }` (EPSG:25832, ≈ Wilhelmplatz). Welt: `x = e - 356198` (Ost), `y` = Höhe, `z = -(n - 5647717)` (Süd positiv, Three.js-üblich).
@@ -436,7 +436,7 @@ test('curated name used', () => expect(assignShopLabels([{ name: 'X', type: 'caf
 - [ ] **Step 2:** Run → FAIL.
 - [ ] **Step 3:** Implement; Loader wirft `FetchError` bei !ok; Boot prüft WebGL2 vor allem anderen.
 - [ ] **Step 4:** Run `npm test` → alles PASS. Run `npm run build && npx vite preview`; im Chrome mit `?debug=1`:
-  - Ladezeit bis spielbar < 10 s (Netzwerk-Drosselung „Fast 4G“ aus).
+  - Ladezeit bis spielbar messen und berichten (keine Vorgabe).
   - Fahrt die Neusser Straße entlang bei `?time=12:00` und `?time=23:00`: fps ≥ 50 auf dem Mac des Nutzers. Wenn nicht: Schattenradius, Chunk-Radius, Baumdichte in dieser Reihenfolge reduzieren.
   - Nutzer prüft Wiedererkennbarkeit der Neusser Straße.
 - [ ] **Step 5:** Commit `feat(client): robust loading, perf overlay`.

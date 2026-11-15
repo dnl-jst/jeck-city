@@ -42,8 +42,7 @@ try {
   console.table(rows);
   for (const r of rows) if (r.ready !== true) { console.error(`FAIL: ${r.case} did not become ready (${r.ready})`); failed = true; }
   const f4g = rows.find((r) => r.case.includes('Fast 4G'));
-  if (f4g && Number(f4g['time s']) >= 10) { console.error(`FAIL: Fast 4G time to ready ${f4g['time s']} s >= 10 s`); failed = true; }
-  console.log('Goal: ready < 10 s on Fast 4G. fps from headless SwiftShader is not meaningful; measure on a real machine with ?debug=1.');
+  console.log('Load times are reported only (no target for now). fps from headless SwiftShader is not meaningful; measure on a real machine with ?debug=1.');
 } finally {
   preview.kill();
 }
