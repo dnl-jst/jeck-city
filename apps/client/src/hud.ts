@@ -19,7 +19,7 @@ export const HUD_CSS = `
   .nn-loading-status { margin-top: 8px; font-size: 12px; opacity: 0.8; }
   .nn-loading-controls { margin-top: 18px; font-size: 12px; opacity: 0.65; }
   .nn-error { color: #ffb4a8; }
-  .nn-attribution { position: fixed; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
+  .nn-attribution { position: fixed; z-index: 2; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
     font: 11px/1.3 system-ui, sans-serif; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
   .nn-hint, .nn-note { position: fixed; left: 50%; transform: translateX(-50%); color: #fff; pointer-events: none;
     font: 13px/1.3 system-ui, sans-serif; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
@@ -63,7 +63,7 @@ export const HUD_CSS = `
     font-size: 11px; line-height: 16px; color: #f2c46b; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
   .nn-minimap-street { margin-top: 6px; text-align: center; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
   .nn-minimap-street:empty { display: none; }
-  .nn-bigmap { position: fixed; inset: 0; background: rgba(10,12,20,0.88); color: #fff; font: 13px/1.3 system-ui, sans-serif; }
+  .nn-bigmap { position: fixed; z-index: 1; inset: 0; pointer-events: none; background: rgba(10,12,20,0.88); color: #fff; font: 13px/1.3 system-ui, sans-serif; }
   .nn-bigmap.nn-hidden { display: none; }
   .nn-bigmap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
   .nn-bigmap-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 4px 10px; border-radius: 12px;

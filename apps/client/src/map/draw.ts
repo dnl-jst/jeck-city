@@ -21,17 +21,18 @@ function fillPolys(ctx: CanvasRenderingContext2D, polys: number[][], color: stri
 
 function fillTriangles(ctx: CanvasRenderingContext2D, tris: number[][], color: string): void {
   if (tris.length === 0) return;
-  ctx.beginPath();
+  ctx.fillStyle = color;
+  // one path per building: a single huge path makes the nonzero fill (software rasteriser) seconds slow
   for (const t of tris) {
+    ctx.beginPath();
     for (let i = 0; i + 5 < t.length; i += 6) {
       ctx.moveTo(t[i]!, t[i + 1]!);
       ctx.lineTo(t[i + 2]!, t[i + 3]!);
       ctx.lineTo(t[i + 4]!, t[i + 5]!);
       ctx.closePath();
     }
+    ctx.fill();
   }
-  ctx.fillStyle = color;
-  ctx.fill();
 }
 
 /**
