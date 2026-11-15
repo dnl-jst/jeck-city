@@ -38,9 +38,22 @@ describe('placeLabels', () => {
   it('skips segments shorter than the text', () => {
     expect(run(data({ roads: [road('Langer Name', [0, 0, 10, 0])] }), view(1))).toHaveLength(0);
   });
-  it('uses the longest segment that fits', () => {
+  it('labels the midpoint of a collinear run', () => {
     const l = run(data({ roads: [road('Ab', [0, 0, 20, 0, 120, 0])] }), view(1));
-    expect(l[0]!.sx).toBeCloseTo(1200 + 70);
+    expect(l[0]!.sx).toBeCloseTo(1200 + 60);
+  });
+  it('labels a gently curved road made of many short segments', () => {
+    const pts: number[] = [];
+    for (let i = 0; i <= 15; i++) { const a = i * 0.03; pts.push(Math.sin(a) * 667, 667 - Math.cos(a) * 667); }
+    const l = run(data({ roads: [road('Kurvenstrasse', pts)] }), view(1));
+    expect(l).toHaveLength(1);
+    expect(Number.isFinite(l[0]!.angle)).toBe(true);
+  });
+  it('skips a road with a sharp corner whose legs are shorter than the text', () => {
+    expect(run(data({ roads: [road('Eckstrasse Lang', [0, 0, 60, 0, 60, 60])] }), view(1))).toHaveLength(0);
+  });
+  it('ignores roads with fewer than two points', () => {
+    expect(run(data({ roads: [road('Punkt', [5, 5]), road('Leer', [])] }), view(1))).toHaveLength(0);
   });
   it('same name repeats only far apart', () => {
     const roads = [];

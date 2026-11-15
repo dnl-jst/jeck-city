@@ -49,6 +49,66 @@ function readableAngle(dx: number, dy: number): number {
   return a;
 }
 
+const MAX_TURN = Math.PI / 6;
+
+/**
+ * Longest "Teilstück": a run of consecutive segments whose direction stays within MAX_TURN of the run's start-to-end
+ * direction. Returns its midpoint (by length), angle and the road's total screen length; null if no run reaches minLen.
+ */
+function bestRun(
+  pts: { sx: number; sy: number }[], minLen: number, onScreen: (sx: number, sy: number) => boolean,
+): { sx: number; sy: number; angle: number; total: number } | null {
+  const n = pts.length - 1;
+  const segLen: number[] = [];
+  const segAng: number[] = [];
+  let total = 0;
+  for (let k = 0; k < n; k++) {
+    const dx = pts[k + 1]!.sx - pts[k]!.sx;
+    const dy = pts[k + 1]!.sy - pts[k]!.sy;
+    segLen.push(Math.hypot(dx, dy));
+    segAng.push(Math.atan2(dy, dx));
+    total += segLen[k]!;
+  }
+  let best: { i: number; j: number; len: number } | null = null;
+  for (let i = 0; i < n; i++) {
+    let len = 0;
+    for (let j = i; j < n; j++) {
+      len += segLen[j]!;
+      const dir = Math.atan2(pts[j + 1]!.sy - pts[i]!.sy, pts[j + 1]!.sx - pts[i]!.sx);
+      let ok = true;
+      for (let k = i; k <= j && ok; k++) {
+        if (segLen[k]! === 0) continue;
+        let d = Math.abs(segAng[k]! - dir) % (2 * Math.PI);
+        if (d > Math.PI) d = 2 * Math.PI - d;
+        ok = d <= MAX_TURN;
+      }
+      if (!ok) break;
+      if (len >= minLen && (!best || len > best.len)) {
+        const mid = midpoint(pts, segLen, i, j, len / 2);
+        if (onScreen(mid.sx, mid.sy)) best = { i, j: j + 1, len };
+      }
+    }
+  }
+  if (!best) return null;
+  const mid = midpoint(pts, segLen, best.i, best.j - 1, best.len / 2);
+  const a = pts[best.i]!;
+  const b = pts[best.j]!;
+  return { ...mid, angle: readableAngle(b.sx - a.sx, b.sy - a.sy), total };
+}
+
+function midpoint(pts: { sx: number; sy: number }[], segLen: number[], i: number, j: number, half: number): { sx: number; sy: number } {
+  let acc = 0;
+  for (let k = i; k <= j; k++) {
+    const l = segLen[k]!;
+    if (acc + l >= half && l > 0) {
+      const t = (half - acc) / l;
+      return { sx: pts[k]!.sx + (pts[k + 1]!.sx - pts[k]!.sx) * t, sy: pts[k]!.sy + (pts[k + 1]!.sy - pts[k]!.sy) * t };
+    }
+    acc += l;
+  }
+  return { sx: pts[j + 1]!.sx, sy: pts[j + 1]!.sy };
+}
+
 type Candidate = { text: string; sx: number; sy: number; angle: number; w: number; kind: Label['kind']; rank: number; len: number };
 
 export function placeLabels(data: MapData, items: MapItems, v: MapView, measure: (text: string) => number): Label[] {
@@ -77,23 +137,12 @@ export function placeLabels(data: MapData, items: MapItems, v: MapView, measure:
 
   for (const i of items.roads) {
     const r = data.roads[i]!;
-    if (!r.name || v.scale < minScaleFor(r.kind)) continue;
+    if (!r.name || r.pts.length < 4 || v.scale < minScaleFor(r.kind)) continue;
     const w = measure(r.name);
-    let best: { sx: number; sy: number; angle: number; len: number } | null = null;
-    let total = 0;
-    let prev = worldToScreen(v, r.pts[0]!, r.pts[1]!);
-    for (let k = 2; k < r.pts.length; k += 2) {
-      const p = worldToScreen(v, r.pts[k]!, r.pts[k + 1]!);
-      const dx = p.sx - prev.sx;
-      const dy = p.sy - prev.sy;
-      const len = Math.hypot(dx, dy);
-      total += len;
-      const mx = (p.sx + prev.sx) / 2;
-      const my = (p.sy + prev.sy) / 2;
-      if (len >= FIT * w && onScreen(mx, my) && (!best || len > best.len)) best = { sx: mx, sy: my, angle: readableAngle(dx, dy), len };
-      prev = p;
-    }
-    if (best) cands.push({ text: r.name, sx: best.sx, sy: best.sy, angle: best.angle, w, kind: 'road', rank: rank(r.kind), len: total });
+    const pts: { sx: number; sy: number }[] = [];
+    for (let k = 0; k < r.pts.length; k += 2) pts.push(worldToScreen(v, r.pts[k]!, r.pts[k + 1]!));
+    const best = bestRun(pts, FIT * w, onScreen);
+    if (best) cands.push({ text: r.name, sx: best.sx, sy: best.sy, angle: best.angle, w, kind: 'road', rank: rank(r.kind), len: best.total });
   }
 
   cands.sort((a, b) => a.rank - b.rank || b.len - a.len);
