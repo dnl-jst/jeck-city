@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { heightAt, type TerrainGrid } from '@nn/shared';
 import { drapeMesh } from './drape.js';
-import { followDeviation, followTerrain } from './follow.js';
+import { followDeviation, followTerrain, triangleDeviation } from './follow.js';
 import type { Mesh } from './streets.js';
 
 function grid(x0: number, z0: number, cols: number, rows: number, f: (x: number, z: number) => number): TerrainGrid {
@@ -31,13 +31,15 @@ function kerb(): Mesh {
   return { positions: Float32Array.from(pos), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
 }
 
-/** Plain length split, and the pipeline's choice (8 m edges, cut further where the terrain bends > 1.5 cm). */
+/** Plain length split, and the pipeline's choice (8 m edges, adaptive to 2 cm, edges down to 5 cm). */
 const CONFIGS: { name: string; maxEdge: number; tol?: number; t: TerrainGrid }[] = [
   { name: '4 m, street', maxEdge: 4, t: street },
-  { name: '8 m + 1.5 cm, street', maxEdge: 8, tol: 0.015, t: street },
-  { name: '8 m + 1.5 cm, hilly', maxEdge: 8, tol: 0.015, t: hilly },
+  { name: '8 m + 2 cm, street', maxEdge: 8, tol: 0.02, t: street },
+  { name: '8 m + 2 cm, hilly', maxEdge: 8, tol: 0.02, t: hilly },
 ];
-const run = (c: (typeof CONFIGS)[number]) => followTerrain(kerb(), c.t, c.maxEdge, c.tol, 1);
+const run = (c: (typeof CONFIGS)[number]) => followTerrain(kerb(), c.t, c.maxEdge, c.tol, 0.05);
+/** float32 output positions move the measured deviation by a few µm */
+const F32 = 1e-5;
 
 const vtx = (m: Mesh, i: number) => ({ x: m.positions[i * 3]!, y: m.positions[i * 3 + 1]!, z: m.positions[i * 3 + 2]! });
 
@@ -65,6 +67,8 @@ test.each(CONFIGS)('no edge is longer than maxEdge in xz, area and winding kept 
     for (const [p, q] of [[a, b], [b, c], [c, a]] as const) expect(Math.hypot(p.x - q.x, p.z - q.z)).toBeLessThanOrEqual(cfg.maxEdge + 1e-9);
     const s = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
     expect(s).toBeGreaterThanOrEqual(-1e-9);
+    // top pieces never collapse onto a line (a zip running past the end of its rail did that, leaving holes)
+    if (Math.max(a.z, b.z, c.z) > 1e-6) expect(s).toBeGreaterThan(1e-6);
     area += s / 2;
   }
   expect(area).toBeCloseTo(100 * 2.15, 3);
@@ -105,12 +109,14 @@ test.each(CONFIGS)('shared edges are split identically on both sides, no T-junct
     }
   }
   expect(edges.size).toBeGreaterThan(0);
-  expect([...edges].filter(([, n]) => n !== 2)).toEqual([]);
+  expect([...edges].filter(([, n]) => n !== 2).slice(0, 4)).toEqual([]);
 });
 
-test.each(CONFIGS.slice(0, 2))('coarse top surface stays within 2 cm of the 1 m drape on street-like terrain ($name)', (cfg) => {
+test.each(CONFIGS)('coarse top surface stays within 2 cm of the 1 m drape ($name)', (cfg) => {
+  if (cfg.t === hilly && cfg.tol === undefined) return; // plain splits cannot follow the hilly grid
   const m = kerb();
   const coarse = run(cfg);
+  const street = cfg.t;
   const draped = drapeMesh(m, street);
   // sampled: every draped vertex of the top surface (z > 0) against the coarse surface above it
   let max = 0;
@@ -120,26 +126,45 @@ test.each(CONFIGS.slice(0, 2))('coarse top surface stays within 2 cm of the 1 m 
     const y = coarseY(coarse, p.x, p.z);
     if (y !== undefined) max = Math.max(max, Math.abs(y - p.y));
   }
-  expect(max).toBeLessThanOrEqual(0.02);
-  expect(followDeviation(coarse, street).max).toBeLessThanOrEqual(0.02);
+  expect(max).toBeLessThanOrEqual(0.02 + F32);
+  expect(followDeviation(coarse, street).max).toBeLessThanOrEqual(0.02 + F32);
 });
 
-test('rough terrain: deviation shrinks with maxEdge (documented: 0.5 m bumps every 6 m need ~0.5 m edges)', () => {
+test('rough terrain: plain length splits cannot follow it (why the adaptive pass exists)', () => {
   const dev = (e: number) => followDeviation(followTerrain(kerb(), hilly, e), hilly).max;
   const [d4, d1, d05] = [dev(4), dev(1), dev(0.5)];
   expect(d4).toBeGreaterThan(0.1); // the drape test grid is far rougher than a street
   expect(d1).toBeLessThan(d4);
-  expect(d05).toBeLessThan(0.06);
+  expect(d05).toBeGreaterThan(0.02); // even 0.5 m edges miss 2 cm on 0.5 m bumps every 6 m
 });
 
-test('tolerance refines only where the terrain bends, and terminates on rough terrain', () => {
+test('adaptive pass: refines only where needed, bounded on rough terrain', () => {
   const plain = followTerrain(kerb(), hilly, 8);
-  const tol = followTerrain(kerb(), hilly, 8, 0.015, 1);
-  // measured: 0.67 m → 0.17 m; the rest sits across the 2 m wide strip, which only minEdge < 1 m would reach
-  expect(followDeviation(tol, hilly).max).toBeLessThan(followDeviation(plain, hilly).max / 3);
-  expect(tol.indices.length / 3).toBeLessThan(3000); // bounded by minEdge, no runaway splitting
+  const adaptive = followTerrain(kerb(), hilly, 8, 0.02, 0.05);
+  expect(followDeviation(adaptive, hilly).max).toBeLessThanOrEqual(0.02 + F32);
+  expect(adaptive.indices.length / 3).toBeGreaterThan(plain.indices.length / 3);
+  expect(adaptive.indices.length / 3).toBeLessThan(20000); // no runaway splitting
   // on smooth street terrain it adds little over the plain 8 m split
-  expect(followTerrain(kerb(), street, 8, 0.015, 1).indices.length / 3).toBeLessThan(2 * followTerrain(kerb(), street, 8).indices.length / 3);
+  expect(followTerrain(kerb(), street, 8, 0.02, 0.05).indices.length / 3).toBeLessThan(2 * followTerrain(kerb(), street, 8).indices.length / 3);
+  // minEdge bounds it: with a 1 m floor the 2 cm cannot be reached here, and it still terminates
+  expect(followDeviation(followTerrain(kerb(), hilly, 8, 0.02, 1), hilly).max).toBeGreaterThan(0.02);
+});
+
+test('triangleDeviation is the exact maximum over the triangle (dense sampling never exceeds it)', () => {
+  const tri = [[1.3, 2.7], [9.6, 4.1], [4.2, 11.8]] as const;
+  const h = tri.map(([x, z]) => heightAt(hilly, x, z));
+  const d = triangleDeviation(hilly, tri[0][0], tri[0][1], h[0]!, tri[1][0], tri[1][1], h[1]!, tri[2][0], tri[2][1], h[2]!);
+  let dense = 0;
+  const N = 300;
+  for (let i = 0; i <= N; i++) for (let j = 0; i + j <= N; j++) {
+    const [w0, w1] = [i / N, j / N], w2 = 1 - w0 - w1;
+    const x = w0 * tri[0][0] + w1 * tri[1][0] + w2 * tri[2][0], z = w0 * tri[0][1] + w1 * tri[1][1] + w2 * tri[2][1];
+    dense = Math.max(dense, Math.abs(w0 * h[0]! + w1 * h[1]! + w2 * h[2]! - heightAt(hilly, x, z)));
+  }
+  expect(dense).toBeLessThanOrEqual(d.dev + 1e-9);
+  expect(dense).toBeGreaterThan(d.dev - 0.01);
+  // a kerb face whose corners float32 rounding moved off their line counts as vertical, not as a wild plane
+  expect(triangleDeviation(hilly, 0, 0, 0, 1, 1.00001, 5, 2, 2, 0).dev).toBe(0);
 });
 
 /** y of the (upward-facing) coarse triangle containing (x, z) in xz, undefined if none. */

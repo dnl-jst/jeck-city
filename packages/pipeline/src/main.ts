@@ -30,13 +30,12 @@ const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 /**
- * Coarse terrain-following kerbs and sidewalks in the collision mesh: xz edges ≤ 8 m, cut further (down to 1 m) where
- * the terrain under an edge bends more than 1.5 cm. Measured on the real terrain this beats a plain 4 m split in both
- * size and deviation from the 1 m drape (see followTerrain).
+ * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
+ * adaptively until every triangle lies within 2 cm of the 1 m drape (edges down to 5 cm at sharp terrain kinks).
  */
 const KERB_EDGE = 8;
-const KERB_TOLERANCE = 0.015;
-const KERB_MIN_EDGE = 1;
+const KERB_TOLERANCE = 0.02;
+const KERB_MIN_EDGE = 0.05;
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude und Gelände: Geobasis NRW (dl-de/zero-2.0)';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -160,7 +159,7 @@ async function main() {
   const sidewalk = followTerrain(cropMesh(flatStreets.sidewalk, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE);
   for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
     const d = followDeviation(m, terrain);
-    console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm, p99 ${(d.p99 * 100).toFixed(2)} cm`);
+    console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
   }
   const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: modelCollision, terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
