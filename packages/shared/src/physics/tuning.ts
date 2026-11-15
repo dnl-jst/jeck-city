@@ -133,7 +133,7 @@ export const TUNING = {
     steerHighKmh: 35,
     /** Steering effect in the air (fraction). */
     airSteer: 0.3,
-    /** Faster than this (km/h) and more than crashBlocked of the forward movement stopped: the rider falls. */
+    /** Faster than this (km/h) into an obstacle more head-on than crashBlocked (cos of the angle to its normal): the rider falls. */
     crashKmh: 22,
     crashBlocked: 0.7,
     getUpSeconds: 1.1,
