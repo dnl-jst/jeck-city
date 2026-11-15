@@ -11,6 +11,8 @@ const REACH = 2.7;
 // waits are budgets in fixed physics steps (60 per simulated second): a loaded machine renders fewer frames and
 // so simulates slower than real time, which made wall-clock timeouts flaky. The wall clock only guards a hang.
 const HANG_MS = 15 * 60_000;
+/** The step counter standing still this long (wall clock) means the simulation stalled: fail fast instead of at HANG_MS. */
+const STALL_MS = 10_000;
 const STEPS = { enter: 300, away12: 900, away30: 1200, stop: 900, exit: 300 };
 
 async function drive(page, time, shot) {
@@ -18,13 +20,24 @@ async function drive(page, time, shot) {
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
   const state = () => page.evaluate(() => window.__nnState());
-  /** Wait until pred(state, arg) holds, failing with `what` once `budget` more physics steps have passed without it. */
+  /**
+   * Wait until pred(state, arg) holds, failing with `what` once `budget` more physics steps have passed without it,
+   * and with a stall error once the step counter has not advanced for STALL_MS.
+   */
   const until = async (pred, arg, budget, what) => {
     const limit = (await state()).steps + budget;
-    await page.waitForFunction(([src, arg, limit]) => {
+    await page.waitForFunction(([src, arg, limit, stallMs]) => {
       const s = window.__nnState();
+      const now = performance.now();
+      const w = window.__dcSteps;
+      if (!w || w.limit !== limit || w.steps !== s.steps) window.__dcSteps = { limit, steps: s.steps, since: now, stalled: false };
+      else if (now - w.since > stallMs) return (w.stalled = true);
       return s.steps > limit || (0, eval)(`(${src})`)(s, arg);
-    }, [pred.toString(), arg, limit], { timeout: HANG_MS, polling: 'raf' });
+    }, [pred.toString(), arg, limit, STALL_MS], { timeout: HANG_MS, polling: 'raf' });
+    if (await page.evaluate(() => window.__dcSteps?.stalled)) {
+      console.error(JSON.stringify(await state()));
+      throw new Error(`physics steps did not advance for ${STALL_MS / 1000} s (${what})`);
+    }
     const s = await state();
     if (!(await page.evaluate(([src, arg]) => (0, eval)(`(${src})`)(window.__nnState(), arg), [pred.toString(), arg]))) {
       console.error(JSON.stringify(s));
