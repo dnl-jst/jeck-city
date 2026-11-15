@@ -3,6 +3,7 @@
 // bytes transferred until ready, and draw calls / triangles at the spawn by day and night. Prints a table.
 import { spawn, execSync } from 'node:child_process';
 import { chromium } from 'playwright';
+import { browserArgs } from './browser-args.mjs';
 
 const PORT = 4173;
 const base = `http://localhost:${PORT}/`;
@@ -16,7 +17,7 @@ try {
     if (await fetch(base).then((r) => r.ok, () => false)) break;
     await new Promise((r) => setTimeout(r, 200));
   }
-  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  const browser = await chromium.launch({ args: browserArgs });
   const run = async (name, query, throttle) => {
     const page = await (await browser.newContext()).newPage();
     const cdp = await page.context().newCDPSession(page);

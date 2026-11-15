@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { heightAt, type TerrainGrid } from '../assets/terrain';
 import { TUNING } from './tuning';
 import { LYING_PROP_GROUPS, onBeforeStep, PROP_GROUPS, type PhysicsWorld } from './world';
 
@@ -24,7 +25,8 @@ export type PropPose = { x: number; y: number; z: number; qx: number; qy: number
  * gets a forward kick and spin so it topples away from the car, and the car loses the momentum it handed over.
  * Slower cars stop at the post. A knocked-down lamp no longer collides with car bodies (a bumper pushing the foot
  * would hold the post upright and shove it down the road); the wheel rays roll over it. Lamp bodies have their origin
- * at the foot of the post.
+ * at the foot of the post. With `terrain`, trunks and posts stand on the terrain (heightAt), like the rendered props;
+ * without it at y = 0.
  */
 export class StreetProps {
   private readonly lamps: RAPIER.RigidBody[] = [];
@@ -33,18 +35,22 @@ export class StreetProps {
   private readonly fallen: number[] = [];
   private readonly unsubscribe: () => void;
 
-  constructor(private readonly pw: PhysicsWorld, lamps: readonly (readonly [number, number])[], trees: readonly (readonly [number, number])[]) {
+  constructor(
+    private readonly pw: PhysicsWorld, lamps: readonly (readonly [number, number])[], trees: readonly (readonly [number, number])[],
+    terrain?: TerrainGrid,
+  ) {
     const { rapier: R, world } = pw;
+    const groundY = (x: number, z: number) => (terrain ? heightAt(terrain, x, z) : 0);
     for (const [x, z] of trees) {
       const k = treeScale(x, z);
-      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, 0, z));
+      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, groundY(x, z), z));
       world.createCollider(
         R.ColliderDesc.cylinder((T.trunkHeight * k) / 2, T.trunkRadius * k).setTranslation(0, (T.trunkHeight * k) / 2, 0).setCollisionGroups(PROP_GROUPS),
         body,
       );
     }
     lamps.forEach(([x, z], i) => {
-      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, 0, z).setCcdEnabled(true));
+      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, groundY(x, z), z).setCcdEnabled(true));
       const c = world.createCollider(
         R.ColliderDesc.cylinder(T.lampHeight / 2, T.lampRadius).setTranslation(0, T.lampHeight / 2, 0).setMass(T.lampMass).setCollisionGroups(PROP_GROUPS),
         body,

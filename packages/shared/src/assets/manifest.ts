@@ -8,21 +8,31 @@
  * WORLD space (no per-chunk offset, node transform is identity): coordinates stay below ~3 km, where
  * float32 is still sub-millimetre, and client and collision share one frame without bookkeeping.
  *
- * chunk_{ix}_{iz}.glb layout: up to 9 meshes named buildings, road, sidewalk, curb, tram, green,
- * squares, markings, parking (empty ones omitted), EXT_meshopt_compression. `buildings` carries POSITION, NORMAL,
- * _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0 Neusser Str.,
- * bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
- * per building (contiguous vertex ranges of the buildings mesh). Street meshes carry POSITION and
- * TEXCOORD_0 (metres); `markings` also _MARK (float, 0 white / 1 red cycle crossing), `parking` has
- * uv.y = metres from the kerb.
+ * chunk_{ix}_{iz}.glb layout: up to 11 meshes named ground, buildings, road, sidewalk, curb, trackbed,
+ * tram, green, squares, markings, parking (empty ones omitted), EXT_meshopt_compression. `buildings` carries
+ * POSITION, NORMAL, _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0
+ * Neusser Str., bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
+ * per building (contiguous vertex ranges of the buildings mesh). Street meshes (trackbed = track bed
+ * built from the tram rails) carry POSITION and TEXCOORD_0 (metres); `markings` also _MARK (float, 0 white /
+ * 1 red cycle crossing), `parking` has uv.y = metres from the kerb. `ground` is the terrain surface of
+ * the chunk square (grid points on [x, x+200] × [z, z+200], edges shared with the neighbours, cells split
+ * along TERRAIN_DIAGONAL) with POSITION, NORMAL and TEXCOORD_0 (world x/z in metres); every chunk square of
+ * the world area has a chunk once terrain is present, also without buildings or streets.
  */
 export const CHUNK_SIZE = 200;
 
+/**
+ * Height of a shop sign's board centre above its building's LoD2 base (m): the middle of the shopfront sign band of
+ * the facade shader (client materials/storeys.ts SHOP: 3.6–4.35 m). Manifest sign.y = base + SIGN_Y.
+ */
+export const SIGN_Y = 3.975;
+
 export type WorldManifest = {
-  version: 1;
+  version: 2;
   origin: { e: number; n: number };
   chunkSize: 200;
   chunks: { key: string; x: number; z: number; file: string; bytes: number }[];
+  /** Spawn point; y = terrain height at the spawn + sidewalk height. */
   spawn: { x: number; y: number; z: number; heading: number };
   boundary: [number, number][];
   lamps: [number, number][];
@@ -34,9 +44,10 @@ export type WorldManifest = {
   tramStops: { name: string; x: number; z: number; heading: number }[];
   /**
    * Shops: label = invented name shown on the sign; sign = board centre in front of the street-facing wall of
-   * the building, heading = outward wall normal (the side it is read from), width in m.
+   * the building, y = board centre height (LoD2 base of the building + SIGN_Y), heading = outward wall normal
+   * (the side it is read from), width in m.
    */
-  shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; z: number; heading: number; width: number } }[];
+  shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
   parked: { x: number; z: number; heading: number; color: number }[];
   /**
    * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
@@ -44,6 +55,12 @@ export type WorldManifest = {
    * Several buildings may share one model; `id` is the first of them.
    */
   models: { id: string; chunk: string; file: string; bytes: number }[];
+  /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
+  terrain: { file: 'terrain.bin'; bytes: number };
+  /** NHN height (m) of local y = 0: world y = NHN − datum. */
+  datum: number;
+  /** Height for the flat ground beyond the terrain grid: lowest grid-border height − 0.5 m. */
+  farGroundY: number;
   attribution: string;
 };
 
@@ -87,10 +104,12 @@ function nums<K extends string>(v: unknown, p: string, keys: K[]): Record<K, num
 /** Validates parsed JSON against the manifest schema; throws on any mismatch. */
 export function parseManifest(json: unknown): WorldManifest {
   const o = obj(json, 'manifest');
-  if (o.version !== 1) fail('version', 'must be 1');
+  if (o.version !== 2) fail('version', 'must be 2');
   if (o.chunkSize !== CHUNK_SIZE) fail('chunkSize', `must be ${CHUNK_SIZE}`);
+  const t = obj(o.terrain, 'terrain');
+  if (t.file !== 'terrain.bin') fail('terrain.file', "must be 'terrain.bin'");
   return {
-    version: 1,
+    version: 2,
     origin: nums(o.origin, 'origin', ['e', 'n']),
     chunkSize: CHUNK_SIZE,
     chunks: arr(o.chunks, 'chunks', (v, p) => {
@@ -106,7 +125,7 @@ export function parseManifest(json: unknown): WorldManifest {
       const s = obj(v, p);
       const shop: WorldManifest['shops'][number] = { ...nums(s, p, ['x', 'z']), label: str(s.label, `${p}.label`), type: str(s.type, `${p}.type`) };
       if (s.buildingId !== undefined) shop.buildingId = str(s.buildingId, `${p}.buildingId`);
-      if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'z', 'heading', 'width']);
+      if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'y', 'z', 'heading', 'width']);
       return shop;
     }),
     parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),
@@ -114,6 +133,9 @@ export function parseManifest(json: unknown): WorldManifest {
       const x = obj(v, p);
       return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };
     }),
+    terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
+    datum: num(o.datum, 'datum'),
+    farGroundY: num(o.farGroundY, 'farGroundY'),
     attribution: str(o.attribution, 'attribution'),
   };
 }

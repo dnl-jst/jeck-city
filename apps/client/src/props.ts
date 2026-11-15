@@ -4,8 +4,7 @@ import {
   Object3D, Points, PointsMaterial, Quaternion, SRGBColorSpace, Vector3, type Scene, type Texture,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { chunkKey, propHash as hash, treeScale, type PropPose, type WorldManifest } from '@nn/shared';
-import { SHOP } from './materials/storeys';
+import { chunkKey, heightAt, propHash as hash, treeScale, type PropPose, type TerrainGrid, type WorldManifest } from '@nn/shared';
 
 /** Street trees are drawn only within this distance of the camera (m)… */
 export const TREE_RENDER_RADIUS = 250;
@@ -36,6 +35,39 @@ export const needsTreeRebuild = (last: XZ | null, x: number, z: number): boolean
 
 /** Height of the lamp's light source above ground (m). */
 export const LAMP_LIGHT_Y = 5.55;
+
+const UP = new Vector3(0, 1, 0);
+const tq = new Quaternion(), ts = new Vector3(), tp = new Vector3();
+
+/** Instance matrix of a lamp at (x, z) standing on the terrain; `light` is where its lantern glows. */
+export function lampMatrix(t: TerrainGrid, x: number, z: number, out: Matrix4): { light: { x: number; y: number; z: number } } {
+  const y = heightAt(t, x, z);
+  out.makeTranslation(x, y, z);
+  return { light: { x, y: y + LAMP_LIGHT_Y, z } };
+}
+
+/**
+ * Instance matrix of a tree at (x, z) on the terrain: random yaw and size from the position hash (overall scale
+ * treeScale, the same as the trunk collider of StreetProps).
+ */
+export function treeMatrix(t: TerrainGrid, x: number, z: number, out: Matrix4): Matrix4 {
+  const k = treeScale(x, z);
+  tq.setFromAxisAngle(UP, hash(x, z, 2) * Math.PI * 2);
+  return out.compose(tp.set(x, heightAt(t, x, z), z), tq, ts.set(k * (0.9 + 0.2 * hash(x, z, 3)), k, k * (0.9 + 0.2 * hash(x, z, 4))));
+}
+
+type Sign = NonNullable<WorldManifest['shops'][number]['sign']>;
+
+/**
+ * Corners (bottom left, bottom right, top right, top left as seen from the street) of a w × h sign board
+ * centred at (sign.x, sign.y, sign.z); sign.y already includes the building's base height.
+ */
+export function signCorners(sign: Sign, w: number, h: number): [number, number, number][] {
+  const nx = Math.sin(sign.heading), nz = Math.cos(sign.heading);
+  // local +x of a plane rotated by heading: (cos h, −sin h) — the reader's right when facing the wall
+  const rx = nz, rz = -nx;
+  return ([[-1, -1], [1, -1], [1, 1], [-1, 1]] as const).map(([a, b]) => [sign.x + rx * a * w / 2, sign.y + b * h / 2, sign.z + rz * a * w / 2]);
+}
 
 /** Merged, non-indexed copy of geometries (mergeGeometries needs uniform indexing). */
 function merge(parts: BufferGeometry[]): BufferGeometry {
@@ -119,7 +151,7 @@ function stopSignTexture(name: string): Texture {
 }
 
 /** One tram stop: shelter (posts, roof, back glass, bench) and a sign post, open towards +z before rotation. */
-function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStandardMaterial, glassMat: MeshStandardMaterial): Group {
+function stopGroup(stop: WorldManifest['tramStops'][number], y: number, frameMat: MeshStandardMaterial, glassMat: MeshStandardMaterial): Group {
   const box = (w: number, h: number, d: number, x: number, y: number, z: number) => new BoxGeometry(w, h, d).translate(x, y, z);
   const frame = merge([
     ...[-1.9, 1.9].flatMap((x) => [box(0.08, 2.5, 0.08, x, 1.25, -0.6), box(0.08, 2.5, 0.08, x, 1.25, 0.6)]),
@@ -137,16 +169,14 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   f.castShadow = sign.castShadow = true;
   f.receiveShadow = true;
   group.add(f, glass, sign);
-  group.position.set(stop.x, 0, stop.z);
+  group.position.set(stop.x, y, stop.z);
   // open front (+z) faces the track, which lies left of the heading: left of (sin h, cos h) is (cos h, −sin h)
   group.rotation.y = stop.heading + Math.PI / 2;
   group.name = `stop:${stop.name}`;
   return group;
 }
 
-/** Sign board centre height (m): the middle of the shopfront sign band of the facade shader (storeys.ts SHOP). */
-export const SIGN_Y = (SHOP.signBottom + SHOP.signTop) / 2;
-/** Sign board height (m); fits inside the sign band. */
+/** Sign board height (m); fits inside the sign band (centred at SIGN_Y above the building base, @nn/shared). */
 export const SIGN_H = 0.6;
 /** Sign atlas: boards 64 px high, at most 416 px wide, shelf-packed into rows 2048 px wide with 4 px gaps (mipmaps). */
 const ATLAS_W = 2048, CELL_H = 64, CELL_MAX_W = 416, GAP = 4;
@@ -226,11 +256,10 @@ export function buildShopSigns(shops: WorldManifest['shops'], material: MeshStan
     let w = SIGN_H * cell.aspect, h = SIGN_H;
     if (w > sign.width) { h *= sign.width / w; w = sign.width; }
     const nx = Math.sin(sign.heading), nz = Math.cos(sign.heading);
-    // local +x of a plane rotated by heading: (cos h, −sin h) — the reader's right when facing the wall
-    const rx = nz, rz = -nx;
-    const corners: [number, number, number, number][] = [[-1, -1, cell.u0, cell.v0], [1, -1, cell.u1, cell.v0], [1, 1, cell.u1, cell.v1], [-1, 1, cell.u0, cell.v1]];
-    corners.forEach(([a, b, u, v], k) => {
-      pos.set([sign.x + rx * a * w / 2, SIGN_Y + b * h / 2, sign.z + rz * a * w / 2], (i * 4 + k) * 3);
+    const uvs = [[cell.u0, cell.v0], [cell.u1, cell.v0], [cell.u1, cell.v1], [cell.u0, cell.v1]] as const;
+    signCorners(sign, w, h).forEach((corner, k) => {
+      const [u, v] = uvs[k]!;
+      pos.set(corner, (i * 4 + k) * 3);
       nor.set([nx, 0, nz], (i * 4 + k) * 3);
       uv.set([u, v], (i * 4 + k) * 2);
     });
@@ -279,7 +308,7 @@ export class Props {
   /** Shop sign boards; their lettering glows at night (setNight). */
   private readonly signMat = new MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.55 });
 
-  constructor(private readonly scene: Scene, private readonly manifest: WorldManifest) {
+  constructor(private readonly scene: Scene, private readonly manifest: WorldManifest, private readonly terrain: TerrainGrid) {
     const signs = buildShopSigns(manifest.shops, this.signMat);
     if (signs) scene.add(signs);
     const lg = this.lampGeo = lampGeometries();
@@ -348,10 +377,10 @@ export class Props {
     let i = 0;
     for (const [k, [x, z]] of this.manifest.lamps.entries()) {
       if (!inside(x, z) || this.fallen.has(k)) continue;
-      m.makeTranslation(x, 0, z);
+      const { light } = lampMatrix(this.terrain, x, z, m);
       this.lamps[0].setMatrixAt(i, m);
       this.lamps[1].setMatrixAt(i, m);
-      halo.setXYZ(i, x, LAMP_LIGHT_Y, z);
+      halo.setXYZ(i, light.x, light.y, light.z);
       i++;
     }
     for (const l of this.lamps) { l.count = i; l.instanceMatrix.needsUpdate = true; }
@@ -365,7 +394,7 @@ export class Props {
       const want = inside(stop.x, stop.z);
       const have = this.stops.get(k);
       if (want && !have) {
-        const g = stopGroup(stop, this.stopFrame, this.stopGlass);
+        const g = stopGroup(stop, heightAt(this.terrain, stop.x, stop.z), this.stopFrame, this.stopGlass);
         this.scene.add(g);
         this.stops.set(k, g);
       } else if (!want && have) {
@@ -391,14 +420,12 @@ export class Props {
     this.lastTrees = { x, z };
     const loaded = this.loaded;
     const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)));
-    const m = new Matrix4(), q = new Quaternion(), s = new Vector3(), p = new Vector3(), up = new Vector3(0, 1, 0), c = new Color();
+    const m = new Matrix4(), c = new Color();
     for (const [which, idx] of [['near', sets.near], ['far', sets.far]] as const) {
       const [trunk, crown] = this.trees[which];
       idx.forEach((ti, i) => {
         const [tx, tz] = this.manifest.trees[ti]!;
-        const k = treeScale(tx, tz); // same scale as the trunk collider (StreetProps)
-        q.setFromAxisAngle(up, hash(tx, tz, 2) * Math.PI * 2);
-        m.compose(p.set(tx, 0, tz), q, s.set(k * (0.9 + 0.2 * hash(tx, tz, 3)), k, k * (0.9 + 0.2 * hash(tx, tz, 4))));
+        treeMatrix(this.terrain, tx, tz, m);
         trunk.setMatrixAt(i, m);
         crown.setMatrixAt(i, m);
         c.setHSL(0.24 + 0.06 * hash(tx, tz, 5), 0.42 + 0.15 * hash(tx, tz, 6), 0.2 + 0.08 * hash(tx, tz, 7));

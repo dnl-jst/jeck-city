@@ -4,10 +4,26 @@ import {
   SRGBColorSpace, Vector3, type Scene,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { TUNING, Vehicle, VEHICLE_REST_Y, type PhysicsWorld, type WorldManifest } from '@nn/shared';
+import {
+  heightAt, terrainNormal, TUNING, Vehicle, VEHICLE_REST_Y, type PhysicsWorld, type TerrainGrid, type WorldManifest,
+} from '@nn/shared';
 
 type XZ = { x: number; z: number };
 export type CarPose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
+
+const poseUp = new Vector3(0, 1, 0), poseN = new Vector3(), poseTilt = new Quaternion(), poseYaw = new Quaternion();
+
+/**
+ * Pose of a parked car at (x, z) facing heading: the chassis centre rests VEHICLE_REST_Y above the terrain,
+ * tilted from upright onto the terrain normal (yaw first, then the tilt, so the heading is kept).
+ */
+export function parkedPose(x: number, z: number, heading: number, t: TerrainGrid): CarPose {
+  const n = terrainNormal(t, x, z);
+  poseTilt.setFromUnitVectors(poseUp, poseN.set(n.x, n.y, n.z));
+  poseYaw.setFromAxisAngle(poseUp, heading);
+  const q = poseTilt.multiply(poseYaw);
+  return { x, y: heightAt(t, x, z) + VEHICLE_REST_Y, z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+}
 
 /** Free car (not occupied) nearest to the player within maxDist, by id; null if none. */
 export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z: number; occupied: boolean }[], maxDist = 3): number | null {
@@ -452,8 +468,8 @@ export class ParkedCars {
   private readonly one = new Vector3(1, 1, 1);
   private readonly zero = new Vector3(0, 0, 0);
 
-  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked']) {
-    this.poses = parked.map((c) => ({ x: c.x, y: VEHICLE_REST_Y, z: c.z, qx: 0, qy: Math.sin(c.heading / 2), qz: 0, qw: Math.cos(c.heading / 2) }));
+  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid) {
+    this.poses = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
     this.colors = parked.map((c) => c.color);
     const g = carGeometries();
     this.paint = new InstancedMesh(g.paint, paintMaterial(), parked.length);
@@ -533,11 +549,9 @@ export class ParkedCars {
   /** A sleeping Vehicle at the car's stored pose (its original spot or where it was pushed to). */
   private spawn(i: number): Vehicle {
     const s = this.poses[i]!;
-    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s) });
-    if (Math.abs(s.y - VEHICLE_REST_Y) > 1e-4 || Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) {
-      v.chassis.setTranslation({ x: s.x, y: s.y, z: s.z }, false);
-      v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
-    }
+    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y });
+    // tilted on a slope (or left tilted after a push): keep the stored rotation
+    if (Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
     return v;
   }
 

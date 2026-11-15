@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
 const LOD2_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod2_gml/lod2_gml/';
+const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/';
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const USER_AGENT = 'nippes-nights-pipeline/0.1';
 
@@ -25,6 +26,14 @@ export function tileNamesForBounds(minE: number, minN: number, maxE: number, max
 }
 
 export const LOD2_TILES: string[] = tileNamesForBounds(BOUNDS.minE, BOUNDS.minN, BOUNDS.maxE, BOUNDS.maxN);
+
+/** NRW publishes DGM1 per vintage; the year is part of the file name. */
+export const DGM_VINTAGE = '2022';
+
+export const DGM_TILES: string[] = LOD2_TILES.map((n) => {
+  const [, , e, nn] = n.split('_');
+  return `dgm1_32_${e}_${nn}_1_nw_${DGM_VINTAGE}.tif`;
+});
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -50,6 +59,33 @@ export async function fetchLod2Tiles(dir: string): Promise<string[]> {
     console.log(`download ${name}`);
     const res = await fetch(LOD2_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
     if (!res.ok || !res.body) throw new Error(`LoD2 ${name}: HTTP ${res.status}`);
+    const tmp = `${path}.part`;
+    try {
+      await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmp));
+      await rename(tmp, path);
+    } catch (err) {
+      await rm(tmp, { force: true });
+      throw err;
+    }
+  }
+  return paths;
+}
+
+/** Downloads DGM1 GeoTIFF tiles into `dir`, skipping existing files. Returns file paths. */
+export async function fetchDgmTiles(dir: string): Promise<string[]> {
+  await mkdir(dir, { recursive: true });
+  const paths: string[] = [];
+  for (const name of DGM_TILES) {
+    const path = join(dir, name);
+    paths.push(path);
+    if (await exists(path)) {
+      console.log(`skip ${name} (cached)`);
+      continue;
+    }
+    console.log(`download ${name}`);
+    const res = await fetch(DGM_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.status === 404) throw new Error(`DGM1 ${name}: HTTP 404. DGM_VINTAGE ('${DGM_VINTAGE}') in fetch.ts may be outdated, the NRW vintage may have changed (check the directory listing at ${DGM_BASE}).`);
+    if (!res.ok || !res.body) throw new Error(`DGM1 ${name}: HTTP ${res.status}`);
     const tmp = `${path}.part`;
     try {
       await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmp));

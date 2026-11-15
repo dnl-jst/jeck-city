@@ -65,10 +65,19 @@ function disposeWithMesh(node: Node): void {
 /**
  * Reads a building replacement model (glTF binary in world space, Y up, metres, see data/models/README.md),
  * splits off its `*_col` nodes as collision (all meshes if there are none) and re-encodes it.
+ * `lift` raises the whole model (scene root nodes and collision) by that many metres in y.
  */
-export async function prepareModel(glb: Uint8Array): Promise<PreparedModel> {
+export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedModel> {
   const nio = await io();
   const doc = await nio.readBinary(glb);
+  if (lift !== 0) {
+    for (const scene of doc.getRoot().listScenes()) {
+      for (const root of scene.listChildren()) {
+        const [x, y, z] = root.getTranslation();
+        root.setTranslation([x, y + lift, z]);
+      }
+    }
+  }
   const nodes = meshNodes(doc);
   const col = nodes.filter((n) => n.getName().endsWith(COLLISION_SUFFIX));
   const visual = nodes.filter((n) => !col.includes(n));

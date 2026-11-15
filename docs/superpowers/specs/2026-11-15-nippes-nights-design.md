@@ -70,7 +70,7 @@ Der Kern-Moment: Man startet auf der Neusser Straße und erkennt sie sofort wied
 - Von Claude entschieden (korrigierbar):
   - **Engine:** Three.js, TypeScript, Vite.
   - **Datenaufbereitung offline:** Ein Build-Skript lädt LoD2-Kacheln und OSM-Daten (Overpass) einmalig, wandelt sie in ein lokales Koordinatensystem (Meter, Ursprung nahe Startpunkt) und schreibt kompakte Spiel-Assets (z. B. glTF/Binär-Chunks). Das Spiel lädt nur diese Assets, keine Live-APIs. Rohdaten werden nicht ins Repo eingecheckt, die erzeugten Assets schon (oder reproduzierbar per Skript).
-  - **Gelände:** Flach angenommen (Nippes ist nahezu eben). Gebäude-Sockel auf gemeinsame Bodenhöhe normalisiert.
+  - **Gelände:** Echtes Gelände aus NRW DGM1, siehe `2026-11-15-terrain-dgm1-design.md`.
   - **Fassaden:** LoD2 hat keine Fassadentexturen. Fassaden werden prozedural gestaltet (Fensterraster nach Geschosshöhe, Gründerzeit-Stil für Altbauten, Ladenzeilen im EG an Neusser Straße, Farbvariation je Gebäude). Dächer in Ziegel-/Schiefertönen.
   - **Straßenraum:** Fahrbahnen, Gehwege, Gleise, Grünflächen, Bäume, Laternen aus OSM-Geometrie und -Tags generiert.
   - **Steuerung:** Third-Person-Kamera. WASD/Pfeiltasten, Maus zum Umsehen, E zum Ein-/Aussteigen am nächstgelegenen geparkten Auto.

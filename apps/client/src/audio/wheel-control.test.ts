@@ -83,3 +83,11 @@ test('cancel closes without commit', () => {
   expect(out.tap).toBeUndefined(); // the held-through key is not a tap either
   expect(step(w, true).open).toBe(false);
 });
+
+test('cancel while R is up does not swallow the next hold', () => {
+  // e.g. the engine-start gate cancels every frame; R pressed right after the engine runs must still open the wheel
+  const w = new WheelControl();
+  w.cancel(false);
+  expect(step(w, true, 0.1).open).toBe(false);
+  expect(step(w, true, 0.15).open).toBe(true);
+});

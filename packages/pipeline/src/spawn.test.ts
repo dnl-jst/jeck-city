@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { decodeCollision, TUNING } from '@nn/shared';
+import { decodeCollision, decodeTerrain, heightAt, TUNING } from '@nn/shared';
 import { boxBuilding, loadFixture, crossOf } from './fixture.js';
 import { crossSectionFromTags } from './crosssection.js';
 import { sideOffsets } from './roadprofile.js';
@@ -105,10 +105,10 @@ test('the spawn car stands ahead along the spawn heading, not along a guessed no
 });
 
 const WORLD = (f: string) => fileURLToPath(new URL(`../../../apps/client/public/world/${f}`, import.meta.url));
-const haveReal = existsSync(WORLD('manifest.json')) && existsSync(WORLD('collision.bin'));
+const haveReal = existsSync(WORLD('manifest.json')) && existsSync(WORLD('collision.bin')) && existsSync(WORLD('terrain.bin'));
 
 test.skipIf(!haveReal)('real manifest: spawn on the sidewalk, parked[0] next to it and reachable with E', () => {
-  const m = JSON.parse(readFileSync(WORLD('manifest.json'), 'utf8')) as { spawn: { x: number; z: number; heading: number }; parked: { x: number; z: number; heading: number }[] };
+  const m = JSON.parse(readFileSync(WORLD('manifest.json'), 'utf8')) as { spawn: { x: number; y: number; z: number; heading: number }; parked: { x: number; z: number; heading: number }[] };
   const { spawn, parked } = m;
   const d = parked.map((c) => Math.hypot(c.x - spawn.x, c.z - spawn.z));
   expect(d[0]).toBeLessThanOrEqual(2.7);
@@ -122,9 +122,12 @@ test.skipIf(!haveReal)('real manifest: spawn on the sidewalk, parked[0] next to 
   const across = Math.max(0, Math.abs(dx * fz - dz * fx) - 0.9);
   expect(Math.hypot(along, across)).toBeGreaterThanOrEqual(0.8);
   expect(Math.cos(spawn.heading)).toBeLessThan(-0.9); // looking north
-  // on the sidewalk: the highest collision surface under the spawn is the 0.12 m pavement (not road, not a roof)
+  // on the sidewalk: the highest collision surface under the spawn is the pavement 0.12 m above the terrain (not road,
+  // not a roof); the terrain-following collision copy lies within 2 cm of the drape
   const file = readFileSync(WORLD('collision.bin'));
   const col = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+  const tf = readFileSync(WORLD('terrain.bin'));
+  const ground = heightAt(decodeTerrain(tf.buffer.slice(tf.byteOffset, tf.byteOffset + tf.byteLength)), spawn.x, spawn.z);
   let top = -Infinity;
   const v = col.vertices, idx = col.indices;
   for (let i = 0; i < idx.length; i += 3) {
@@ -132,8 +135,11 @@ test.skipIf(!haveReal)('real manifest: spawn on the sidewalk, parked[0] next to 
     const cr = (p: number, q: number) => (v[q]! - v[p]!) * (spawn.z - v[p + 2]!) - (v[q + 2]! - v[p + 2]!) * (spawn.x - v[p]!);
     const s1 = cr(a, b), s2 = cr(b, e), s3 = cr(e, a);
     if (!((s1 >= 0 && s2 >= 0 && s3 >= 0) || (s1 <= 0 && s2 <= 0 && s3 <= 0))) continue;
-    if (Math.abs(s1 + s2 + s3) < 1e-9) continue; // vertical
-    top = Math.max(top, Math.max(v[a + 1]!, v[b + 1]!, v[e + 1]!));
+    const sum = s1 + s2 + s3;
+    if (Math.abs(sum) < 1e-9) continue; // vertical
+    // barycentric height: s2 weighs a, s3 weighs b, s1 weighs e
+    top = Math.max(top, (s2 * v[a + 1]! + s3 * v[b + 1]! + s1 * v[e + 1]!) / sum);
   }
-  expect(top).toBeCloseTo(0.12, 2);
+  expect(Math.abs(top - (ground + 0.12))).toBeLessThan(0.025);
+  expect(spawn.y).toBeCloseTo(ground + 0.12, 2);
 });

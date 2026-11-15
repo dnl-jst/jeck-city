@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest';
-import { Vector3 } from 'three';
+import { Quaternion, Vector3 } from 'three';
+import { VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
 import {
   CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, canGetOut, exitSpot, glareFacing, headingOf, nearestEnterableCar,
-  needsCarRebuild, visibleCars,
+  needsCarRebuild, parkedPose, visibleCars,
 } from './car';
 
 test('nearest free car within 3 m', () => {
@@ -92,4 +93,23 @@ test('glare: full head-on, gone beside and behind the lamp', () => {
   expect(glareFacing(fwd, new Vector3(1, 0, 0), 3)).toBe(0);
   expect(glareFacing(fwd, new Vector3(0, 0, -1), 3)).toBe(0);
   expect(glareFacing(fwd, new Vector3(Math.SQRT1_2, 0, Math.SQRT1_2), 3)).toBeLessThan(0.4);
+});
+
+test('parked car rests on terrain and follows its slope', () => {
+  const cols = 101, rows = 101;
+  const heights = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = 0.1 * c;
+  const t: TerrainGrid = { x0: 0, z0: 0, cols, rows, datum: 0, heights };
+  const p = parkedPose(40, 50, 0, t);
+  expect(p.x).toBe(40);
+  expect(p.z).toBe(50);
+  expect(p.y).toBeCloseTo(0.1 * 40 + VEHICLE_REST_Y, 4);
+  const q = new Quaternion(p.qx, p.qy, p.qz, p.qw);
+  const up = new Vector3(0, 1, 0).applyQuaternion(q);
+  // tilt about the z axis: positive rotation turns up towards −x (the uphill side faces +x)
+  expect(Math.atan2(-up.x, up.y)).toBeCloseTo(Math.atan(0.1), 2);
+  expect(Math.abs(up.z)).toBeLessThan(1e-6);
+  expect(headingOf(p)).toBeCloseTo(0, 5);
+  // heading kept on a slope
+  expect(headingOf(parkedPose(40, 50, 1.2, t))).toBeCloseTo(1.2, 2);
 });

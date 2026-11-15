@@ -33,6 +33,7 @@ export function boxBuilding(id: string, x0: number, z0: number, x1: number, z1: 
     normals: new Float32Array(nor),
     facadeUv: new Float32Array(uv),
     kind: new Uint8Array(kind),
+    base: 0,
     buildingSeed: [...id].reduce((s, c) => (s * 31 + c.charCodeAt(0)) >>> 0, 7),
     flags,
   };

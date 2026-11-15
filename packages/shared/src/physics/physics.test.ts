@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
+import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
 import { FixedStepper } from './step';
 import { TUNING } from './tuning';
@@ -74,6 +75,114 @@ describe('rapier', () => {
     const hit = pw.world.castRay(new R.Ray({ x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }), 2, true, undefined, undefined, undefined, undefined, staticWorldFilter());
     expect(hit).not.toBeNull();
     expect(hit!.timeOfImpact).toBeCloseTo(1, 3);
+  });
+});
+
+/** Grid with heights f(x, z) at the sample points (x0 + c, z0 + r). */
+function grid(x0: number, z0: number, cols: number, rows: number, f: (x: number, z: number) => number): TerrainGrid {
+  const heights = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = f(x0 + c, z0 + r);
+  return { x0, z0, cols, rows, datum: 0, heights };
+}
+
+/** City asset with no trimesh at all (the heightfield is the only ground) and the given boundary ring. */
+function noCity(boundary: number[] = []): CollisionAsset {
+  return { vertices: new Float32Array(0), indices: new Uint32Array(0), boundary: new Float32Array(boundary) };
+}
+
+describe('terrain', () => {
+  test('heightfield matches heightAt (pins TERRAIN_DIAGONAL)', async () => {
+    // Off-centre origin so a wrong collider translation shows up, and a hill so both diagonals give different heights.
+    const t = grid(-7.5, 13, 21, 17, (x, z) => 3 * Math.sin(x / 4) * Math.cos(z / 5)); // non-square: catches swapped rows/cols
+    const pw = await createPhysicsWorld(noCity(), t);
+    const R = pw.rapier;
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    const pts: [number, number][] = [];
+    for (let i = 0; i < 200; i++) {
+      const c = Math.floor(rnd() * (t.cols - 1)), r = Math.floor(rnd() * (t.rows - 1));
+      let fx = rnd(), fz = rnd();
+      if (i % 4 === 1) fz = Math.min(1, Math.max(0, fx + (rnd() < 0.5 ? -0.02 : 0.02))); // near the x0z0-x1z1 diagonal
+      if (i % 4 === 2) fz = Math.min(1, Math.max(0, 1 - fx + (rnd() < 0.5 ? -0.02 : 0.02))); // near the x1z0-x0z1 diagonal
+      pts.push([t.x0 + c + fx, t.z0 + r + fz]);
+    }
+    const bad: string[] = [];
+    for (const [x, z] of pts) {
+      const hit = pw.world.castRay(new R.Ray({ x, y: 50, z }, { x: 0, y: -1, z: 0 }), 100, true);
+      const y = hit ? 50 - hit.timeOfImpact : NaN;
+      if (!(Math.abs(y - heightAt(t, x, z)) <= 1e-3)) bad.push(`(${x.toFixed(3)}, ${z.toFixed(3)}): ray ${y}, heightAt ${heightAt(t, x, z)}`);
+    }
+    expect(bad).toEqual([]);
+  });
+
+  test('character stands still on a 5 % heightfield slope', async () => {
+    const t = grid(0, 0, 200, 200, (x) => 0.05 * x);
+    const pw = await createPhysicsWorld(noCity(), t);
+    const c = new Character(pw, { x: 50, y: heightAt(t, 50, 50) + 1, z: 50 });
+    runChar(pw, c, idle, 2); // 120 steps
+    const p = c.position();
+    expect(Math.abs(p.y - heightAt(t, p.x, p.z))).toBeLessThanOrEqual(0.03);
+    expect(Math.hypot(p.x - 50, p.z - 50)).toBeLessThan(0.05);
+  });
+
+  test('car climbs a gentle ramp (3 m over 150 m) without sinking into it', async () => {
+    const ramp = (x: number) => {
+      const s = Math.min(1, Math.max(0, (x - 50) / 150));
+      return 3 * s * s * (3 - 2 * s); // smoothstep: no kinks at either end
+    };
+    const t = grid(0, -20, 300, 41, (x) => ramp(x));
+    const pw = await createPhysicsWorld(noCity(), t);
+    const car = new Vehicle(pw, { x: 50, z: 0, heading: Math.PI / 2, y: heightAt(t, 50, 0) }); // facing east, up the ramp
+    car.setOccupied(true);
+    let minClearance = Infinity;
+    runCar(pw, car, { throttle: 1, steer: 0, brake: false }, 15, () => {
+      const p = car.pose();
+      minClearance = Math.min(minClearance, p.y - VEHICLE_REST_Y - heightAt(t, p.x, p.z));
+    });
+    expect(car.pose().x).toBeGreaterThan(200); // over the top
+    expect(minClearance).toBeGreaterThan(-0.3);
+  });
+
+  test('kerb trimesh on top of a flat heightfield at h = 2: character steps up, car drives over', async () => {
+    const t = grid(-120, -60, 241, 121, () => 2);
+    const v: number[] = [];
+    const idx: number[] = [];
+    const quad = (a: number[], b: number[], c: number[], d: number[]) => {
+      const o = v.length / 3;
+      v.push(...a, ...b, ...c, ...d);
+      idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    };
+    const [x0, y0, z0, x1, y1, z1] = [-100, 2, 5, 9, 2.12, 40]; // miniScene's kerb slab, lifted by 2 m (no bottom face)
+    quad([x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]);
+    quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]);
+    quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]);
+    quad([x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]);
+    quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]);
+    const asset = { vertices: new Float32Array(v), indices: new Uint32Array(idx), boundary: new Float32Array([-110, -50, 110, -50, 110, 50, -110, 50]) };
+
+    const pw = await createPhysicsWorld(asset, t);
+    const c = new Character(pw, { x: 0, y: 2, z: 3 });
+    runChar(pw, c, { forward: 1, right: 0, run: false, yaw: 0 }, 3);
+    expect(c.position().z).toBeGreaterThan(7);
+    expect(c.position().y).toBeGreaterThan(2.12 - 0.05);
+    expect(c.position().y).toBeLessThan(2.12 + 0.05);
+
+    const car = new Vehicle(pw, { x: -30, z: -10, heading: 0, y: 2 }); // facing south toward the kerb at z = 5
+    car.setOccupied(true);
+    runCar(pw, car, { throttle: 0.5, steer: 0, brake: false }, 6);
+    expect(car.pose().z).toBeGreaterThan(15);
+    expect(car.speed()).toBeGreaterThan(2);
+  });
+
+  test('boundary walls follow the terrain: at the high end (10 m up) they still stop the character', async () => {
+    // Rises 10 m from x = −20 to x = 20; the boundary square ±40 has its east wall on the high plateau.
+    const t = grid(-60, -60, 121, 121, (x) => 10 * Math.min(1, Math.max(0, (x + 20) / 40)));
+    const pw = await createPhysicsWorld(noCity([-40, -40, 40, -40, 40, 40, -40, 40]), t);
+    const c = new Character(pw, { x: 35, y: 10, z: 0 });
+    runChar(pw, c, { forward: 1, right: 0, run: true, yaw: Math.PI / 2 }, 3); // east
+    expect(c.position().x).toBeLessThan(40 - 0.25);
+    expect(c.position().x).toBeGreaterThan(38); // it did run there
+    expect(c.position().y).toBeCloseTo(10, 1);
   });
 });
 
@@ -402,21 +511,24 @@ test('tuning holds the brief values', () => {
 
 const COLLISION_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/collision.bin', import.meta.url));
 const MANIFEST = fileURLToPath(new URL('../../../../apps/client/public/world/manifest.json', import.meta.url));
-const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST);
+const TERRAIN_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/terrain.bin', import.meta.url));
+const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST) && existsSync(TERRAIN_BIN);
 
 test.skipIf(!haveReal)(
-  haveReal ? 'real collision.bin: world builds, character at spawn stands on the sidewalk (y ≈ 0.12)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/collision.bin not found — run the pipeline]',
+  haveReal ? 'real collision.bin + terrain.bin: world builds, character at spawn stands on the sidewalk (y ≈ spawn.y)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
   async () => {
     const file = readFileSync(COLLISION_BIN);
     const asset = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+    const tf = readFileSync(TERRAIN_BIN);
+    const terrain = decodeTerrain(tf.buffer.slice(tf.byteOffset, tf.byteOffset + tf.byteLength));
     const spawn = JSON.parse(readFileSync(MANIFEST, 'utf8')).spawn as { x: number; y: number; z: number };
     const t0 = performance.now();
-    const pw = await createPhysicsWorld(asset);
+    const pw = await createPhysicsWorld(asset, terrain);
     // a generous bound: the budget (< 3 s) is measured in the browser; a loaded CI box must not flake here
     expect(performance.now() - t0).toBeLessThan(15_000);
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
-    expect(Math.abs(c.position().y - 0.12)).toBeLessThanOrEqual(0.03);
+    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = terrain + sidewalk 0.12
   },
   15_000,
 );

@@ -3,8 +3,8 @@ import { GROUND_SILL, SHOP, STOREY } from './storeys';
 
 /**
  * Procedural Gründerzeit facades for the chunk `buildings` mesh, all in the fragment shader.
- * Attributes (GLTFLoader lowercases them): _facadeuv (wall: u = m along wall, v = m above ground;
- * roof: world x/z), _kind (0 wall, 1 roof), _seed ([0,1)), _flags (bit 0 Neusser shopfront,
+ * Attributes (GLTFLoader lowercases them): _facadeuv (wall: u = m along wall, v = m above the LoD2 base,
+ * v < 0 on the plinth down to the terrain; roof: world x/z), _kind (0 wall, 1 roof), _seed ([0,1)), _flags (bit 0 Neusser shopfront,
  * bit 1 backdrop, bit 2 set on the client: carries a real shop sign) and _eave (added on the client by addEaveAttribute).
  */
 
@@ -45,7 +45,8 @@ function horizontalSpan(verts: number[], position: ArrayLike<number>): number {
  * vertices; a surface's eave is its lowest vertex height that lies more than 1 m above its bottom
  * (rectangle: the top edge; pentagon gable wall: the corners, not the apex). A gable on a surface of its own
  * (its vertices more than 1 m above the bottom span < 60 % of its base, measured horizontally from `position`)
- * gets its bottom as eave, so it stays plain plaster above the main cornice. Roof vertices get 0.
+ * gets its bottom as eave, so it stays plain plaster above the main cornice. Plinth vertices (v < 0) are ignored
+ * for bottom, eave and gable test but get their surface's eave. Roof vertices get 0.
  */
 export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number, position: ArrayLike<number>): Float32Array {
   const parent = Int32Array.from({ length: vertexCount }, (_, i) => i);
@@ -62,17 +63,23 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
     parent[find(b)] = find(a);
     parent[find(c)] = find(a);
   }
+  // Plinth vertices (v < 0, below the LoD2 base on slopes) are welded to their wall but must not lower its bottom.
   const bottom = new Map<number, number>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
+    if (v < 0) continue;
     bottom.set(r, Math.min(bottom.get(r) ?? Infinity, v));
+  }
+  for (let i = 0; i < vertexCount; i++) {
+    if (kind[i] === 0 && !bottom.has(find(i))) bottom.set(find(i), 0); // plinth-only surface
   }
   const eave = new Map<number, number>();
   const base = new Map<number, number[]>(), upper = new Map<number, number[]>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
+    if (v < 0) continue;
     if (v > bottom.get(r)! + 1) {
       eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
       (upper.get(r) ?? upper.set(r, []).get(r)!).push(i);
@@ -254,6 +261,12 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
   plaster *= 0.95 + 0.07 * nnNoise(vec2(u, v) * 1.3) + 0.03 * nnNoise(vec2(u, v) * 6.0);
   plaster *= mix(0.82, 1.0, smoothstep(0.0, 2.5, v)); // splash grime
   col = plaster; rough = 0.92; emit = vec3(0.0); glass = 0.0;
+  if (v < 0.0) {
+    // plinth below the LoD2 base (downhill side on slopes): plain dark plaster/stone, no windows, shop or light
+    col = nnPalette[int(min(floor(seed * 10.0), 9.0))] * 0.55 * (0.92 + 0.12 * nnNoise(vec2(u * 2.0, v * 4.0)));
+    rough = 0.95;
+    return;
+  }
   if (backdrop) return;
 
   float h1 = nnHash(vec2(seed * 11.0, 1.3)), h2 = nnHash(vec2(seed * 13.0, 2.7));

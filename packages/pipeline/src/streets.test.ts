@@ -193,7 +193,8 @@ test('an overridden building still bounds the sidewalk: an override drops its me
   const church = boxBuilding('church', 5, 16, 35, 40, 20); // facade 3 m behind the south kerb
   const overrides = { church: 'data/models/church.glb' };
   const streets = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, allSidewalkWidths([r], [church]));
-  const chunk = buildChunks([church], streets, overrides).find((c) => c.streets.sidewalk)!;
+  const trackbed = { positions: new Float32Array(), uv: new Float32Array(), indices: new Uint32Array() };
+  const chunk = buildChunks([church], { ...streets, trackbed }, overrides).find((c) => c.streets.sidewalk)!;
   expect(chunk.buildings).toBeUndefined(); // the model replaces the LoD2 mesh …
   const sw = chunk.streets.sidewalk!;
   for (let i = 0; i < sw.positions.length; i += 3) expect(sw.positions[i + 2]!).toBeLessThanOrEqual(16 + 1e-4); // … the sidewalk still ends at its facade

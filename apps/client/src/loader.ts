@@ -3,7 +3,6 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
-import { trackBed } from './trackbed';
 import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
 
@@ -145,16 +144,14 @@ export class WorldLoader {
         disposeGltf(root); // its own materials and textures were not swapped for the shared ones yet
         return;
       }
-      const tram = root.getObjectByName('tram') as Mesh | undefined;
-      if (tram?.isMesh) root.add(this.trackBedMesh(tram));
       root.traverse((o) => {
         const mesh = o as Mesh;
-        if (!mesh.isMesh || mesh.name === 'trackbed') return;
+        if (!mesh.isMesh) return;
         const mat = mesh.name === 'buildings' ? this.facade : this.street[mesh.name];
         if (!mat) return;
         (mesh.material as Material).dispose();
         mesh.material = mat;
-        mesh.receiveShadow = true;
+        mesh.receiveShadow = true; // ground and street meshes receive but do not cast (saves the shadow pass)
         if (mesh.name === 'buildings') {
           addEaveAttribute(mesh.geometry);
           markSigned(mesh.geometry, root.userData.buildings, this.signed);
@@ -185,21 +182,6 @@ export class WorldLoader {
       for (const mat of [mesh.material].flat()) if (mat instanceof MeshStandardMaterial && mat.emissiveMap) this.glow.add(mat);
     });
     return model;
-  }
-
-  private trackBedMesh(tram: Mesh): Mesh {
-    const g = tram.geometry;
-    const index = g.index?.array ?? Uint32Array.from({ length: g.getAttribute('position').count }, (_, i) => i);
-    const bed = trackBed(g.getAttribute('position').array, g.getAttribute('uv').array, index);
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(bed.positions, 3));
-    geo.setAttribute('uv', new BufferAttribute(bed.uv, 2));
-    geo.setIndex(Array.from(bed.index));
-    const mesh = new Mesh(geo, this.street.trackbed);
-    mesh.name = 'trackbed';
-    mesh.receiveShadow = true;
-    mesh.renderOrder = STREET_RENDER_ORDER.trackbed ?? 0;
-    return mesh;
   }
 
   private unload(key: string): void {

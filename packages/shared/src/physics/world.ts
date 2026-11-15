@@ -1,5 +1,6 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { CollisionAsset } from '../assets/collision';
+import { heightAt, type TerrainGrid } from '../assets/terrain';
 import { TUNING } from './tuning';
 
 export type Rapier = typeof RAPIER;
@@ -63,8 +64,10 @@ export function onBeforeStep(pw: PhysicsWorld, fn: () => void): () => void {
 /**
  * Builds the world: the city as one fixed trimesh, plus an invisible wall
  * segment (thin cuboid) along every edge of the play-area boundary ring.
+ * With `terrain`, the ground is additionally a fixed heightfield that coincides exactly with heightAt(terrain, …),
+ * and the boundary walls follow the terrain.
  */
-export async function createPhysicsWorld(c: CollisionAsset): Promise<PhysicsWorld> {
+export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGrid): Promise<PhysicsWorld> {
   await initRapier();
   const world = new RAPIER.World({ x: 0, y: TUNING.world.gravity, z: 0 });
   world.timestep = TUNING.world.dt;
@@ -73,8 +76,11 @@ export async function createPhysicsWorld(c: CollisionAsset): Promise<PhysicsWorl
   const mesh = subdivideLargeTriangles(c.vertices, dropZeroAreaTriangles(c.vertices, c.indices), TUNING.world.maxTriangleEdge);
   // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
   // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
-  world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
-  addBoundaryWalls(world, ground, c.boundary);
+  if (mesh.indices.length > 0) {
+    world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
+  }
+  if (terrain) world.createCollider(terrainCollider(terrain), ground);
+  addBoundaryWalls(world, ground, c.boundary, terrain);
   // One empty step builds the broad phase, so ray casts and character queries work right away
   // (World.updateSceneQueries is declared in the typings but missing at runtime in 0.21.0).
   world.step();
@@ -92,7 +98,25 @@ export async function createPhysicsWorld(c: CollisionAsset): Promise<PhysicsWorl
   return pw;
 }
 
-function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float32Array): void {
+/**
+ * Rapier heightfield for the grid. Rapier wants an (nrows+1)×(ncols+1) matrix in column-major order, matrix rows along
+ * local z and columns along local x, nrows/ncols being cell counts; the field spans ±scale/2 around the collider
+ * translation, so it is placed at the grid centre. Verified against heightAt by the 'heightfield matches heightAt' test.
+ */
+function terrainCollider(t: TerrainGrid): RAPIER.ColliderDesc {
+  const { cols, rows } = t;
+  if (cols < 2 || rows < 2) throw new Error('terrain: grid needs at least 2×2 points');
+  const h = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) h[c * rows + r] = t.heights[r * cols + c]!;
+  return RAPIER.ColliderDesc.heightfield(rows - 1, cols - 1, h, { x: cols - 1, y: 1, z: rows - 1 }, RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES)
+    .setTranslation(t.x0 + (cols - 1) / 2, 0, t.z0 + (rows - 1) / 2);
+}
+
+/**
+ * One thin cuboid per boundary edge. With terrain, each segment reaches from 1 m below the lowest terrain point along
+ * it (sampled every 1 m) to boundaryWallHeight above the highest, so it neither floats nor gets buried.
+ */
+function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float32Array, terrain?: TerrainGrid): void {
   const { boundaryWallHeight: h, boundaryWallThickness: t } = TUNING.world;
   const n = b.length / 2;
   for (let i = 0; i < n; i++) {
@@ -102,9 +126,21 @@ function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float3
     const len = Math.hypot(dx, dz);
     if (len < 1e-6) continue; // repeated closing point
     const a = Math.atan2(dx, dz); // rotation about +y that maps local +z onto the edge
+    let bottom = 0, height = h;
+    if (terrain) {
+      let lo = Infinity, hi = -Infinity;
+      const steps = Math.ceil(len);
+      for (let k = 0; k <= steps; k++) {
+        const y = heightAt(terrain, x0 + (dx * k) / steps, z0 + (dz * k) / steps);
+        lo = Math.min(lo, y);
+        hi = Math.max(hi, y);
+      }
+      bottom = lo - 1;
+      height = h + (hi - lo) + 1;
+    }
     world.createCollider(
-      RAPIER.ColliderDesc.cuboid(t / 2, h / 2, len / 2 + t / 2) // + t/2 closes the gaps at corners
-        .setTranslation((x0 + x1) / 2, h / 2, (z0 + z1) / 2)
+      RAPIER.ColliderDesc.cuboid(t / 2, height / 2, len / 2 + t / 2) // + t/2 closes the gaps at corners
+        .setTranslation((x0 + x1) / 2, bottom + height / 2, (z0 + z1) / 2)
         .setRotation({ x: 0, y: Math.sin(a / 2), z: 0, w: Math.cos(a / 2) }),
       body,
     );

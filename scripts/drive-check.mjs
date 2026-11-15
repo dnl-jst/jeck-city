@@ -1,11 +1,12 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
-// Scripted drive in headless Chromium: spawn (no ?cam), pick the parked car nearest to the spawn (must be within
+// Scripted drive in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn (no ?cam), pick the parked car nearest to the spawn (must be within
 // the 2.7 m the pipeline guarantees), press E and check that this car is the one entered, wait for the engine (throttle
 // is dead until it runs), hold W (then W+D), and check that the car moved > 20 m, is not inside a building, stops, and
 // that getting out puts the player on foot again. In the day run, hold R to open the radio wheel, point right (dev hook
 // __nnWheelNudge, no pointer lock headless) and release: Radio Köln. Saves task11-car.png (day), task11-night-car.png
 // (night) and radio-wheel.png (open wheel) into shotsDir when given.
 import { chromium } from 'playwright';
+import { browserArgs } from './browser-args.mjs';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const shots = process.argv[3];
@@ -80,7 +81,7 @@ async function drive(page, time, shot, wheelShot) {
   const surface = await page.evaluate(([x, z]) => window.__nnSurfaceY(x, z), [s.x, s.z]);
   console.log(`${time}: drove ${moved.toFixed(1)} m to (${s.x.toFixed(1)}, ${s.z.toFixed(1)}), ${(s.speed * 3.6).toFixed(0)} km/h, surface below y=${surface?.toFixed(2)}`);
   if (moved <= 20) throw new Error('car moved less than 20 m');
-  if (surface === null || surface > 1) throw new Error('car is inside a building (roof above it)');
+  if (surface === null || surface > s.y + 1) throw new Error('car is inside a building (roof above it)');
   // stop, get out
   await page.keyboard.down('Space');
   const stopped = await until((s) => s.speed < 0.5, null, STEPS.stop, 'car did not stop');
@@ -109,7 +110,7 @@ async function radioWheel(page, until, shot) {
   console.log('radio wheel: hold R, point right, release -> radiokoeln');
 }
 
-const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ args: browserArgs });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));

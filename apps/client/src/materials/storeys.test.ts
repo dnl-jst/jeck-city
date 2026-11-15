@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SIGN_H, SIGN_Y } from '../props';
+import { SIGN_Y } from '@nn/shared';
+import { SIGN_H } from '../props';
 import { SHOP, storeyLayout, STOREY, windowRows } from './storeys';
 
 describe('storeyLayout', () => {
@@ -59,5 +60,7 @@ describe('storeyLayout', () => {
   it('sign boards (props.ts) hang on the sign band of the shader', () => {
     expect(SIGN_Y - SIGN_H / 2).toBeGreaterThanOrEqual(SHOP.signBottom);
     expect(SIGN_Y + SIGN_H / 2).toBeLessThanOrEqual(SHOP.signTop);
+    // the pipeline places sign.y = building base + SIGN_Y: the middle of the band
+    expect(SIGN_Y).toBeCloseTo((SHOP.signBottom + SHOP.signTop) / 2, 6);
   });
 });

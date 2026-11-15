@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import type { CollisionAsset } from '../assets/collision';
+import { heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character } from './character';
 import { StreetProps, treeScale } from './props';
 import { TUNING } from './tuning';
@@ -95,5 +96,21 @@ describe('street props', () => {
     const ray = () => new R.Ray({ x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 });
     expect(world.castRay(ray(), 10, true, undefined, undefined, undefined, undefined, staticWorldFilter())).toBeNull();
     expect(world.castRay(ray(), 10, true, undefined, undefined, undefined, undefined, staticWorldFilter(false, undefined, true))?.timeOfImpact).toBeCloseTo(5 - TUNING.props.lampRadius, 1);
+  });
+
+  test('props stand on the terrain', async () => {
+    const n = 101;
+    const heights = new Float32Array(n * n);
+    for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) heights[r * n + c] = 3 + 0.1 * c + 0.05 * r;
+    const terrain: TerrainGrid = { x0: -50, z0: -50, cols: n, rows: n, datum: 40, heights };
+    const pw = await createPhysicsWorld(flat(), terrain);
+    const props = new StreetProps(pw, [[10.5, 20.25]], [[-5, 7]], terrain);
+    expect(props.lampPose(0).y).toBeCloseTo(heightAt(terrain, 10.5, 20.25), 5);
+    pw.step();
+    const { rapier: R, world } = pw;
+    // a horizontal ray just above the terrain at the tree hits the trunk (it starts on the ground, not at y = 0)
+    const y = heightAt(terrain, -5, 7) + 0.5;
+    const hit = world.castRay(new R.Ray({ x: -5, y, z: 0 }, { x: 0, y: 0, z: 1 }), 10, true, undefined, undefined, undefined, undefined, staticWorldFilter(false, undefined, true));
+    expect(hit?.timeOfImpact).toBeCloseTo(7 - TUNING.props.trunkRadius * treeScale(-5, 7), 1);
   });
 });

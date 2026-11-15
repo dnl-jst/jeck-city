@@ -2,7 +2,8 @@ import { Color, MeshStandardMaterial } from 'three';
 
 /**
  * Procedural street surfaces. Street meshes carry POSITION and TEXCOORD_0 in metres
- * (ribbons: u along, v across; polygons: world x/z) but no normals, hence flatShading.
+ * (ribbons: u along, v across; polygons: world x/z) but no normals, hence flatShading. The exception is the
+ * terrain `ground` mesh: it has normals, is smooth shaded and turns from paving to grass on slopes.
  * Asphalt, grass and squares are patterned from world x/z so overlapping ribbons look identical
  * (no visible z-fighting); sidewalk slabs and kerb joints follow the ribbon uv.
  * Markings (white / red cycle crossings by the `_mark` attribute) are plain lit paint: at night they only show
@@ -21,12 +22,19 @@ const SPEC: Record<Kind, { id: number; color: number; roughness: number; metalne
   parking: { id: 8, color: 0x4a4c50, roughness: 0.9, metalness: 0, offset: 0.8 },
   // paint colours come from the shader (_mark)
   markings: { id: 9, color: 0xffffff, roughness: 0.75, metalness: 0, offset: 0.6 },
-  // track bed (client-built from the rails, see trackbed.ts): concrete with grooved rails
+  // track bed (built from the rails by the pipeline, see packages/pipeline/src/trackbed.ts): concrete with grooved rails
   trackbed: { id: 7, color: 0xffffff, roughness: 0.8, metalness: 0, offset: 0.5 },
   tram: { id: 3, color: 0xd4d8dd, roughness: 0.25, metalness: 0.15, offset: 0 },
   sidewalk: { id: 1, color: 0x9d9b95, roughness: 0.9, metalness: 0, offset: 0 },
   curb: { id: 2, color: 0xb9b7b0, roughness: 0.85, metalness: 0, offset: 0 },
 };
+
+/**
+ * Ground slope (degrees) where grass starts to replace the paving, and where it is all grass: the shader's grass
+ * share is 1 − smoothstep(cos FULL, cos START, world normal y).
+ */
+export const GRASS_SLOPE_START = 15;
+export const GRASS_SLOPE_FULL = 25;
 
 /** Draw order of street meshes, back layers first. */
 export const STREET_RENDER_ORDER: Record<string, number> = {
@@ -113,26 +121,45 @@ const FRAG = /* glsl */ `
 #elif NN_STREET == 6
   k = (0.92 + 0.08 * nnHash(floor(xz / 0.5))) * (0.85 + 0.2 * nnNoise(xz * 0.2));
   k *= 1.0 - 0.25 * nnJoints(xz, vec2(0.5, 0.5), 0.008);
+  // slopes (embankments, unmapped verges) turn to grass, coloured and patterned like the green areas
+  float grass = 1.0 - smoothstep(NN_GRASS_COS_FULL, NN_GRASS_COS_START, normalize(vNnWorldNormal).y);
+  vec3 turf = NN_GRASS_COLOR * (0.75 + 0.3 * nnNoise(xz * 0.35) + 0.12 * nnNoise(xz * 3.0));
+  turf *= mix(vec3(1.0), vec3(1.15, 1.05, 0.7), nnNoise(xz * 0.08 + 7.0) * 0.6);
+  diffuseColor.rgb = mix(diffuseColor.rgb * k, turf, grass);
+  k = 1.0;
 #endif
   diffuseColor.rgb *= k;
 }
 `;
+
+const glslFloat = (x: number): string => x.toFixed(6);
+const GRASS_LINEAR = new Color(SPEC.green.color); // three converts the sRGB hex to linear
+// only the ground mesh has normals: the others would read a zero normal
+const NORMAL_DECL = '#if NN_STREET == 6\nvarying vec3 vNnWorldNormal;\n#endif\n';
 
 /** One shared material per street mesh name. */
 export function createStreetMaterials(): Record<string, MeshStandardMaterial> {
   const out: Record<string, MeshStandardMaterial> = {};
   for (const [name, s] of Object.entries(SPEC) as [Kind, (typeof SPEC)[Kind]][]) {
     const mat = new MeshStandardMaterial({
-      color: new Color(s.color), roughness: s.roughness, metalness: s.metalness, flatShading: true,
+      color: new Color(s.color), roughness: s.roughness, metalness: s.metalness, flatShading: name !== 'ground',
       polygonOffset: s.offset !== 0, polygonOffsetFactor: s.offset, polygonOffsetUnits: s.offset * 4,
     });
     mat.defines = { NN_STREET: s.id };
+    if (name === 'ground') {
+      Object.assign(mat.defines, {
+        NN_GRASS_COS_FULL: glslFloat(Math.cos(GRASS_SLOPE_FULL * Math.PI / 180)),
+        NN_GRASS_COS_START: glslFloat(Math.cos(GRASS_SLOPE_START * Math.PI / 180)),
+        NN_GRASS_COLOR: `vec3(${glslFloat(GRASS_LINEAR.r)}, ${glslFloat(GRASS_LINEAR.g)}, ${glslFloat(GRASS_LINEAR.b)})`,
+      });
+    }
     mat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying vec2 vNnUv;\nvarying vec2 vNnXz;\nvarying float vNnMark;\n#if NN_STREET == 9\nattribute float _mark;\n#endif')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvNnUv = uv;\nvNnXz = (modelMatrix * vec4(position, 1.0)).xz;\n#if NN_STREET == 9\nvNnMark = _mark;\n#else\nvNnMark = 0.0;\n#endif');
+        .replace('#include <common>', `#include <common>\nvarying vec2 vNnUv;\nvarying vec2 vNnXz;\nvarying float vNnMark;\n#if NN_STREET == 9\nattribute float _mark;\n#endif\n${NORMAL_DECL}`)
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvNnUv = uv;\nvNnXz = (modelMatrix * vec4(position, 1.0)).xz;\n#if NN_STREET == 9\nvNnMark = _mark;\n#else\nvNnMark = 0.0;\n#endif\n'
+          + '#if NN_STREET == 6\nvNnWorldNormal = mat3(modelMatrix) * objectNormal;\n#endif');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${DECL}`)
+        .replace('#include <common>', `#include <common>\n${DECL}${NORMAL_DECL}`)
         .replace('#include <color_fragment>', `#include <color_fragment>\n${FRAG}`);
     };
     mat.customProgramCacheKey = () => `nn-street-${s.id}`;

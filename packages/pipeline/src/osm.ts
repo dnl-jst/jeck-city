@@ -31,7 +31,7 @@ type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[
 const BOUNDARY_ID = 2613766;
 const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
-  ['grass', 'village_green', 'recreation_ground'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
+  ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
 
 /** amenity values that are shops for the game (they get a sign and a shop name). */
 const SHOP_AMENITIES = new Set(['cafe', 'restaurant', 'fast_food', 'pub', 'bar', 'biergarten', 'ice_cream', 'pharmacy']);

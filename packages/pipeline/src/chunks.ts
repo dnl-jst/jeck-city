@@ -1,12 +1,13 @@
 import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
-import { chunkKey, type CollisionAsset } from '@nn/shared';
+import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { BuildingMesh } from './buildings.js';
+import { groundMesh, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
-export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
+export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
 export type StreetMeshes = Record<StreetName, Mesh>;
 /**
@@ -28,7 +29,7 @@ export type BuildingBatch = {
   indices: Uint32Array;
   ranges: { id: string; firstVertex: number; vertexCount: number }[];
 };
-export type ChunkGeometry = { key: string; ix: number; iz: number; buildings?: BuildingBatch; streets: Partial<Record<StreetName, Mesh>> };
+export type ChunkGeometry = { key: string; ix: number; iz: number; buildings?: BuildingBatch; streets: Partial<Record<StreetName, Mesh>>; ground?: GroundMesh };
 
 class BatchBuilder {
   pos: number[] = []; nor: number[] = []; uv: number[] = []; kind: number[] = []; seed: number[] = []; flags: number[] = [];
@@ -116,8 +117,10 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
 /**
  * Buildings by centroid, street triangles by triangle centroid; positions stay in world space.
  * Street triangles outside `area` are dropped (OSM ways reach far beyond the play area).
+ * With `terrain`, every chunk square that intersects `area` (the whole grid without `area`) and overlaps the
+ * grid gets its `ground` mesh, also when it holds no buildings or streets.
  */
-export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect): ChunkGeometry[] {
+export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid): ChunkGeometry[] {
   const chunks = new Map<string, ChunkGeometry>();
   const chunk = (key: string): ChunkGeometry => {
     let c = chunks.get(key);
@@ -138,6 +141,15 @@ export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, ov
   }
   for (const [key, batch] of batches) chunk(key).buildings = batch.build();
   for (const name of STREET_MESHES) for (const [key, m] of splitMesh(streets[name], area)) chunk(key).streets[name] = m;
+  if (terrain) {
+    const r = area ?? { minX: terrain.x0, minZ: terrain.z0, maxX: terrain.x0 + terrain.cols - 1, maxZ: terrain.z0 + terrain.rows - 1 };
+    for (let iz = Math.floor(r.minZ / CHUNK_SIZE); iz < Math.ceil(r.maxZ / CHUNK_SIZE); iz++) {
+      for (let ix = Math.floor(r.minX / CHUNK_SIZE); ix < Math.ceil(r.maxX / CHUNK_SIZE); ix++) {
+        const g = groundMesh(terrain, ix, iz);
+        if (g) chunk(`${ix}_${iz}`).ground = g;
+      }
+    }
+  }
   return [...chunks.values()].sort((a, b) => a.iz - b.iz || a.ix - b.ix);
 }
 
@@ -167,6 +179,8 @@ export async function encodeChunkGlb(c: ChunkGeometry): Promise<Uint8Array> {
     ], b.indices);
     scene.setExtras({ buildings: b.ranges });
   }
+  const g = c.ground;
+  if (g) addMesh('ground', [['POSITION', 'VEC3', g.positions], ['NORMAL', 'VEC3', g.normals], ['TEXCOORD_0', 'VEC2', g.uv]], g.indices);
   for (const name of STREET_MESHES) {
     const m = c.streets[name];
     if (!m || m.indices.length === 0) continue;
@@ -209,12 +223,13 @@ class SoupBuilder {
 
 /**
  * collision.bin content: building walls/roofs, kerbs and sidewalks (raised street surfaces at y = 0.12,
- * inside the world area) and one ground rectangle at y = 0 covering the boundary bbox + 200 m.
+ * inside the world area) and, without `terrain`, one ground rectangle at y = 0 covering the boundary bbox + 200 m
+ * (with `terrain` the physics heightfield collider is the ground instead).
  * Vertices are welded; zero-area triangles and overridden buildings are left out. `extra`: further world-space
  * triangle soups (9 floats per triangle), e.g. the collision meshes of override models.
- * Not included: road, tram, green and squares — they lie at most 0.01 m above the ground, which covers them.
+ * Not included: road, trackbed, tram, green and squares — they lie only centimetres above the ground, which covers them.
  */
-export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[] }): CollisionAsset {
+export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[]; terrain?: TerrainGrid }): CollisionAsset {
   const s = new SoupBuilder();
   for (const t of o.extra ?? []) for (let v = 0; v < t.length / 3; v += 3) s.tri(t, v, v + 1, v + 2);
   for (const b of o.buildings) {
@@ -231,10 +246,12 @@ export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidew
       if (inRect(area, cx, cz)) s.tri(c.positions, a, b, d);
     }
   }
-  const { minX: x0, maxX: x1, minZ: z0, maxZ: z1 } = area;
-  const ground = [x0, 0, z0, x0, 0, z1, x1, 0, z1, x1, 0, z0].map(Math.fround);
-  s.tri(ground, 0, 1, 2); // counter-clockwise seen from above (+y normal)
-  s.tri(ground, 0, 2, 3);
+  if (!o.terrain) {
+    const { minX: x0, maxX: x1, minZ: z0, maxZ: z1 } = area;
+    const ground = [x0, 0, z0, x0, 0, z1, x1, 0, z1, x1, 0, z0].map(Math.fround);
+    s.tri(ground, 0, 1, 2); // counter-clockwise seen from above (+y normal)
+    s.tri(ground, 0, 2, 3);
+  }
   return {
     vertices: Float32Array.from(s.vertices),
     indices: Uint32Array.from(s.indices),
