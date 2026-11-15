@@ -53,3 +53,9 @@ test('needsCarRebuild: only after the camera moved more than 20 m since the last
   expect(needsCarRebuild({ x: 0, z: 0 }, 12, 16)).toBe(false); // exactly 20 m
   expect(needsCarRebuild({ x: 0, z: 0 }, 12, 16.1)).toBe(true);
 });
+
+test('visibleCars: physics-active and occupied cars are always drawn, whatever the distance', () => {
+  const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: 400 }, { x: 10, z: 0 }];
+  expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [2, 1, 3])).toEqual([0, 1, 2, 3]);
+  expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [])).toEqual([0, 3]);
+});

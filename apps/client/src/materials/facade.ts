@@ -28,12 +28,26 @@ const PALETTE = [
 /** Signage band colours of shopfronts (sRGB). */
 const SIGNS = [0x1f3b2c, 0x5a1a22, 0x1c2a4a, 0x1d1d1f, 0xe9e1cc, 0x7a4a1c];
 
+/** A wall surface whose upper vertices span less than this share of its base is a gable (triangle, half-hip). */
+const GABLE_TOP_SHARE = 0.6;
+
+/** Horizontal extent of vertical-wall vertices (collinear in x/z): farthest pair found from an arbitrary start. */
+function horizontalSpan(verts: number[], position: ArrayLike<number>): number {
+  if (verts.length < 2) return 0;
+  const d = (a: number, b: number) => Math.hypot(position[a * 3]! - position[b * 3]!, position[a * 3 + 2]! - position[b * 3 + 2]!);
+  const far = (from: number) => verts.reduce((best, v) => (d(from, v) > d(from, best) ? v : best), from);
+  const a = far(verts[0]!);
+  return d(a, far(a));
+}
+
 /**
  * Per-vertex eave height of each wall surface: wall triangles are grouped into surfaces by shared
  * vertices; a surface's eave is its lowest vertex height that lies more than 1 m above its bottom
- * (rectangle: the top edge; gable wall: the corners, not the apex). Roof vertices get 0.
+ * (rectangle: the top edge; pentagon gable wall: the corners, not the apex). A gable on a surface of its own
+ * (its vertices more than 1 m above the bottom span < 60 % of its base, measured horizontally from `position`)
+ * gets its bottom as eave, so it stays plain plaster above the main cornice. Roof vertices get 0.
  */
-export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number): Float32Array {
+export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number, position: ArrayLike<number>): Float32Array {
   const parent = Int32Array.from({ length: vertexCount }, (_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) {
@@ -55,10 +69,17 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
     bottom.set(r, Math.min(bottom.get(r) ?? Infinity, v));
   }
   const eave = new Map<number, number>();
+  const base = new Map<number, number[]>(), upper = new Map<number, number[]>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
-    if (v > bottom.get(r)! + 1) eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
+    if (v > bottom.get(r)! + 1) {
+      eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
+      (upper.get(r) ?? upper.set(r, []).get(r)!).push(i);
+    } else if (v < bottom.get(r)! + 0.5) (base.get(r) ?? base.set(r, []).get(r)!).push(i);
+  }
+  for (const [r, up] of upper) {
+    if (horizontalSpan(up, position) < GABLE_TOP_SHARE * horizontalSpan(base.get(r) ?? [], position)) eave.set(r, bottom.get(r)!);
   }
   const out = new Float32Array(vertexCount);
   for (let i = 0; i < vertexCount; i++) {
@@ -73,7 +94,7 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
 export function addEaveAttribute(g: BufferGeometry): void {
   const n = g.getAttribute('position').count;
   const index = g.index?.array ?? Uint32Array.from({ length: n }, (_, i) => i);
-  const eaves = wallEaves(index, g.getAttribute('_kind').array, g.getAttribute('_facadeuv').array, n);
+  const eaves = wallEaves(index, g.getAttribute('_kind').array, g.getAttribute('_facadeuv').array, n, g.getAttribute('position').array);
   g.setAttribute('_eave', new BufferAttribute(eaves, 1));
 }
 

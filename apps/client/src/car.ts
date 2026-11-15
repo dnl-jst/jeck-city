@@ -194,13 +194,14 @@ export const CAR_RENDER_RADIUS = 250;
 /** …and that set is rebuilt only after the camera moved more than this since the last rebuild (m). */
 export const CAR_REBUILD_MOVE = 20;
 
-/** Indices (ascending) of the cars within `radius` of (x, z). */
-export function visibleCars(poses: readonly XZ[], x: number, z: number, radius = CAR_RENDER_RADIUS): number[] {
+/** Indices (ascending) of the cars within `radius` of (x, z), plus the `always` ones (physics-active, occupied). */
+export function visibleCars(poses: readonly XZ[], x: number, z: number, radius = CAR_RENDER_RADIUS, always: Iterable<number> = []): number[] {
+  const keep = new Set(always);
   const out: number[] = [];
   const r2 = radius * radius;
   for (let i = 0; i < poses.length; i++) {
     const dx = poses[i]!.x - x, dz = poses[i]!.z - z;
-    if (dx * dx + dz * dz <= r2) out.push(i);
+    if (keep.has(i) || dx * dx + dz * dz <= r2) out.push(i);
   }
   return out;
 }
@@ -247,11 +248,20 @@ export class ParkedCars {
     }
   }
 
-  /** Draws only the cars within CAR_RENDER_RADIUS of the camera at (x, z); rebuilt after CAR_REBUILD_MOVE of movement. */
+  /** Cars that must have an instance slot regardless of distance: physics-active ones and the occupied one. */
+  private always(): number[] {
+    return this.occupied === null ? [...this.vehicles.keys()] : [...this.vehicles.keys(), this.occupied];
+  }
+
+  /**
+   * Draws only the cars within CAR_RENDER_RADIUS of the camera at (x, z) plus every physics-active and the occupied
+   * car; rebuilt after CAR_REBUILD_MOVE of movement or when one of those always-drawn cars has no slot yet.
+   */
   updateVisibility(x: number, z: number): void {
-    if (!needsCarRebuild(this.lastRebuild, x, z)) return;
+    const always = this.always();
+    if (!needsCarRebuild(this.lastRebuild, x, z) && always.every((i) => this.slots[i]! >= 0)) return;
     this.lastRebuild = { x, z };
-    const shown = visibleCars(this.poses, x, z);
+    const shown = visibleCars(this.poses, x, z, CAR_RENDER_RADIUS, always);
     this.slots.fill(-1);
     const col = new Color();
     shown.forEach((i, k) => {
