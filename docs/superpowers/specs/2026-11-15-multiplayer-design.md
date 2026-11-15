@@ -204,7 +204,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 
 ## 16. Offene Fragen an den Nutzer (vor der Umsetzung klären)
 
-0. **Auf die Gelände-Höhen warten oder flach starten?** Vorschlag: warten, bis die Gelände-Arbeit in `main` ist, und darauf aufbauen – sonst werden alle Höhen-Stellen (Requisiten, Autos, Aussteigen, Spawn) doppelt umgebaut und der Server/Client-Abgleich muss nach dem Gelände-Merge erneut geprüft werden. Falls doch flach begonnen wird: Höhe ausschließlich per Raycast gegen die statische Kollision (`surfaceY`) abfragen, keine eigenen Manifest-Felder einführen.
+0. ~~Auf die Gelände-Höhen warten oder flach starten?~~ **Erledigt:** Das Gelände (DGM1) ist in `main` (PR #10); Plan 2 baut darauf auf (siehe `docs/superpowers/plans/2026-11-15-multiplayer.md`). Ursprüngliche Frage: Vorschlag: warten, bis die Gelände-Arbeit in `main` ist, und darauf aufbauen – sonst werden alle Höhen-Stellen (Requisiten, Autos, Aussteigen, Spawn) doppelt umgebaut und der Server/Client-Abgleich muss nach dem Gelände-Merge erneut geprüft werden. Falls doch flach begonnen wird: Höhe ausschließlich per Raycast gegen die statische Kollision (`surfaceY`) abfragen, keine eigenen Manifest-Felder einführen.
 1. ~~Radio für andere hörbar?~~ **Entschieden:** ja, leise und dumpf (siehe 7).
 2. ~~Offline-Fallback?~~ **Entschieden:** nein (siehe 11).
 3. ~~Hosting?~~ **Entschieden:** Docker-Image + Caddy-Beispiel genügen (siehe 10).
