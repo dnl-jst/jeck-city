@@ -11,7 +11,7 @@ interface FakeVoice extends LoopVoice {
 }
 
 function setup() {
-  const shots: { id: SoundId; o: { gain?: number; rate?: number; at?: { x: number; z: number } } }[] = [];
+  const shots: { id: SoundId; o: { gain?: number; rate?: number; at?: { x: number; z: number } }; stopped: boolean }[] = [];
   const voices: FakeVoice[] = [];
   const calls: string[] = [];
   const mixer: AudioMixerLike = {
@@ -19,7 +19,11 @@ function setup() {
     load: () => Promise.resolve(),
     setMuted: (m) => calls.push(`mixer.setMuted(${m})`),
     setInCar: (c) => calls.push(`mixer.setInCar(${c})`),
-    oneShot: (id, o = {}) => shots.push({ id, o }),
+    oneShot: (id, o = {}) => {
+      const shot = { id, o, stopped: false };
+      shots.push(shot);
+      return { stop() { shot.stopped = true; } };
+    },
     loop: (id) => {
       const v: FakeVoice = { id, gain: 0, stopped: false, setGain(g) { v.gain = g; }, setRate() {}, stop() { v.stopped = true; } };
       voices.push(v);
@@ -77,6 +81,25 @@ test('leaving while cranking', () => {
   expect(shots.map((s) => s.id)).not.toContain('engineStop');
   expect(tunes.every((t) => t === null)).toBe(true);
   expect(audio.station).toBeNull();
+});
+
+test('leaving while cranking stops the starter', () => {
+  const { audio, shots } = setup();
+  audio.enterCar();
+  audio.doorClosed();
+  audio.crank();
+  audio.exitCar();
+  expect(shots.find((s) => s.id === 'engineStart')!.stopped).toBe(true);
+  expect(shots.filter((s) => s.id !== 'engineStart').every((s) => !s.stopped)).toBe(true);
+});
+
+test('the starter clip plays out once the engine runs', () => {
+  const { audio, shots } = setup();
+  audio.enterCar();
+  audio.crank();
+  audio.engineRunning();
+  audio.exitCar();
+  expect(shots.find((s) => s.id === 'engineStart')!.stopped).toBe(false);
 });
 
 test('radioStep before the engine runs does nothing', () => {

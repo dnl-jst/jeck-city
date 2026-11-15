@@ -1,5 +1,5 @@
 import { ImpactDetector, landed, skidAmount, StepClock, TramBell } from './cues';
-import { MIX, type AudioMixer, type LoopVoice } from './mixer';
+import { MIX, type AudioMixer, type LoopVoice, type ShotVoice } from './mixer';
 import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
@@ -47,6 +47,8 @@ export class GameAudio {
   private inCar = false;
   /** Engine caught (Ignition 'running'): engine voices and radio on. */
   private engineOn = false;
+  /** The starter clip while cranking; stopped if the player leaves before the engine catches. */
+  private starter: ShotVoice | null = null;
   private muted = false;
   private wasGrounded = true;
 
@@ -111,19 +113,23 @@ export class GameAudio {
   }
 
   crank(): void {
-    this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
+    this.starter?.stop();
+    this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
   }
 
   /** The engine has caught: engine voices (once loaded + unlocked) and the radio. */
   engineRunning(): void {
     if (!this.inCar || this.engineOn) return;
     this.engineOn = true;
+    this.starter = null; // the clip's own idle tail may play out
     this.startLoops();
     this.tune(this.d.tuner.enterCar());
   }
 
   exitCar(): void {
     const running = this.engineOn;
+    this.starter?.stop(); // left while cranking: no engine
+    this.starter = null;
     this.inCar = false;
     this.engineOn = false;
     this.stopStatic();

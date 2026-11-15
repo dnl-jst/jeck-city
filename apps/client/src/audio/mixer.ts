@@ -24,6 +24,11 @@ const RAMP = 0.03;
 /** In-car / outside transition: ramp over ~0.3 s. */
 const CAR_RAMP = 0.3 / 3;
 
+/** A playing one-shot; stop() fades it out quickly and disconnects it. */
+export interface ShotVoice {
+  stop(): void;
+}
+
 const SILENT: LoopVoice = { setGain() {}, setRate() {}, stop() {} };
 
 /**
@@ -131,11 +136,11 @@ export class AudioMixer {
     this.lowpass.frequency.setTargetAtTime(inCar ? 700 : 20000, t, CAR_RAMP);
   }
 
-  /** Fire-and-forget sample; with `at` it is positioned in the world (HRTF panner). Silent before unlock/load. */
-  oneShot(id: SoundId, o: { gain?: number; rate?: number; at?: { x: number; z: number } } = {}): void {
+  /** Sample played once; with `at` it is positioned in the world (HRTF panner). Silent before unlock/load. */
+  oneShot(id: SoundId, o: { gain?: number; rate?: number; at?: { x: number; z: number } } = {}): ShotVoice {
     const ctx = this.ctx;
     const buffer = this.buffers.get(id);
-    if (!ctx || !this.sfx || !buffer) return;
+    if (!ctx || !this.sfx || !buffer) return SILENT;
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.playbackRate.value = o.rate ?? 1;
@@ -157,6 +162,20 @@ export class AudioMixer {
       gain.connect(this.sfx);
     }
     src.start();
+    let ended = false;
+    src.onended = () => {
+      ended = true;
+      gain.disconnect();
+    };
+    return {
+      stop() {
+        if (ended) return;
+        ended = true;
+        const t = ctx.currentTime;
+        gain.gain.setTargetAtTime(0, t, RAMP);
+        src.stop(t + RAMP * 5);
+      },
+    };
   }
 
   /** Looping voice on a bus. Starts silent: call setGain to fade it in. Silent no-op before unlock/load. */
