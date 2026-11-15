@@ -1,20 +1,33 @@
 export const IDLE_RPM = 800;
-export const REDLINE_RPM = 6000;
+export const GEAR1_TOP_RPM = 3000;
+export const SHIFT_LOW_RPM = 1500;
+export const CRUISE_TOP_RPM = 3200;
+export const REV_IN_PLACE_RPM = 1800;
 /** Upper speed bound per gear; the top speed (60) is TUNING.vehicle.maxForwardKmh. */
-export const GEAR_TOP_KMH = [15, 30, 45, Infinity];
+export const GEAR_TOP_KMH = [20, 35, 50, Infinity];
 const TOP_KMH = 60;
 
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+const clamp = (v: number, lo: number, hi: number): number =>
+  Math.min(hi, Math.max(lo, v));
 
 /** Target gear and rpm for a speed magnitude (km/h) and throttle input. */
-export function engineTarget(kmh: number, throttle: number): { gear: number; rpm: number } {
+export function engineTarget(
+  kmh: number,
+  throttle: number,
+): { gear: number; rpm: number } {
   const found = GEAR_TOP_KMH.findIndex((top) => kmh < top);
   const gear = found < 0 ? GEAR_TOP_KMH.length - 1 : found;
   const lo = gear === 0 ? 0 : (GEAR_TOP_KMH[gear - 1] ?? 0);
-  const top = gear === GEAR_TOP_KMH.length - 1 ? TOP_KMH : (GEAR_TOP_KMH[gear] ?? TOP_KMH);
+  const top =
+    gear === GEAR_TOP_KMH.length - 1
+      ? TOP_KMH
+      : (GEAR_TOP_KMH[gear] ?? TOP_KMH);
   const f = clamp((kmh - lo) / (top - lo), 0, 1);
-  let rpm = gear === 0 ? IDLE_RPM + f * (REDLINE_RPM - IDLE_RPM) : 2500 + f * (REDLINE_RPM - 2500);
-  if (kmh < 2 && throttle !== 0) rpm = Math.max(rpm, 2200);
+  let rpm =
+    gear === 0
+      ? IDLE_RPM + f * (GEAR1_TOP_RPM - IDLE_RPM)
+      : SHIFT_LOW_RPM + f * (CRUISE_TOP_RPM - SHIFT_LOW_RPM);
+  if (kmh < 2 && throttle !== 0) rpm = Math.max(rpm, REV_IN_PLACE_RPM);
   if (throttle === 0) rpm = Math.max(IDLE_RPM, rpm * 0.85);
   return { gear, rpm };
 }
@@ -26,7 +39,10 @@ export function smoothRpm(current: number, target: number, dt: number): number {
 }
 
 /** Equal-power crossfade between the two loops bracketing rpm; ascending loops. */
-export function engineMix(rpm: number, loops: { rpm: number }[]): { gain: number; rate: number }[] {
+export function engineMix(
+  rpm: number,
+  loops: { rpm: number }[],
+): { gain: number; rate: number }[] {
   const gains = loops.map(() => 0);
   const n = loops.length;
   if (n > 0) {
@@ -44,5 +60,8 @@ export function engineMix(rpm: number, loops: { rpm: number }[]): { gain: number
       gains[i + 1] = Math.sin((t * Math.PI) / 2);
     }
   }
-  return loops.map((l, i) => ({ gain: gains[i]!, rate: clamp(rpm / l.rpm, 0.5, 2.0) }));
+  return loops.map((l, i) => ({
+    gain: gains[i]!,
+    rate: clamp(rpm / l.rpm, 0.5, 2.0),
+  }));
 }

@@ -48,7 +48,7 @@ test('revs up with speed', () => {
   const { out, voices } = fakeOut();
   const vs = new VehicleSound(out);
   vs.start();
-  run(vs, { speed: 14, throttle: 1, skid: 0 }, 3);
+  run(vs, { speed: 16, throttle: 1, skid: 0 }, 3);
   const gains = ENGINE_LOOPS.map((id) => voices.get(id)!.gain);
   expect(gains[0]).toBeCloseTo(0, 3);
   expect(gains.slice(1).some((g) => g > 0.1)).toBe(true);
