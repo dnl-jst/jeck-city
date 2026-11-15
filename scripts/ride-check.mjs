@@ -1,7 +1,7 @@
 // Usage: node scripts/ride-check.mjs [baseUrl] [shotsDir]
 // Scripted bike ride in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn, turn towards the Long John
 // that always stands next to the spawn (bikes[0], type 3), press E and check that a Long John is ridden, pedal 6 s
-// (> 25 m, not inside a building), steer right (heading changes), slow down and get off (on foot again, beside the
+// (> 25 m, not inside a building), steer left towards the road, slow down and get off (on foot again, beside the
 // bike). Day and night run; saves ride-day.png / ride-night.png into shotsDir when given.
 import { chromium } from 'playwright';
 import { browserArgs } from './browser-args.mjs';
@@ -60,9 +60,9 @@ async function ride(page, time, shot) {
     console.log(`saved ${shot}`);
   }
   const before = await page.evaluate(() => window.__nnState());
-  await page.keyboard.down('KeyD');
+  await page.keyboard.down('KeyA'); // towards the road (the spawn sidewalk has trees on the right)
   const turned = await until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) > 6, [before.x, before.z], STEPS.turn, 'bike did not keep moving while steering');
-  await page.keyboard.up('KeyD');
+  await page.keyboard.up('KeyA');
   await page.keyboard.up('KeyW');
   const surface = await page.evaluate(([x, z]) => window.__nnSurfaceY(x, z), [turned.x, turned.z]);
   console.log(`${time}: rode to (${turned.x.toFixed(1)}, ${turned.z.toFixed(1)}), ${(turned.speed * 3.6).toFixed(0)} km/h, surface below y=${surface?.toFixed(2)}`);
