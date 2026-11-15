@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { ENGINE_LOOPS, SOUNDS, type SoundId } from './sounds';
+import { ENGINE_LOOPS, SOUNDS, type FileSoundId } from './sounds';
 
 const AUDIO_DIR = join(import.meta.dirname, '../../public/audio');
-const ids = Object.keys(SOUNDS) as SoundId[];
+const ids = Object.keys(SOUNDS) as FileSoundId[];
 
 test('every catalogued file exists', () => {
   expect(ids.length).toBeGreaterThan(0);

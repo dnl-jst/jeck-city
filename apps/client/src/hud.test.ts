@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from 'vitest';
 import { FetchError, NoWebGLError } from './errors';
-import { bootErrorMessage, CONTROLS_HINT, HUD_CSS } from './hud';
+import { bootErrorMessage, CONTROLS_HINT, HUD_CSS, RIDE_HINT } from './hud';
 
 describe('bootErrorMessage', () => {
   it('names missing WebGL', () => {
@@ -25,9 +25,13 @@ test('the hidden loading box lets clicks through to the canvas (pointer lock)', 
 });
 
 test('controls hint names radio and mute keys', () => {
-  expect(CONTROLS_HINT).toBe('WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · M Karte · Maus umsehen (klicken)');
+  expect(CONTROLS_HINT).toBe('WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · R Radio · N Ton · M Karte · Maus umsehen (klicken)');
 });
 
 test('controls hint names the map key', () => {
   expect(CONTROLS_HINT).toContain('M Karte');
+});
+
+test('riding hint names the bike keys', () => {
+  expect(RIDE_HINT).toBe('W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen');
 });

@@ -96,3 +96,15 @@ export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedM
   doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
   return { glb: await nio.writeBinary(doc), collision, centre: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 } };
 }
+
+/**
+ * Re-encodes a prop model (bikes, racks; data/models/bikes/README.md) with meshopt, keeping its nodes, their names,
+ * transforms and empties as they are: the client animates the parts by node name.
+ */
+export async function prepareProp(glb: Uint8Array): Promise<Uint8Array> {
+  const nio = await io();
+  const doc = await nio.readBinary(glb);
+  if (meshNodes(doc).length === 0) throw new Error('prop model has no meshes');
+  doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
+  return nio.writeBinary(doc);
+}

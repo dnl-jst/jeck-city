@@ -112,4 +112,35 @@ export const TUNING = {
     frictionSlip: 3,
     sideFrictionStiffness: 1,
   },
+
+  /** Bikes (per-type values in biketypes.ts BIKE_SPECS). */
+  bike: {
+    /** Rider capsule (feet on the pedals to the head) above the bike collider. */
+    riderHeight: 1.8,
+    /** Radius of the lying capsule along the bike. */
+    colliderRadius: 0.35,
+    /** Autostep: kerbs up to this height are ridden over; minimum free width on top. */
+    stepMaxHeight: 0.2,
+    stepMinWidth: 0.15,
+    snapToGround: 0.35,
+    gravity: -20,
+    maxSlope: (40 * Math.PI) / 180,
+    /** Rolling resistance without pedalling (m/s²), reverse push speed (km/h). */
+    rollDecel: 0.6,
+    reverseKmh: 4,
+    /** Steering taper: full lock below lowKmh, highLock at highKmh. */
+    steerLowKmh: 5,
+    steerHighKmh: 35,
+    /** Steering effect in the air (fraction). */
+    airSteer: 0.3,
+    /** Faster than this (km/h) into an obstacle more head-on than crashBlocked (cos of the angle to its normal): the rider falls. */
+    crashKmh: 22,
+    crashBlocked: 0.7,
+    getUpSeconds: 1.1,
+    /** Getting off faster than this (km/h) is a jump off; the bike rolls on. */
+    dismountJumpKmh: 10,
+    /** Parked bikes get a physics body within near (m) of the player, lose it beyond far. */
+    parkedPhysicsNear: 60,
+    parkedPhysicsFar: 80,
+  },
 } as const;
