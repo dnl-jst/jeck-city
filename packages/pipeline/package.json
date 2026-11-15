@@ -3,5 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@nn/shared": "*" }
+  "dependencies": {
+    "@nn/shared": "*",
+    "earcut": "3.2.4",
+    "fast-xml-parser": "5.12.1"
+  },
+  "devDependencies": {
+    "@types/earcut": "3.0.0"
+  }
 }
