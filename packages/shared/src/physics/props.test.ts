@@ -126,8 +126,7 @@ describe('lamp reset and follow', () => {
   test('standUp restores a knocked lamp', async () => {
     const { pw, props, car } = await knocked();
     car.dispose();
-    expect(props.isResting(0)).toBe(false); // still rolling
-    props['lamps'][0]!.sleep(); // an undamped post rolls on for a minute or more; force the rest
+    for (let t = 0; t < 5 * 60 && !props.isResting(0); t++) pw.step();
     expect(props.isResting(0)).toBe(true);
     props.standUp(0);
     expect(props.isStanding(0)).toBe(true);
@@ -144,6 +143,15 @@ describe('lamp reset and follow', () => {
     car2.setOccupied(true);
     drive(pw, car2, 50, 9);
     expect(props.takeFallen()).toContain(0);
+  });
+
+  test('knocked lamp comes to rest within 5 s', async () => {
+    const { pw, props, car } = await knocked();
+    car.dispose();
+    let t = 0;
+    while (!props.isResting(0) && t < 5 * 60) { pw.step(); t++; }
+    // 9 s of driving already passed; the post must settle within 5 s more
+    expect(props.isResting(0)).toBe(true);
   });
 
   test('follow makes a lamp kinematic at the pose', async () => {

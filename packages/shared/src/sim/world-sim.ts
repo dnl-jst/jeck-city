@@ -9,7 +9,9 @@ import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { ENTER_MAX_DIST, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
 import { CarPool, type PlayerId } from './cars';
+import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
+import { ResetTimers } from './resets';
 import { canGetOut, exitFree, exitSpot, headingOf, nearestEnterableCar } from './rules';
 import { findSpawn } from './spawn';
 
@@ -46,6 +48,8 @@ type Player = { char: Character; car: number | null; yaw: number; use: boolean; 
 
 /** Ticks between two car proximity updates (0.5 s, as in single player). */
 const PROXIMITY_EVERY = 30;
+/** Ticks between two idle-reset checks (1 s). */
+const RESET_CHECK_EVERY = 60;
 /** Feet above the surface when placed (spawn, getting out). */
 const DROP = 0.02;
 /** A spawn spot closer than this (m) to another player's feet is taken. */
@@ -60,6 +64,7 @@ export class WorldSim {
   tick = 0;
   private readonly list = new Map<PlayerId, Player>();
   private readonly ignitions: Ignition[];
+  private readonly resets = new ResetTimers();
 
   private constructor(
     readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, private readonly a: WorldAssets,
@@ -141,6 +146,11 @@ export class WorldSim {
       if (!inputs.has(id)) order.push([id, pl, NEUTRAL_INPUT(pl.yaw)]);
     }
 
+    // people first: a knockdown or push lands before this tick's walking input is applied
+    carHitsPeople(this, ev);
+    separatePeople(this);
+    if (this.tick % RESET_CHECK_EVERY === 0) this.resets.update(this);
+
     // E acts on its rising edge (held for several ticks = one action)
     for (const [id, pl, input] of order) {
       if (input.use && !pl.use) {
@@ -191,12 +201,42 @@ export class WorldSim {
     };
   }
 
-  /** Where cars need physics: every player (the car they drive, else their feet) or the fixed foci. */
-  private focusPoints(): XZ[] {
-    if (this.foci !== 'players') return [...this.foci];
+  /** Players on foot (not in a car) in id order, with their characters: what collisions.ts works on. */
+  onFoot(): { id: PlayerId; char: Character }[] {
+    const out: { id: PlayerId; char: Character }[] = [];
+    for (const [id, pl] of this.list) if (pl.car === null) out.push({ id, char: pl.char });
+    return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** Where every player is (the car they drive, else their feet). */
+  playerPoints(): XZ[] {
     const out: XZ[] = [];
     for (const pl of this.list.values()) out.push(pl.car !== null ? this.cars.poses[pl.car]! : pl.char.position());
     return out;
+  }
+
+  /** 'standing' (post upright), 'lying' (knocked over and asleep: nothing more to stream) or 'tipping' (knocked over, still moving or streamed). */
+  lampState(i: number): 'standing' | 'tipping' | 'lying' {
+    if (this.props.isStanding(i)) return 'standing';
+    return this.props.isResting(i) ? 'lying' : 'tipping';
+  }
+
+  /** Indices of the lamps that are not standing. */
+  lampsDown(): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < this.a.manifest.lamps.length; i++) if (!this.props.isStanding(i)) out.push(i);
+    return out;
+  }
+
+  /** Test hook: advances the tick counter (which the idle resets run on) by n without stepping any physics. */
+  advanceIdleTicks(n: number): void {
+    this.tick += n;
+  }
+
+  /** Where cars need physics: every player (the car they drive, else their feet) or the fixed foci. */
+  private focusPoints(): XZ[] {
+    if (this.foci !== 'players') return [...this.foci];
+    return this.playerPoints();
   }
 
   /**
@@ -220,6 +260,7 @@ export class WorldSim {
   }
 
   private getIn(id: PlayerId, pl: Player, ev: SimEvent[]): void {
+    if (pl.char.isDown()) return; // knocked down: no getting into a car
     const pos = pl.char.position();
     const candidates = this.cars.candidates();
     const car = nearestEnterableCar(pos, candidates, ENTER_MAX_DIST);

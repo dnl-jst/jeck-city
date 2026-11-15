@@ -58,6 +58,11 @@ export class Character {
     this.kcc.setMinSlopeSlideAngle(T.maxSlope);
   }
 
+  /** Handle of the capsule collider (to map scene-query hits back to the character). */
+  get colliderHandle(): number {
+    return this.collider.handle;
+  }
+
   applyInput(i: CharacterInput): void {
     if (!this.enabled) return;
     let vx = 0, vz = 0;

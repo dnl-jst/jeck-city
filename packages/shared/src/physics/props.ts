@@ -5,6 +5,10 @@ import { LYING_PROP_GROUPS, onBeforeStep, PROP_GROUPS, type PhysicsWorld } from 
 
 const T = TUNING.props;
 const KMH = 1 / 3.6;
+/** A knocked lamp slower than this (m/s, rad/s) for this many ticks is put to sleep. */
+const LAMP_CALM_LINVEL = 0.15;
+const LAMP_CALM_ANGVEL = 0.3;
+const LAMP_CALM_TICKS = 30;
 
 /** Deterministic [0,1) value of a world position and a channel number (prop variation, same on every machine). */
 export function propHash(x: number, z: number, k: number): number {
@@ -37,6 +41,8 @@ export class StreetProps {
   /** Collider handle → lamp index, for standing lamps only. */
   private readonly standing = new Map<number, number>();
   private readonly fallen: number[] = [];
+  /** Consecutive calm ticks of every knocked lamp (see settle). */
+  private readonly calm: number[] = [];
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -60,10 +66,16 @@ export class StreetProps {
         body,
       );
       this.lamps.push(body);
+      this.calm.push(0);
       this.home.push({ x, y: groundY(x, z), z });
       this.standing.set(c.handle, i);
     });
-    this.unsubscribe = onBeforeStep(pw, () => this.checkHits());
+    this.unsubscribe = onBeforeStep(pw, () => { this.checkHits(); this.settle(); });
+  }
+
+  /** Number of lamps. */
+  get count(): number {
+    return this.lamps.length;
   }
 
   /** Indices of lamps knocked over since the last call. */
@@ -93,6 +105,8 @@ export class StreetProps {
     b.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
     b.setLinvel({ x: 0, y: 0, z: 0 }, false);
     b.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    b.setLinearDamping(0);
+    b.setAngularDamping(0);
     c.setCollisionGroups(PROP_GROUPS);
     this.standing.set(c.handle, i);
   }
@@ -150,6 +164,19 @@ export class StreetProps {
     for (const [i, car] of hits) this.knockOver(i, car);
   }
 
+  /**
+   * Puts knocked lamps to sleep once they have been nearly still for LAMP_CALM_TICKS: a long post on a triangle mesh
+   * keeps jittering just above Rapier's own sleep threshold forever, and a lamp that never sleeps is never "resting".
+   */
+  private settle(): void {
+    this.lamps.forEach((b, i) => {
+      if (!b.isDynamic() || b.isSleeping()) { this.calm[i] = 0; return; }
+      const l = b.linvel(), a = b.angvel();
+      this.calm[i] = Math.hypot(l.x, l.y, l.z) < LAMP_CALM_LINVEL && Math.hypot(a.x, a.y, a.z) < LAMP_CALM_ANGVEL ? this.calm[i]! + 1 : 0;
+      if (this.calm[i]! >= LAMP_CALM_TICKS) b.sleep();
+    });
+  }
+
   private knockOver(i: number, car: RAPIER.RigidBody): void {
     const lamp = this.lamps[i]!;
     if (lamp.isDynamic()) return; // two cars at once
@@ -168,6 +195,9 @@ export class StreetProps {
     lamp.setLinvel({ x: v.x * T.lampKick, y: 0.5, z: v.z * T.lampKick }, true);
     const w = speed * T.lampSpin;
     lamp.setAngvel({ x: dz * w, y: 0, z: -dx * w }, true);
+    // a post on flat ground has no friction about its axis: without damping it rolls (and is streamed) for minutes
+    lamp.setLinearDamping(T.lampLinearDamping);
+    lamp.setAngularDamping(T.lampAngularDamping);
     this.fallen.push(i);
   }
 }
