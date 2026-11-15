@@ -143,8 +143,9 @@ const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} ·
 async function loadPhysics(): Promise<PhysicsWorld> {
   const url = '/world/collision.bin';
   const res = await fetchOk(url);
-  const pw = createPhysicsWorld(decodeCollision(await res.arrayBuffer()));
-  physicsLoading = false;
+  const pw = await createPhysicsWorld(decodeCollision(await res.arrayBuffer()));
+  physicsLoading = false; // only once the world is built
+  showStatus();
   return pw;
 }
 

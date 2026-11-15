@@ -240,7 +240,8 @@ export class Props {
   private readonly lamps: [InstancedMesh, InstancedMesh];
   private readonly trees: [InstancedMesh, InstancedMesh];
   private readonly haloPoints: Points;
-  private readonly stops = new Map<string, Group>();
+  /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
+  private readonly stops = new Map<number, Group>();
   /** Shop sign boards; their lettering glows at night (setNight). */
   private readonly signMat = new MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.55 });
 
@@ -307,13 +308,13 @@ export class Props {
     this.trees[1].instanceColor!.needsUpdate = true;
     for (const t of [...this.lamps, ...this.trees]) t.computeBoundingSphere();
 
-    for (const stop of this.manifest.tramStops) {
+    for (const [k, stop] of this.manifest.tramStops.entries()) {
       const want = inside(stop.x, stop.z);
-      const have = this.stops.get(stop.name);
+      const have = this.stops.get(k);
       if (want && !have) {
         const g = stopGroup(stop, this.stopFrame, this.stopGlass);
         this.scene.add(g);
-        this.stops.set(stop.name, g);
+        this.stops.set(k, g);
       } else if (!want && have) {
         this.scene.remove(have);
         have.traverse((o: Object3D) => {
@@ -323,7 +324,7 @@ export class Props {
           if (mesh.name === 'stopSign') (mesh.material as MeshStandardMaterial[])[4]!.map?.dispose();
           if (mesh.name === 'stopSign') (mesh.material as MeshStandardMaterial[])[4]!.dispose();
         });
-        this.stops.delete(stop.name);
+        this.stops.delete(k);
       }
     }
   }

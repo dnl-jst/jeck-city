@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Mesh, type Material, type Object3D, type Scene } from 'three';
+import { BufferAttribute, BufferGeometry, Mesh, type Material, type Object3D, type Scene, type Texture } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
@@ -13,7 +13,16 @@ export const READY_RADIUS = 250;
 export const UNLOAD_RADIUS = 800;
 export const MAX_CONCURRENT = 2;
 
+/** Wait before the 1st, 2nd and 3rd retry of a chunk whose download failed; after that it stays missing. */
+export const RETRY_DELAYS_MS = [5_000, 15_000, 45_000] as const;
+
 type XZ = { x: number; z: number };
+
+/** When (ms, same clock as `lastAt`) a chunk may be tried again after its `failures`-th failure at `lastAt`; null = never. */
+export function nextRetryAt(failures: number, lastAt: number): number | null {
+  const d = RETRY_DELAYS_MS[failures - 1];
+  return d === undefined ? null : lastAt + d;
+}
 
 const centreDistance = (c: WorldManifest['chunks'][number], p: XZ): number =>
   Math.hypot(c.x + CHUNK_SIZE / 2 - p.x, c.z + CHUNK_SIZE / 2 - p.z);
@@ -53,7 +62,8 @@ export class WorldLoader {
   private readonly gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   private readonly loaded = new Map<string, Object3D>();
   private readonly pending = new Set<string>();
-  private readonly failed = new Set<string>();
+  /** Chunks whose download failed: how often, and when they may be retried (Infinity = given up). */
+  private readonly failed = new Map<string, { count: number; retryAt: number }>();
   private queue: string[] = [];
   /** Buildings that carry a real shop sign: their facade sign band gets no pseudo lettering. */
   private signed = new Set<string>();
@@ -94,20 +104,28 @@ export class WorldLoader {
     return manifest;
   }
 
-  /** Unloads far chunks and starts downloads of near ones (at most MAX_CONCURRENT in flight). */
-  update(cameraPos: { x: number; z: number }): void {
+  /**
+   * Unloads far chunks and starts downloads of near ones (at most MAX_CONCURRENT in flight).
+   * A failed chunk is retried with backoff (RETRY_DELAYS_MS); `now` is in ms.
+   */
+  update(cameraPos: { x: number; z: number }, now = performance.now()): void {
     const m = this.manifest;
     if (!m || !this.ready) return;
     this.lastPos = { x: cameraPos.x, z: cameraPos.z };
     for (const key of chunksToUnload(m, cameraPos, new Set(this.loaded.keys()))) this.unload(key);
-    const busy = new Set([...this.loaded.keys(), ...this.pending, ...this.failed]);
+    const waiting = [...this.failed].filter(([, f]) => f.retryAt > now).map(([key]) => key);
+    const busy = new Set([...this.loaded.keys(), ...this.pending, ...waiting]);
     this.queue = chunksToLoad(m, cameraPos, busy);
     while (this.pending.size < MAX_CONCURRENT && this.queue.length > 0) {
       const key = this.queue.shift()!;
-      this.load(key).catch((err: unknown) => {
-        this.failed.add(key);
-        console.error(err);
-      });
+      this.load(key).then(
+        () => this.failed.delete(key),
+        (err: unknown) => {
+          const count = (this.failed.get(key)?.count ?? 0) + 1;
+          this.failed.set(key, { count, retryAt: nextRetryAt(count, now) ?? Infinity });
+          console.error(err);
+        },
+      );
     }
   }
 
@@ -121,7 +139,7 @@ export class WorldLoader {
       const root = gltf.scene;
       // the player may have moved away while this chunk was downloading
       if (centreDistance(chunk, this.lastPos) > UNLOAD_RADIUS) {
-        disposeTree(root);
+        disposeGltf(root); // its own materials and textures were not swapped for the shared ones yet
         return;
       }
       const tram = root.getObjectByName('tram') as Mesh | undefined;
@@ -189,6 +207,19 @@ export function markSigned(g: BufferGeometry, ranges: unknown, signed: ReadonlyS
     for (let i = r.firstVertex; i < r.firstVertex + r.vertexCount; i++) flags.setX(i, (flags.getX(i) & 3) | FLAG_SIGNED);
   }
   flags.needsUpdate = true;
+}
+
+/** Frees everything of a freshly parsed GLTF: geometries, materials and the textures they use. */
+export function disposeGltf(root: Object3D): void {
+  root.traverse((o) => {
+    const mesh = o as Mesh;
+    if (!mesh.isMesh) return;
+    mesh.geometry.dispose();
+    for (const mat of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      for (const v of Object.values(mat)) if ((v as Texture | null)?.isTexture) (v as Texture).dispose();
+      mat.dispose();
+    }
+  });
 }
 
 /** Frees geometries only; materials are shared across chunks. */

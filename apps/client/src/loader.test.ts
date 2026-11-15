@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, test, vi } from 'vitest';
-import { BufferAttribute, BufferGeometry, Scene } from 'three';
+import { BufferAttribute, BufferGeometry, Group, Mesh, MeshStandardMaterial, Scene, Texture } from 'three';
 import type { WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
-import { chunksToLoad, chunksToUnload, fetchOk, markSigned, WorldLoader } from './loader';
+import { chunksToLoad, chunksToUnload, disposeGltf, fetchOk, markSigned, nextRetryAt, WorldLoader } from './loader';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
 function gridManifest(): WorldManifest {
@@ -84,6 +84,36 @@ describe('WorldLoader', () => {
     expect(urls.slice(1)).toEqual(['/world/chunk_-5_-5.glb', expect.stringMatching(/chunk_(-4_-5|-5_-4)\.glb/)]);
   });
 
+  it('retries a failed chunk after 5 s, 15 s and 45 s, then gives up', async () => {
+    const m = gridManifest();
+    m.chunks = m.chunks.filter((c) => c.key === '0_0');
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      urls.push(url);
+      if (url.endsWith('manifest.json')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(m) });
+      return Promise.resolve({ ok: false, status: 503 });
+    });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const loader = new WorldLoader(new Scene(), '/world/');
+    await loader.init(() => {}, { x: 5000, z: 5000 }); // nothing within READY_RADIUS
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    const attempts = (): number => urls.filter((u) => u.endsWith('chunk_0_0.glb')).length;
+    const at = async (now: number): Promise<number> => {
+      loader.update({ x: 0, z: 0 }, now);
+      await tick();
+      return attempts();
+    };
+    expect(await at(0)).toBe(1);
+    expect(await at(4_999)).toBe(1);
+    expect(await at(5_000)).toBe(2);
+    expect(await at(19_999)).toBe(2);
+    expect(await at(20_000)).toBe(3);
+    expect(await at(65_000)).toBe(4);
+    expect(await at(1e9)).toBe(4); // three retries used up
+    expect(errors).toHaveBeenCalledTimes(4);
+    errors.mockRestore();
+  });
+
   it('rejects with FetchError when the manifest request fails', async () => {
     stubFetch(404);
     await expect(new WorldLoader(new Scene(), '/world/').init(() => {})).rejects.toBeInstanceOf(FetchError);
@@ -97,6 +127,27 @@ test('markSigned sets flag bit 2 on the vertex ranges of signed buildings only',
   expect(Array.from(g.getAttribute('_flags').array)).toEqual([5, 5, 0, 0, 7, 6]);
   markSigned(g, [{ id: 'A', firstVertex: 0, vertexCount: 2 }], new Set(['A'])); // idempotent
   expect(g.getAttribute('_flags').getX(0)).toBe(5);
+});
+
+test('nextRetryAt: 5 s, 15 s, 45 s after the 1st, 2nd, 3rd failure, then never', () => {
+  expect(nextRetryAt(1, 100)).toBe(5_100);
+  expect(nextRetryAt(2, 100)).toBe(15_100);
+  expect(nextRetryAt(3, 100)).toBe(45_100);
+  expect(nextRetryAt(4, 100)).toBeNull();
+});
+
+test('disposeGltf frees geometries, materials and their textures', () => {
+  const disposed: string[] = [];
+  const track = <T extends { addEventListener(t: 'dispose', f: () => void): void }>(o: T, name: string): T => {
+    o.addEventListener('dispose', () => disposed.push(name));
+    return o;
+  };
+  const map = track(new Texture(), 'map');
+  const normal = track(new Texture(), 'normalMap');
+  const mat = track(new MeshStandardMaterial({ map, normalMap: normal }), 'material');
+  const root = new Group().add(new Group().add(new Mesh(track(new BufferGeometry(), 'geometry'), mat)));
+  disposeGltf(root);
+  expect(disposed.sort()).toEqual(['geometry', 'map', 'material', 'normalMap']);
 });
 
 describe('fetchOk', () => {

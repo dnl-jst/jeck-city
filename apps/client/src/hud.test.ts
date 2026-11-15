@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 import { FetchError, NoWebGLError } from './errors';
-import { bootErrorMessage } from './hud';
+import { bootErrorMessage, HUD_CSS } from './hud';
 
 describe('bootErrorMessage', () => {
   it('names missing WebGL', () => {
@@ -16,4 +16,10 @@ describe('bootErrorMessage', () => {
   it('falls back for anything else', () => {
     expect(bootErrorMessage(new Error('boom'))).toBe('Da ist was schiefgelaufen. Bitte lade die Seite neu.');
   });
+});
+
+test('the hidden loading box lets clicks through to the canvas (pointer lock)', () => {
+  const rule = /\.nn-loading\.nn-hidden\s*\{([^}]*)\}/.exec(HUD_CSS)?.[1] ?? '';
+  expect(rule).toMatch(/opacity:\s*0/);
+  expect(rule).toMatch(/pointer-events:\s*none/);
 });

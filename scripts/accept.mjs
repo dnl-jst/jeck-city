@@ -41,7 +41,6 @@ try {
   await browser.close();
   console.table(rows);
   for (const r of rows) if (r.ready !== true) { console.error(`FAIL: ${r.case} did not become ready (${r.ready})`); failed = true; }
-  const f4g = rows.find((r) => r.case.includes('Fast 4G'));
   console.log('Load times are reported only (no target for now). fps from headless SwiftShader is not meaningful; measure on a real machine with ?debug=1.');
 } finally {
   preview.kill();
