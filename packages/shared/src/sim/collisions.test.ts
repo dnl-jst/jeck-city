@@ -69,6 +69,23 @@ describe('people and cars', () => {
     expect(p.z).toBeGreaterThan(c.z + TUNING.vehicle.length / 2 - 0.1);
   }, 30_000);
 
+  test.each([['behind', 5, -2.45], ['beside', 6.35, 0.5]])('a person %s a creeping car is never shoved into it', async (_n, x, z) => {
+    const sim = await newSim();
+    sim.addPlayer(1, { x, z });
+    sim.step(new Map());
+    let prev = sim.player(1).pos;
+    const V = TUNING.vehicle;
+    for (let t = 0; t < 150; t++) {
+      launch(sim, kmh(5));
+      sim.step(new Map());
+      const p = sim.player(1).pos, c = sim.cars.poses[0]!;
+      expect(Math.hypot(p.x - prev.x, p.z - prev.z)).toBeLessThan(0.55);
+      const inside = Math.abs(p.x - c.x) < V.width / 2 && Math.abs(p.z - c.z) < V.length / 2;
+      expect(inside).toBe(false);
+      prev = p;
+    }
+  }, 30_000);
+
   test('walkers do not overlap', async () => {
     const sim = await newSim();
     sim.addPlayer(1, { x: -40, z: -4 });

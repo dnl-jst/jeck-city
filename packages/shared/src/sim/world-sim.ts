@@ -224,7 +224,7 @@ export class WorldSim {
   /** Indices of the lamps that are not standing. */
   lampsDown(): number[] {
     const out: number[] = [];
-    for (let i = 0; i < this.a.manifest.lamps.length; i++) if (!this.props.isStanding(i)) out.push(i);
+    for (let i = 0; i < this.props.count; i++) if (!this.props.isStanding(i)) out.push(i);
     return out;
   }
 

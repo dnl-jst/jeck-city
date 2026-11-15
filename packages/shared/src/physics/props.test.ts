@@ -154,6 +154,23 @@ describe('lamp reset and follow', () => {
     expect(props.isResting(0)).toBe(true);
   });
 
+  test('damping starts only after the first second of the topple', async () => {
+    const { pw, props, car } = await scene([[0, 40]], []);
+    for (let i = 0; i < 540 && props.isStanding(0); i++) {
+      car.applyInput({ throttle: car.speed() * 3.6 < 50 ? 1 : 0, steer: 0, brake: false });
+      pw.step();
+    }
+    expect(props.isStanding(0)).toBe(false);
+    const b = props['lamps'][0]!;
+    for (let t = 0; t < 55; t++) {
+      pw.step();
+      expect(b.angularDamping()).toBe(0);
+      expect(b.linearDamping()).toBe(0);
+    }
+    for (let t = 0; t < 10; t++) pw.step();
+    expect(b.angularDamping()).toBeGreaterThan(0);
+  });
+
   test('follow makes a lamp kinematic at the pose', async () => {
     const { pw, props } = await scene([[0, 40]], []);
     const pose = { x: 3, y: 0.2, z: 41, qx: 0, qy: 0, qz: Math.SQRT1_2, qw: Math.SQRT1_2 };

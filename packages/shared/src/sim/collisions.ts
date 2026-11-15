@@ -68,6 +68,7 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
       } else {
         const f = p.char.position();
         const ahead = (f.x - pose.x) * dx + (f.z - pose.z) * dz;
+        if (ahead <= 0) continue; // beside or behind the middle of the car: never shoved into the chassis
         const overlap = Math.min(PUSH_MAX, Math.max(0, extent + R - ahead));
         p.char.push(dx * overlap, dz * overlap);
       }

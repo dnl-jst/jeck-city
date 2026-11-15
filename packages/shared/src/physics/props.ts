@@ -9,6 +9,8 @@ const KMH = 1 / 3.6;
 const LAMP_CALM_LINVEL = 0.15;
 const LAMP_CALM_ANGVEL = 0.3;
 const LAMP_CALM_TICKS = 30;
+/** Ticks after the knock before damping starts (1 s: the topple is unchanged). */
+const LAMP_DAMP_AFTER = 60;
 
 /** Deterministic [0,1) value of a world position and a channel number (prop variation, same on every machine). */
 export function propHash(x: number, z: number, k: number): number {
@@ -43,6 +45,8 @@ export class StreetProps {
   private readonly fallen: number[] = [];
   /** Consecutive calm ticks of every knocked lamp (see settle). */
   private readonly calm: number[] = [];
+  /** Ticks since each lamp was knocked over; damping starts after LAMP_DAMP_AFTER so the topple itself is undamped. */
+  private readonly age: number[] = [];
   private readonly unsubscribe: () => void;
 
   constructor(
@@ -67,6 +71,7 @@ export class StreetProps {
       );
       this.lamps.push(body);
       this.calm.push(0);
+      this.age.push(0);
       this.home.push({ x, y: groundY(x, z), z });
       this.standing.set(c.handle, i);
     });
@@ -171,6 +176,11 @@ export class StreetProps {
   private settle(): void {
     this.lamps.forEach((b, i) => {
       if (!b.isDynamic() || b.isSleeping()) { this.calm[i] = 0; return; }
+      if (++this.age[i]! === LAMP_DAMP_AFTER) {
+        // a post on flat ground has no friction about its axis: undamped it rolls (and is streamed) for minutes
+        b.setLinearDamping(T.lampLinearDamping);
+        b.setAngularDamping(T.lampAngularDamping);
+      }
       const l = b.linvel(), a = b.angvel();
       this.calm[i] = Math.hypot(l.x, l.y, l.z) < LAMP_CALM_LINVEL && Math.hypot(a.x, a.y, a.z) < LAMP_CALM_ANGVEL ? this.calm[i]! + 1 : 0;
       if (this.calm[i]! >= LAMP_CALM_TICKS) b.sleep();
@@ -195,9 +205,7 @@ export class StreetProps {
     lamp.setLinvel({ x: v.x * T.lampKick, y: 0.5, z: v.z * T.lampKick }, true);
     const w = speed * T.lampSpin;
     lamp.setAngvel({ x: dz * w, y: 0, z: -dx * w }, true);
-    // a post on flat ground has no friction about its axis: without damping it rolls (and is streamed) for minutes
-    lamp.setLinearDamping(T.lampLinearDamping);
-    lamp.setAngularDamping(T.lampAngularDamping);
+    this.age[i] = 0;
     this.fallen.push(i);
   }
 }
