@@ -6,6 +6,10 @@ describe('nearestLamps', () => {
     const lamps: [number, number][] = [[100, 0], [3, 4], [0, 1], [-50, -50], [10, 0]];
     expect(nearestLamps(lamps, 0, 0, 3)).toEqual([2, 1, 4]);
   });
+  it('leaves out knocked-down lamps', () => {
+    const lamps: [number, number][] = [[100, 0], [3, 4], [0, 1], [-50, -50], [10, 0]];
+    expect(nearestLamps(lamps, 0, 0, 3, new Set([1]))).toEqual([2, 4, 3]);
+  });
   it('returns fewer when there are fewer lamps', () => {
     expect(nearestLamps([[1, 1]], 0, 0, 8)).toEqual([0]);
   });

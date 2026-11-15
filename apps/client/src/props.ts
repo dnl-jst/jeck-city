@@ -4,7 +4,7 @@ import {
   Object3D, Points, PointsMaterial, Quaternion, SRGBColorSpace, Vector3, type Scene, type Texture,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { chunkKey, type WorldManifest } from '@nn/shared';
+import { chunkKey, propHash as hash, treeScale, type PropPose, type WorldManifest } from '@nn/shared';
 import { SHOP } from './materials/storeys';
 
 /** Street trees are drawn only within this distance of the camera (m)… */
@@ -36,12 +36,6 @@ export const needsTreeRebuild = (last: XZ | null, x: number, z: number): boolean
 
 /** Height of the lamp's light source above ground (m). */
 export const LAMP_LIGHT_Y = 5.55;
-
-/** Deterministic [0,1) value of a world position and a channel number. */
-function hash(x: number, z: number, k: number): number {
-  const s = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
-  return s - Math.floor(s);
-}
 
 /** Merged, non-indexed copy of geometries (mergeGeometries needs uniform indexing). */
 function merge(parts: BufferGeometry[]): BufferGeometry {
@@ -269,10 +263,15 @@ export class Props {
   private readonly crownMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
   private readonly stopFrame = new MeshStandardMaterial({ color: 0x4a5258, roughness: 0.5, metalness: 0.15 });
   private readonly stopGlass = new MeshStandardMaterial({ color: 0xbcd0d8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.25, depthWrite: false });
+  /** Lantern glass of a knocked-down lamp: dark, it no longer glows. */
+  private readonly deadGlass = new MeshStandardMaterial({ color: 0x6f6c62, roughness: 0.25 });
+  private readonly lampGeo: { metal: BufferGeometry; glass: BufferGeometry };
+  /** Knocked-down lamps by manifest index: single meshes that follow their physics bodies. */
+  private readonly fallen = new Map<number, Group>();
+  private loaded: ReadonlySet<string> = new Set();
   private readonly lamps: [InstancedMesh, InstancedMesh];
   /** Trunks and crowns: trees within TREE_SHADOW_RADIUS (casting shadows), and those beyond (not casting). */
   private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] };
-  private loaded: ReadonlySet<string> = new Set();
   private lastTrees: XZ | null = null;
   private readonly haloPoints: Points;
   /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
@@ -283,7 +282,7 @@ export class Props {
   constructor(private readonly scene: Scene, private readonly manifest: WorldManifest) {
     const signs = buildShopSigns(manifest.shops, this.signMat);
     if (signs) scene.add(signs);
-    const lg = lampGeometries();
+    const lg = this.lampGeo = lampGeometries();
     const tg = treeGeometries();
     const n = manifest.lamps.length, t = manifest.trees.length;
     this.lamps = [new InstancedMesh(lg.metal, this.lampMetal, n), new InstancedMesh(lg.glass, this.lampGlass, n)];
@@ -316,6 +315,29 @@ export class Props {
     this.signMat.emissiveIntensity = 1.1 * night;
   }
 
+  /** Lamp i was knocked over: it leaves the instanced (lit) set and becomes a dark single mesh; place it with syncFallen. */
+  knockDown(i: number): void {
+    if (this.fallen.has(i)) return;
+    const g = new Group();
+    const metal = new Mesh(this.lampGeo.metal, this.lampMetal);
+    const glass = new Mesh(this.lampGeo.glass, this.deadGlass);
+    metal.castShadow = glass.castShadow = true;
+    g.add(metal, glass);
+    g.name = `fallenLamp:${i}`;
+    this.scene.add(g);
+    this.fallen.set(i, g);
+    this.rebuild(this.loaded);
+  }
+
+  /** Moves the knocked-down lamps to their physics poses (origin at the foot of the post). */
+  syncFallen(pose: (i: number) => PropPose): void {
+    for (const [i, g] of this.fallen) {
+      const p = pose(i);
+      g.position.set(p.x, p.y, p.z);
+      g.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+    }
+  }
+
   /** Rebuilds the instance sets for the loaded chunks; call when that set changes (trees: at the last camera position). */
   rebuild(loaded: ReadonlySet<string>): void {
     this.loaded = loaded;
@@ -324,8 +346,8 @@ export class Props {
 
     const halo = this.haloPoints.geometry.getAttribute('position') as BufferAttribute;
     let i = 0;
-    for (const [x, z] of this.manifest.lamps) {
-      if (!inside(x, z)) continue;
+    for (const [k, [x, z]] of this.manifest.lamps.entries()) {
+      if (!inside(x, z) || this.fallen.has(k)) continue;
       m.makeTranslation(x, 0, z);
       this.lamps[0].setMatrixAt(i, m);
       this.lamps[1].setMatrixAt(i, m);
@@ -374,7 +396,7 @@ export class Props {
       const [trunk, crown] = this.trees[which];
       idx.forEach((ti, i) => {
         const [tx, tz] = this.manifest.trees[ti]!;
-        const k = 0.75 + 0.55 * hash(tx, tz, 1);
+        const k = treeScale(tx, tz); // same scale as the trunk collider (StreetProps)
         q.setFromAxisAngle(up, hash(tx, tz, 2) * Math.PI * 2);
         m.compose(p.set(tx, 0, tz), q, s.set(k * (0.9 + 0.2 * hash(tx, tz, 3)), k, k * (0.9 + 0.2 * hash(tx, tz, 4))));
         trunk.setMatrixAt(i, m);

@@ -36,6 +36,28 @@ export const TUNING = {
     maxSlope: (45 * Math.PI) / 180,
   },
 
+  /** Street furniture: trees are solid, lamps break off and topple when a car hits them hard enough. */
+  props: {
+    /** Lamp post collider (cylinder from the ground up). */
+    lampRadius: 0.18,
+    lampHeight: 6,
+    /** Mass of a knocked-down lamp (kg). */
+    lampMass: 180,
+    /** A car this fast (horizontal, km/h) knocks a lamp over; slower it stops at the post as at a wall. */
+    lampBreakKmh: 20,
+    /** Only bodies at least this heavy break lamps (cars, not fallen lamps). */
+    breakerMinMass: 500,
+    /**
+     * A falling lamp's centre starts at kick × the car's speed and spins forward at spin × speed rad/s, top away from
+     * the car: foot at (kick − spin·h/2) ≈ 0.9 × speed, so the post stays ahead of the slowed car while it falls.
+     */
+    lampKick: 1.25,
+    lampSpin: 0.12,
+    /** Tree trunk collider at scale 1 (render trunk: radius 0.16–0.24 m, 4.2 m high). */
+    trunkRadius: 0.24,
+    trunkHeight: 4.2,
+  },
+
   /**
    * Known limitation (v1, revisit in Plan 2): characters are kinematic, i.e. immovable for dynamic
    * bodies, so a car that hits a person stops dead as if against a post. Wheel rays ignore characters.
@@ -59,8 +81,8 @@ export const TUNING = {
     /** Engine force fades to zero over this many km/h below the top speed (soft limiter). */
     limiterBandKmh: 4,
 
-    /** Brake strength per wheel: brake button / throttle against direction of travel. */
-    brake: 25,
+    /** Brake impulse per wheel and step: brake button / throttle against direction of travel. 60 ≈ 1.1 g, ~10 m from 60 km/h. */
+    brake: 60,
     /** Light brake when no throttle is given, so the car rolls to a stop. */
     coastBrake: 2,
     /** Parking brake of an unoccupied car. */

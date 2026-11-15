@@ -41,6 +41,7 @@ export type WorldManifest = {
   /**
    * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
    * loaded and unloaded together with chunk `chunk` (the chunk of the replaced building's centroid).
+   * Several buildings may share one model; `id` is the first of them.
    */
   models: { id: string; chunk: string; file: string; bytes: number }[];
   attribution: string;

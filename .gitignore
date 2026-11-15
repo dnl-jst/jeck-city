@@ -4,3 +4,5 @@ data/raw/
 .superpowers/
 .DS_Store
 shots/
+__pycache__/
+*.blend1

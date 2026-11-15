@@ -14,16 +14,30 @@ import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game, surfaceY } from './game';
+import { AudioMixer } from './audio/mixer';
+import { Radio } from './audio/radio';
+import { RadioTuner, type StationId } from './audio/stations';
+import { GameAudio } from './audio/game-audio';
+import { RadioWheel } from './radio-wheel';
 
 declare global {
   interface Window {
     __nnReady?: boolean | 'error';
     /** Dev: the renderer's per-frame statistics (draw calls, triangles). */
     __nnInfo?: () => { calls: number; triangles: number };
-    /** Dev/tests: what the player is doing, physics steps so far, and the height of the first static surface below (x, 100, z). */
-    __nnState?: () => { mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number };
+    /**
+     * Dev/tests: what the player is doing (radio: the chosen station, null on foot), physics steps so far, and the
+     * height of the first static surface below (x, 100, z).
+     */
+    __nnState?: () => {
+      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      engine: 'off' | 'starting' | 'running'; wheelOpen: boolean; wheelHighlighted: StationId | null;
+    };
     __nnSurfaceY?: (x: number, z: number) => number | null;
+    /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
+    __nnWheelNudge?: (dx: number, dy: number) => void;
   }
+  interface ImportMeta { readonly env: { readonly DEV: boolean } }
 }
 
 const params = new URLSearchParams(location.search);
@@ -77,6 +91,21 @@ const LOOK_HINT = 'Klicken zum Umsehen';
 attachInput(input, canvas, (locked) => hud.setHint(locked ? '' : LOOK_HINT));
 const world = new WorldLoader(scene, '/world/');
 
+// sound: nothing plays before the first user gesture; the recordings load in parallel with the world
+const mixer = new AudioMixer();
+const radio = new Radio(() => new Audio(), {
+  onConnecting: () => gameAudio.radioEvents.onConnecting(),
+  onPlaying: () => gameAudio.radioEvents.onPlaying(),
+  onUnreachable: () => gameAudio.radioEvents.onUnreachable(),
+});
+const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
+const radioWheel = new RadioWheel(document.body);
+gameAudio.load().catch(console.error);
+// no `once`: a later rejected play()/resume() is retried on the next gesture (unlock is idempotent)
+window.addEventListener('pointerdown', () => gameAudio.unlock());
+window.addEventListener('keydown', () => gameAudio.unlock());
+document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
+
 // courtyards, forecourts and gaps between buildings
 const ground = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
 ground.rotation.x = -Math.PI / 2;
@@ -120,6 +149,12 @@ renderer.setAnimationLoop((t: number) => {
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
     game.frame(dt, nightFactor);
+    for (const i of game.props.takeFallen()) {
+      props.knockDown(i);
+      lighting.lampOut(i);
+    }
+    props.syncFallen((i) => game!.props.lampPose(i));
+    radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     world.update(camera.position);
     if (world.revision !== propsRevision) {
       propsRevision = world.revision;
@@ -156,7 +191,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   hud.setAttribution(m.attribution);
   props = new Props(scene, m);
   lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam });
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio });
   if (devCam && debug && devCam.y > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -165,8 +200,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   window.__nnState = () => {
     const f = game!.focus();
-    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps };
+    return {
+      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      radio: gameAudio.station,
+      engine: game!.ignition.state, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
+    };
   };
+  if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

@@ -1,8 +1,10 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
 // Scripted drive in headless Chromium: spawn (no ?cam), pick the parked car nearest to the spawn (must be within
-// the 2.7 m the pipeline guarantees), press E and check that this car is the one entered, hold W (then W+D), and
-// check that the car moved > 20 m, is not inside a building, stops, and that getting out puts the player on foot
-// again. Saves task11-car.png (day) and task11-night-car.png (night) into shotsDir when given.
+// the 2.7 m the pipeline guarantees), press E and check that this car is the one entered, wait for the engine (throttle
+// is dead until it runs), hold W (then W+D), and check that the car moved > 20 m, is not inside a building, stops, and
+// that getting out puts the player on foot again. In the day run, hold R to open the radio wheel, point right (dev hook
+// __nnWheelNudge, no pointer lock headless) and release: Radio Köln. Saves task11-car.png (day), task11-night-car.png
+// (night) and radio-wheel.png (open wheel) into shotsDir when given.
 import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
@@ -13,9 +15,9 @@ const REACH = 2.7;
 const HANG_MS = 15 * 60_000;
 /** The step counter standing still this long (wall clock) means the simulation stalled: fail fast instead of at HANG_MS. */
 const STALL_MS = 10_000;
-const STEPS = { enter: 300, away12: 900, away30: 1200, stop: 900, exit: 300 };
+const STEPS = { enter: 300, engine: 300, wheel: 300, away12: 900, away30: 1200, stop: 900, exit: 300 };
 
-async function drive(page, time, shot) {
+async function drive(page, time, shot, wheelShot) {
   await page.goto(`${base}?time=${time}&date=2026-06-15`);
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
@@ -57,6 +59,12 @@ async function drive(page, time, shot) {
   const s0 = await until((s) => s.mode === 'drive', null, STEPS.enter, 'E did not enter the car');
   const entered = Math.hypot(s0.x - near.x, s0.z - near.z);
   if (entered > 1) throw new Error(`entered a car ${entered.toFixed(2)} m from the nearest one`);
+  // throttle is dead until the engine has started
+  const running = await until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
+  // R held during the start is cancelled until let go: let one more frame see the engine running with R up first
+  // (on a slow renderer the next frame may not have come before R goes down)
+  await until((s, n) => s.steps > n, running.steps, STEPS.engine, 'no frame after the engine started');
+  if (wheelShot !== undefined) await radioWheel(page, until, wheelShot);
   const away = (m, budget) => until((s, [x, z, m]) => Math.hypot(s.x - x, s.z - z) > m, [s0.x, s0.z, m], budget, `car did not get ${m} m far`);
   await page.keyboard.down('KeyW');
   await away(12, STEPS.away12);
@@ -85,11 +93,27 @@ async function drive(page, time, shot) {
   if (Math.abs(gap - 1.5) > 0.25) throw new Error(`exit spot ${gap.toFixed(2)} m from the car, expected about 1.5 m`);
 }
 
+/** Day run only: hold R, point right, release. `until` is drive's step-budgeted wait; predicates get the state as `s`. */
+async function radioWheel(page, until, shot) {
+  if ((await page.evaluate(() => window.__nnState().radio)) !== 'koellefornia') throw new Error('radio did not start on Köllefornia');
+  await page.keyboard.down('KeyR');
+  await until((s) => s.wheelOpen, null, STEPS.wheel, 'holding R did not open the radio wheel');
+  await page.evaluate(() => window.__nnWheelNudge(60, 0));
+  await until((s) => s.wheelHighlighted === 'radiokoeln', null, STEPS.wheel, 'nudge did not highlight Radio Köln');
+  if (shot) {
+    await page.screenshot({ path: shot });
+    console.log(`saved ${shot}`);
+  }
+  await page.keyboard.up('KeyR');
+  await until((s) => !s.wheelOpen && s.radio === 'radiokoeln', null, STEPS.wheel, 'wheel pick right did not select Radio Köln');
+  console.log('radio wheel: hold R, point right, release -> radiokoeln');
+}
+
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));
-  await drive(page, '14:00', shots && `${shots}/task11-car.png`);
+  await drive(page, '14:00', shots && `${shots}/task11-car.png`, shots ? `${shots}/radio-wheel.png` : null);
   await drive(page, '22:30', shots && `${shots}/task11-night-car.png`);
   console.log('drive check OK');
 } finally {

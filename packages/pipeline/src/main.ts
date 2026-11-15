@@ -106,20 +106,24 @@ async function main() {
 
   const models: WorldManifest['models'] = [];
   const modelCollision: Float32Array[] = [];
-  for (const [id, path] of Object.entries(overrides)) {
-    const b = buildings.find((x) => x.id === id);
-    if (!b) throw new Error(`override ${id}: no such building in the play area`);
+  // several LOD2 buildings may share one model (a structure split into parts): ship it once
+  const byPath = new Map<string, string[]>();
+  for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
+  for (const [path, ids] of byPath) {
+    const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
+    const id = ids[0]!;
+    const b = parts[0]!;
     const m = await prepareModel(await readFile(path));
-    const off = Math.hypot(m.centre.x - b.centroid.x, m.centre.z - b.centroid.z);
+    const off = Math.min(...parts.map((p) => Math.hypot(m.centre.x - p.centroid.x, m.centre.z - p.centroid.z)));
     // a model far from its building was exported in the wrong frame (local origin, Z up, …)
-    if (off > 25) throw new Error(`override ${id}: model centre is ${off.toFixed(1)} m from the building (${path})`);
+    if (off > 25) throw new Error(`override ${ids.join(', ')}: model centre is ${off.toFixed(1)} m from the building (${path})`);
     const chunk = chunkKey(b.centroid.x, b.centroid.z);
     if (!chunks.some((c) => c.key === chunk)) throw new Error(`override ${id}: chunk ${chunk} does not exist`);
     const file = `model_${basename(path, '.glb')}.glb`;
     await writeFile(join(OUT_DIR, file), m.glb);
     models.push({ id, chunk, file, bytes: m.glb.byteLength });
     modelCollision.push(m.collision);
-    console.log(`model ${file} for ${id}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid`);
+    console.log(`model ${file} for ${ids.join(', ')}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid`);
   }
 
   const collision = buildCollision({ buildings, curb: streets.curb, sidewalk: streets.sidewalk, boundary: f.boundary, overrides, extra: modelCollision });
@@ -198,6 +202,10 @@ function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest[
     n++;
   }
   console.log(`${n} shops on Neusser Straße`);
+}
+
+function fail(msg: string): never {
+  throw new Error(msg);
 }
 
 main().catch((err) => {

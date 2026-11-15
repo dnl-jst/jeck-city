@@ -51,10 +51,27 @@ test('releaseAll (window blur) lets go of every key and pending press', () => {
   expect(i.consume('KeyE')).toBe(false);
 });
 
+test('releaseAll reports the interruption once via takeBlur', () => {
+  const i = new Input();
+  expect(i.takeBlur()).toBe(false);
+  i.releaseAll();
+  expect(i.takeBlur()).toBe(true);
+  expect(i.takeBlur()).toBe(false);
+});
+
 test('mouse movement accumulates until taken', () => {
   const i = new Input();
   i.mouseMove(10, -4);
   i.mouseMove(5, 2);
   expect(i.takeMouse()).toEqual({ dx: 15, dy: -2 });
   expect(i.takeMouse()).toEqual({ dx: 0, dy: 0 });
+});
+
+test('takeWheel sums notches and resets', () => {
+  const i = new Input();
+  i.wheel(100);
+  i.wheel(50);
+  i.wheel(-30);
+  expect(i.takeWheel()).toBe(1);
+  expect(i.takeWheel()).toBe(0);
 });
