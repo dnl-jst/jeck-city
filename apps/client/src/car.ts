@@ -1,6 +1,7 @@
 import {
-  AdditiveBlending, BoxGeometry, BufferAttribute, type BufferGeometry, CanvasTexture, Color, CylinderGeometry, DoubleSide, Group,
-  InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshStandardMaterial, PlaneGeometry, Quaternion, SRGBColorSpace, Vector3, type Scene,
+  BoxGeometry, BufferAttribute, type BufferGeometry, CanvasTexture, Color, CylinderGeometry, Group,
+  AdditiveBlending, type Camera, DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, Mesh, MeshStandardMaterial, Quaternion, SpotLight, Sprite, SpriteMaterial,
+  SRGBColorSpace, Vector3, type Scene,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { TUNING, Vehicle, VEHICLE_REST_Y, type PhysicsWorld, type WorldManifest } from '@nn/shared';
@@ -124,62 +125,281 @@ export function carGeometries(): { paint: BufferGeometry; trim: BufferGeometry; 
 const paintMaterial = (): MeshStandardMaterial => new MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.35 });
 const trimMaterial = (): MeshStandardMaterial => new MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.1 });
 
-/** Soft light pool the headlights throw onto the road (additive decal, faded in at night). */
-function beamTexture(): CanvasTexture {
-  const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 256;
-  const g = c.getContext('2d')!;
-  const grad = g.createRadialGradient(64, 250, 4, 64, 150, 150);
-  grad.addColorStop(0, 'rgba(255,240,210,0.95)');
-  grad.addColorStop(0.5, 'rgba(255,230,190,0.35)');
-  grad.addColorStop(1, 'rgba(255,220,170,0)');
-  g.fillStyle = grad;
-  g.fillRect(0, 0, 128, 256);
-  const t = new CanvasTexture(c);
-  t.colorSpace = SRGBColorSpace;
+/** Peak luminous intensity of one headlight at night (cd, three.js physical units). */
+export const HEADLIGHT_INTENSITY = 60000;
+/** Half-angle of the spotlight cone (rad); the beam pattern texture shapes the light inside it. */
+const BEAM_ANGLE = 0.9;
+/** The beam axis points this far below the horizontal (rad); the pattern itself carries the low-beam cutoff. */
+const BEAM_TILT = 0;
+/** Light reach (m): intensity falls smoothly to zero here (on top of the inverse-square falloff). */
+const BEAM_RANGE = 65;
+/** Red glow the tail lamps throw behind the car (cd per lamp): position lights at night, and brake lights. */
+export const TAIL_INTENSITY = 6;
+export const BRAKE_INTENSITY = 30;
+
+/**
+ * Low-beam pattern, linear 0..1, as a function of the direction off the beam axis given as tangents
+ * (x = sideways, y = up; the road d metres ahead lies at y ≈ -0.8 / d).
+ *
+ * The lamps sit 0.8 m above the road, so the road 20 m ahead is hit at a grazing ~2° and catches only a few
+ * per cent of the light. Like a real low beam, the pattern therefore peaks just below a soft horizontal cutoff
+ * (~1.6° down, meeting the road 22–28 m ahead) and falls off steeply downwards (∝ 1/angle^2.5), which keeps
+ * the road evenly lit from the bumper to the cutoff. Above it only a faint spill remains, enough to pick
+ * nearby facades out of the dark; nothing reaches far down the street like a high beam would.
+ */
+export function beamPattern(x: number, y: number): number {
+  const cut = -0.029, knee = 0.022, spill = 0.01;
+  const a = cut + 0.014 - y; // angle below the cutoff
+  const below = a <= knee ? 1 : (knee / a) ** 2.5;
+  const t = Math.min(1, Math.max(0, (y - cut) / 0.009));
+  const vertical = below * (1 - t * t * (3 - 2 * t)) + spill * Math.exp(-((y / 0.22) ** 2)) * t;
+  const spread = 0.42 + 1.1 * Math.min(1, Math.max(0, -y - 0.04)); // wide in the near field, so no wedge beside the car
+  return vertical * Math.exp(-((x / spread) ** 2));
+}
+
+/**
+ * The pattern as a linear half-float texture: the near field is lit with only ~0.2 % of the peak, where 8-bit
+ * texels would show as coloured contour rings on the road.
+ */
+function beamTexture(): DataTexture {
+  // tall texture: the interesting part of the pattern is a few rows around the cutoff
+  const w = 256, h = 1024, tan = Math.tan(BEAM_ANGLE);
+  const data = new Uint16Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      const u = ((i + 0.5) / w) * 2 - 1, v = ((j + 0.5) / h) * 2 - 1; // row 0 = bottom of the beam
+      const r = Math.min(1, Math.hypot(u, v) / 0.97);
+      const k = beamPattern(u * tan, v * tan) * (1 - r * r) ** 1.5; // fades out well inside the cone: no hard rim
+      const o = (j * w + i) * 4;
+      // warm-white halogen tint
+      data[o] = DataUtils.toHalfFloat(k);
+      data[o + 1] = DataUtils.toHalfFloat(k * 0.9);
+      data[o + 2] = DataUtils.toHalfFloat(k * 0.72);
+      data[o + 3] = DataUtils.toHalfFloat(1);
+    }
+  }
+  const t = new DataTexture(data, w, h, RGBAFormat, HalfFloatType);
+  t.minFilter = t.magFilter = LinearFilter;
+  t.needsUpdate = true;
   return t;
 }
 
-/** The car being driven: a regular mesh group with emissive head- and taillights (× nightFactor) and brake lights. */
+/** Radial glare: a hot core with a long soft falloff (white; tinted per lamp via the material colour). */
+function haloTexture(): CanvasTexture {
+  const n = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(n, n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      const r = Math.hypot((i + 0.5) / n - 0.5, (j + 0.5) / n - 0.5) * 2;
+      const k = r >= 1 ? 0 : (Math.exp(-r * r * 60) + 0.35 * Math.exp(-r * r * 9) + 0.12 * Math.exp(-r * 3.5)) * (1 - r) ** 2;
+      const o = (j * n + i) * 4;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = Math.min(255, 255 * k);
+      img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return new CanvasTexture(c);
+}
+
+/** Thin horizontal streak, brightest in the middle (an anamorphic-style flare line). */
+function streakTexture(): CanvasTexture {
+  const w = 256, h = 32;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d')!;
+  const img = g.createImageData(w, h);
+  for (let j = 0; j < h; j++) {
+    for (let i = 0; i < w; i++) {
+      const x = ((i + 0.5) / w) * 2 - 1, y = ((j + 0.5) / h) * 2 - 1;
+      const k = Math.exp(-y * y * 30) * (1 - x * x) ** 3 * (0.4 + 0.6 * Math.exp(-x * x * 12));
+      const o = (j * w + i) * 4;
+      img.data[o] = img.data[o + 1] = img.data[o + 2] = 255 * k;
+      img.data[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  return new CanvasTexture(c);
+}
+
+/** Is the straight line between two world points blocked (by buildings, walls…)? */
+export type Occluded = (from: Vector3, to: Vector3) => boolean;
+
+/** How strongly a lamp facing `forward` glares at a viewer in direction `toViewer` (both unit): 0 beside/behind, 1 head-on. */
+export function glareFacing(forward: Vector3, toViewer: Vector3, sharpness: number): number {
+  return Math.max(0, forward.dot(toViewer)) ** sharpness;
+}
+
+/**
+ * Lens glare of one lamp: a halo and a horizontal streak, drawn on top of everything (constant screen size)
+ * and faded by how directly the lamp faces the camera; a ray towards the camera hides it behind buildings.
+ */
+class Glare {
+  private readonly halo: Sprite;
+  private readonly streak: Sprite;
+  private readonly world = new Vector3();
+  private readonly fwd = new Vector3();
+  private readonly to = new Vector3();
+  private shown = 0;
+
+  constructor(
+    parent: Group, private readonly at: Vector3, private readonly forward: Vector3,
+    color: number, private readonly size: number, private readonly sharpness: number, private readonly streakGain: number, maps: { halo: CanvasTexture; streak: CanvasTexture },
+  ) {
+    const mat = (map: CanvasTexture) => new SpriteMaterial({
+      map, color, blending: AdditiveBlending, transparent: true, depthTest: false, depthWrite: false, sizeAttenuation: false, fog: false, opacity: 0,
+    });
+    this.halo = new Sprite(mat(maps.halo));
+    this.streak = new Sprite(mat(maps.streak));
+    for (const sp of [this.halo, this.streak]) {
+      sp.position.copy(at);
+      sp.renderOrder = 20;
+      sp.frustumCulled = false;
+      sp.visible = false;
+      parent.add(sp);
+    }
+  }
+
+  /** k = lamp brightness 0..1 (night, brake…); dt smooths the occlusion fade. */
+  update(camera: Camera, parent: Group, k: number, occluded: Occluded, dt: number): void {
+    let want = 0;
+    if (k > 0.01) {
+      this.world.copy(this.at).applyMatrix4(parent.matrixWorld);
+      this.fwd.copy(this.forward).transformDirection(parent.matrixWorld);
+      this.to.copy(camera.position).sub(this.world);
+      const d = this.to.length();
+      this.to.divideScalar(d);
+      const f = glareFacing(this.fwd, this.to, this.sharpness);
+      // a lamp only glares when its glass is visible: the hood/boot hides it shortly off-axis, buildings fully
+      if (f > 0.002 && !occluded(this.world, camera.position)) want = k * f * Math.min(1, 14 / Math.max(d, 1)) ** 0.5;
+    }
+    this.shown += (want - this.shown) * Math.min(1, dt * 18);
+    const o = this.shown;
+    const vis = o > 0.003;
+    this.halo.visible = this.streak.visible = vis;
+    if (!vis) return;
+    this.halo.material.opacity = Math.min(1, o * 1.4);
+    this.halo.scale.setScalar(this.size * (0.5 + 0.5 * o));
+    this.streak.material.opacity = o * 0.8 * this.streakGain;
+    this.streak.scale.set(this.size * (1.6 + 2.4 * o), this.size * 0.09, 1);
+  }
+
+  hide(): void {
+    this.shown = 0;
+    this.halo.visible = this.streak.visible = false;
+  }
+}
+
+/**
+ * The car being driven: a regular mesh group with emissive head- and taillights (× nightFactor) and brake lights,
+ * plus two real, shadow-casting spotlights so the beams light the road, cars and facades.
+ * The spotlights live in their own always-visible rig: three.js recompiles every material when the number of
+ * lights changes, so they are never removed, only dimmed to zero (with their shadow maps frozen) when unused.
+ */
 export class DrivenCar {
   readonly group = new Group();
+  private readonly rig = new Group();
+  private readonly beams: SpotLight[] = [];
+  private readonly tails: SpotLight[] = [];
+  private readonly glares: { glare: Glare; head: boolean }[] = [];
+  private headK = 0;
+  private tailK = 0;
+  private shown = false;
   private readonly paint = paintMaterial();
   private readonly headMat = new MeshStandardMaterial({ color: 0xe8e6dc, emissive: 0xfff1d6, roughness: 0.2 });
   private readonly tailMat = new MeshStandardMaterial({ color: 0x7a0e0e, emissive: 0xff1a0a, roughness: 0.3 });
-  private readonly beamMat = new MeshBasicMaterial({ map: beamTexture(), transparent: true, depthWrite: false, blending: AdditiveBlending, side: DoubleSide });
 
   constructor(scene: Scene) {
     const g = carGeometries();
     const parts = [new Mesh(g.paint, this.paint), new Mesh(g.trim, trimMaterial()), new Mesh(g.head, this.headMat), new Mesh(g.tail, this.tailMat)];
     for (const m of parts) { m.castShadow = true; m.receiveShadow = true; }
-    const beam = new Mesh(new PlaneGeometry(4.5, 11).rotateX(-Math.PI / 2).translate(0, G + 0.03, 2.05 + 5.5), this.beamMat);
-    beam.renderOrder = 5;
-    this.group.add(...parts, beam);
+    this.group.add(...parts);
     this.group.visible = false;
     scene.add(this.group);
+
+    const map = beamTexture();
+    for (const s of [1, -1]) {
+      const l = new SpotLight(0xffffff, 0, BEAM_RANGE, BEAM_ANGLE, 0, 2);
+      l.map = map;
+      // just ahead of the lamp glass, so the car's own body never shadows its beam
+      l.position.set(s * 0.6, G + 0.8, 2.2);
+      l.target.position.set(s * 0.6 + s * 0.6, G + 0.8 - Math.tan(BEAM_TILT) * 30, 2.2 + 30); // toe out a little
+      l.castShadow = true;
+      l.shadow.mapSize.set(1024, 1024);
+      l.shadow.camera.near = 0.3;
+      l.shadow.camera.far = BEAM_RANGE;
+      l.shadow.bias = -0.0006;
+      l.shadow.normalBias = 0.05;
+      l.shadow.radius = 3;
+      l.shadow.autoUpdate = false;
+      this.rig.add(l, l.target);
+      this.beams.push(l);
+    }
+    // tail lamps: wide, soft red cones onto the road and whatever stands behind (no shadows, they are dim)
+    for (const s of [1, -1]) {
+      const l = new SpotLight(0xff2a14, 0, 18, 1.15, 1, 2);
+      l.position.set(s * 0.74, G + 0.76, -2.2);
+      l.target.position.set(s * 0.9, G - 0.6, -10);
+      this.rig.add(l, l.target);
+      this.tails.push(l);
+    }
+    const maps = { halo: haloTexture(), streak: streakTexture() };
+    for (const s of [1, -1]) {
+      this.glares.push({ head: true, glare: new Glare(this.group, new Vector3(s * 0.6, G + 0.8, 2.13), new Vector3(0, 0, 1), 0xfff2dc, 0.55, 3, 1, maps) });
+      this.glares.push({ head: false, glare: new Glare(this.group, new Vector3(s * 0.74, G + 0.76, -2.13), new Vector3(0, 0, -1), 0xff2a14, 0.22, 2, 0.35, maps) });
+    }
+    scene.add(this.rig);
+  }
+
+  /** Lens glare of head- and tail lamps for the current camera; call after setPose/setLights, before rendering. */
+  updateGlare(camera: Camera, occluded: Occluded, dt: number): void {
+    if (!this.shown) return;
+    this.group.updateMatrixWorld();
+    for (const { glare, head } of this.glares) glare.update(camera, this.group, head ? this.headK : this.tailK, occluded, dt);
   }
 
   show(color: number): void {
     this.paint.color.setHex(color);
     this.group.visible = true;
+    this.shown = true;
   }
 
   hide(): void {
     this.group.visible = false;
+    this.shown = false;
+    this.setBeams(0);
+    for (const l of this.tails) l.intensity = 0;
+    for (const { glare } of this.glares) glare.hide();
   }
 
   setPose(p: CarPose): void {
-    this.group.position.set(p.x, p.y, p.z);
-    this.group.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+    for (const o of [this.group, this.rig]) {
+      o.position.set(p.x, p.y, p.z);
+      o.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+    }
   }
 
   /** night 0..1; braking lights the tail lamps fully by day too; power 0..1 (ignition: off, flickering, on) scales everything. */
   setLights(night: number, braking: boolean, power: number): void {
+    const brake = braking && power > 0.5;
     this.headMat.emissiveIntensity = (0.15 + 2.2 * night) * power;
-    this.tailMat.emissiveIntensity = (braking && power > 0.5 ? 2.5 : 0.08 + 1.1 * night) * power;
-    this.beamMat.opacity = 0.55 * night * power;
-    this.beamMat.visible = power > 0.5 && night > 0.02;
+    this.tailMat.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+    this.setBeams(this.shown && power > 0.5 ? night * power : 0);
+    const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
+    for (const l of this.tails) l.intensity = tail * power;
+    this.headK = night * power;
+    this.tailK = (brake ? 1 : 0.3 * night) * power;
+  }
+
+  private setBeams(k: number): void {
+    const on = k > 0.02;
+    for (const l of this.beams) {
+      l.intensity = on ? HEADLIGHT_INTENSITY * k : 0;
+      l.shadow.autoUpdate = on;
+    }
   }
 }
 

@@ -170,6 +170,7 @@ export class Game {
       const braking = input.brake() || (input.axes().forward < 0 && this.vehicle!.speed() > 1);
       this.driven.setLights(night, braking && !this.flying, this.ignition.lightPower(Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
+      this.driven.updateGlare(this.ctx.camera, this.occluded, dt);
       if (audio) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
         const h = headingOf(pose), v = this.vehicle!.chassis.linvel();
@@ -185,6 +186,15 @@ export class Game {
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }
   }
+
+  /** Line of sight between two points blocked by static world geometry (lamp glare vs. camera). */
+  private readonly occluded = (from: Vec3, to: Vec3): boolean => {
+    const { rapier: R, world: w } = this.pw;
+    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d < 0.5) return false;
+    return w.castRay(new R.Ray(from, { x: dx / d, y: dy / d, z: dz / d }), d, true, undefined, undefined, undefined, undefined, STATIC_ONLY) !== null;
+  };
 
   private toggleFly(): void {
     this.flying = !this.flying;
