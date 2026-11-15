@@ -247,11 +247,12 @@ export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = 
   const net = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = junctions(net.map((r) => dedupe(r.points)));
   const grid = buildingGrid(buildings);
+  const juncKeys = new Set(junc.keys());
   const prepared: Prepared[] = [];
   for (const r of f.roads) {
     const pts = dedupe(r.points);
     if (pts.length < 2) continue;
-    const widths = DRIVABLE.has(r.kind) ? sidewalkWidths(r, buildings, { grid }) : { left: [], right: [] };
+    const widths = DRIVABLE.has(r.kind) ? sidewalkWidths(r, buildings, { grid, junctions: juncKeys }) : { left: [], right: [] };
     prepared.push({ r, pts, cum: cumulative(pts), hw: r.width / 2, widths, median: [] });
   }
   for (const p of prepared) p.median = medianInfo(p.r, p.pts, prepared.filter((q) => DRIVABLE.has(q.r.kind)));

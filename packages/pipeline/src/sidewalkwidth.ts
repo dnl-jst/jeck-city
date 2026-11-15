@@ -1,7 +1,7 @@
 import type { BuildingMesh } from './buildings.js';
 import { footprintContains, footprintDistance, footprintOf } from './footprint.js';
 import type { Pt, Road } from './osm.js';
-import { dedupe } from './polyline.js';
+import { cumulative, dedupe, pointAt, ptKey } from './polyline.js';
 
 export const SIDEWALK_MIN = 1.5;
 export const SIDEWALK_MAX = 8;
@@ -81,23 +81,51 @@ const median3 = (v: number[]): number[] =>
   v.map((x, i) => [v[Math.max(0, i - 1)]!, x, v[Math.min(v.length - 1, i + 1)]!].sort((a, b) => a - b)[1]!);
 
 /**
+ * Values at the flagged vertices replaced by the nearest unflagged one (by index; the smaller of two equally near).
+ * Returns null when every vertex is flagged.
+ */
+function fromNeighbours(v: number[], flagged: boolean[]): number[] | null {
+  if (flagged.every(Boolean)) return null;
+  const ok = (j: number) => j >= 0 && j < v.length && !flagged[j];
+  return v.map((x, i) => {
+    if (!flagged[i]) return x;
+    for (let k = 1; ; k++) {
+      if (ok(i - k) && ok(i + k)) return Math.min(v[i - k]!, v[i + k]!);
+      if (ok(i - k)) return v[i - k]!;
+      if (ok(i + k)) return v[i + k]!;
+    }
+  });
+}
+
+/**
  * Sidewalk width per vertex of dedupe(road.points), left and right of travel: distance from the kerb (carriageway
  * edge) to the nearest facade straight out from the road, clamped to [1.5, 8] m; 2.5 m where no building lies
- * within 10 m of the kerb. Smoothed with a median over 3 vertices.
+ * within 10 m of the kerb. The way's endpoints and its junction vertices (`opts.junctions`, ptKeys) take the value
+ * of the nearest other vertex, since their ray runs into the side street; a way with no other vertex samples its
+ * middle. Then smoothed with a median over 3 vertices.
  */
-export function sidewalkWidths(road: Road, buildings: BuildingMesh[], opts: { grid?: BuildingGrid } = {}): { left: number[]; right: number[] } {
+export function sidewalkWidths(road: Road, buildings: BuildingMesh[], opts: { grid?: BuildingGrid; junctions?: ReadonlySet<string> } = {}): { left: number[]; right: number[] } {
   const grid = opts.grid ?? buildingGrid(buildings);
   const pts = dedupe(road.points);
   const normals = vertexNormals(pts);
   const hw = road.cross.carriageway / 2;
-  const side = (s: 1 | -1) =>
-    median3(pts.map((p, i) => {
-      const d = { x: normals[i]!.x * s, z: normals[i]!.z * s };
-      const kerb = { x: p.x + d.x * hw, z: p.z + d.z * hw };
-      const cand = grid.near(kerb, NEAR);
-      if (!cand.some((b) => footprintDistance(b, kerb.x, kerb.z) < NEAR)) return SIDEWALK_DEFAULT;
-      const hit = Math.min(...cand.map((b) => rayToFootprint(b, kerb, d)));
-      return Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, hit));
-    }));
+  const flagged = pts.map((p, i) => i === 0 || i === pts.length - 1 || (opts.junctions?.has(ptKey(p)) ?? false));
+  const width = (p: Pt, n: Pt, s: 1 | -1): number => {
+    const d = { x: n.x * s, z: n.z * s };
+    const kerb = { x: p.x + d.x * hw, z: p.z + d.z * hw };
+    const cand = grid.near(kerb, NEAR);
+    if (!cand.some((b) => footprintDistance(b, kerb.x, kerb.z) < NEAR)) return SIDEWALK_DEFAULT;
+    const hit = Math.min(...cand.map((b) => rayToFootprint(b, kerb, d)));
+    return Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, hit));
+  };
+  const side = (s: 1 | -1) => {
+    const raw = pts.map((p, i) => width(p, normals[i]!, s));
+    const filled = fromNeighbours(raw, flagged);
+    if (filled) return median3(filled);
+    const cum = cumulative(pts);
+    const mid = pointAt(pts, cum, cum[cum.length - 1]! / 2);
+    const v = width(mid.p, { x: -mid.dir.z, z: mid.dir.x }, s);
+    return pts.map(() => v);
+  };
   return { left: side(-1), right: side(1) };
 }

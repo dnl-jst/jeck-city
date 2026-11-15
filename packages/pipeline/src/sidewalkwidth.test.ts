@@ -38,3 +38,23 @@ test('a single recessed vertex is smoothed away (median over 3)', () => {
   const w = sidewalkWidths(road([0, 10, 20, 30, 40]), b).right;
   for (const v of w) expect(v).toBeCloseTo(4.0, 5);
 });
+
+test('endpoints take the neighbouring value: a side-street gap at the end of the way does not flare the sidewalk', () => {
+  // facade 4 m behind the south kerb from x = 5 on; at x = 0 the ray runs past the building corner
+  const w = sidewalkWidths(road([0, 20, 40]), [boxBuilding('S', 5, 7, 50, 30, 12)]).right;
+  expect(w).toEqual([4, 4, 4].map((v) => expect.closeTo(v, 5)));
+});
+
+test('junction vertices take the neighbouring value (two adjacent junctions survive the median otherwise)', () => {
+  // gaps in the facade around x = 10 and x = 20 (side streets meeting the way there)
+  const b = [boxBuilding('a', -10, 7, 8, 30, 12), boxBuilding('b', 12, 7, 18, 30, 12), boxBuilding('c', 22, 7, 50, 30, 12)];
+  const r = road([0, 10, 20, 30, 40]);
+  expect(sidewalkWidths(r, b).right[1]).toBeGreaterThan(7); // the flare this fixes
+  const junctions = new Set(['10.00,0.00', '20.00,0.00']);
+  for (const v of sidewalkWidths(r, b, { junctions }).right) expect(v).toBeCloseTo(4, 5);
+});
+
+test('a way whose vertices are all endpoints/junctions samples its middle', () => {
+  const w = sidewalkWidths(road([0, 40]), [boxBuilding('S', 10, 7, 30, 30, 12)]).right; // building only mid-way
+  expect(w).toEqual([expect.closeTo(4, 5), expect.closeTo(4, 5)]);
+});
