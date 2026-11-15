@@ -65,3 +65,16 @@ test('railway and embankment land is green', () => {
   for (const l of ['meadow', 'forest', 'flowerbed', 'brownfield']) expect(g(l)).toBe(1);
   expect(g('residential')).toBe(0);
 });
+
+test('bicycle parking: kinds, capacity default, areas with outline', () => {
+  const node = (id: number, tags: Record<string, string>) => ({ type: 'node', id, lat: 50.96, lon: 6.95 + id * 1e-4, tags: { amenity: 'bicycle_parking', ...tags } });
+  const f = parseOsm({ elements: [
+    node(1, { bicycle_parking: 'stands', capacity: '8' }),
+    node(2, {}),
+    node(3, { bicycle_parking: 'wall_loops', capacity: 'viele' }),
+    node(4, { bicycle_parking: 'lockers' }),
+    { type: 'way', id: 5, tags: { amenity: 'bicycle_parking', bicycle_parking: 'rack', capacity: '20' }, geometry: [{ lat: 50.96, lon: 6.95 }, { lat: 50.96, lon: 6.9501 }, { lat: 50.96005, lon: 6.9501 }, { lat: 50.96, lon: 6.95 }] },
+  ] });
+  expect(f.bikeParking.map((b) => [b.kind, b.capacity])).toEqual([['stands', 8], ['stands', 6], ['wall', 6], ['other', 6], ['stands', 20]]);
+  expect(f.bikeParking[4]!.outline).toHaveLength(3);
+});

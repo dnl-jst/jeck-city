@@ -14,6 +14,7 @@ import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
 import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
+import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot } from './bikeracks.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
@@ -32,6 +33,11 @@ const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
+const BIKE_SEED = 5032024;
+/** Frame colour of the cargo bike at the spawn. */
+const SPAWN_BIKE_COLOR = 0x2f5d3a;
+/** Rack bikes this close to the spawn bike are left out (m). */
+const SPAWN_BIKE_CLEAR = 3;
 const TREE_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 /**
@@ -197,6 +203,14 @@ async function main() {
   const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 
+  const spawnCar = spawnCarSpot(f, spawn, buildings);
+  const racks = layoutRacks(f, buildings);
+  const carSpots = withSpawnCar(spawnCar, dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks));
+  const spawnBike = spawnBikeSpot(f, spawn, spawnCar, buildings);
+  const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) => Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR);
+  const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
+  console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
+
   const manifest: WorldManifest = {
     version: 2,
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
@@ -215,9 +229,9 @@ async function main() {
       ...(s.sign ? { sign: { x: r2(s.sign.x), y: r2(s.sign.y), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
     models,
-    bikeRacks: [],
-    bikes: [],
-    parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
+    bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
+    bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+    parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,
     farGroundY: r2(borderMin(terrain) - 0.5),

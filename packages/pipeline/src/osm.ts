@@ -20,7 +20,21 @@ export type OsmFeatures = {
   /** shop=* plus eateries/pubs/pharmacies (amenity=*); type = the tag value. */
   shops: Shop[];
   squares: { name: string; outline: Pt[] }[];
+  /** amenity=bicycle_parking: kind from bicycle_parking=* (stands/rack/untagged → stands, wall_loops/bollard → wall), capacity (default 6). */
+  bikeParking: BikeParking[];
 };
+
+export type BikeParking = { pos: Pt; outline?: Pt[]; kind: 'stands' | 'wall' | 'other'; capacity: number };
+
+const BIKE_PARKING_DEFAULT_CAPACITY = 6;
+function bikeParkingOf(pos: Pt, t: Tags, outline?: Pt[]): BikeParking {
+  const v = t.bicycle_parking;
+  const kind = v === undefined || v === 'stands' || v === 'rack' ? 'stands' : v === 'wall_loops' || v === 'bollard' ? 'wall' : 'other';
+  const c = Number.parseInt(t.capacity ?? '', 10);
+  const b: BikeParking = { pos, kind, capacity: Number.isFinite(c) && c > 0 ? c : BIKE_PARKING_DEFAULT_CAPACITY };
+  if (outline) b.outline = outline;
+  return b;
+}
 
 export type Shop = { pos: Pt; name?: string; type: string; street?: string; housenumber?: string };
 
@@ -101,7 +115,7 @@ function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Ro
 
 export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
-  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [] };
+  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
@@ -117,6 +131,7 @@ export function parseOsm(json: unknown): OsmFeatures {
       if (t.natural === 'tree') f.trees.push(pos);
       else if (t.highway === 'street_lamp') f.lamps.push(pos);
       else if (isStopTags(t)) stops.push({ pos, name: t.name!, prio: t.public_transport === 'platform' ? 0 : 1 });
+      else if (t.amenity === 'bicycle_parking') f.bikeParking.push(bikeParkingOf(pos, t));
       else {
         const shop = shopOf(pos, t);
         if (shop) f.shops.push(shop);
@@ -135,6 +150,9 @@ export function parseOsm(json: unknown): OsmFeatures {
           if (r && hasSeparateParking(t)) pending.push({ index: f.roads.length, el, pts, t });
           if (r) f.roads.push(r);
         }
+      } else if (t.amenity === 'bicycle_parking') {
+        const outline = closed ? pts.slice(0, -1) : pts;
+        f.bikeParking.push(bikeParkingOf(centroid(outline), t, outline));
       } else if (closed && GREEN(t)) f.greens.push(pts);
       else if (closed && t.amenity === 'parking' && STREET_PARKING.has(t.parking ?? '')) {
         const area: ParkingArea = { ring: pts };
