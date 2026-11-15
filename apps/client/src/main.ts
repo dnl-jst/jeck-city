@@ -1,13 +1,14 @@
 import {
   ACESFilmicToneMapping, Euler, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, Vector3, WebGLRenderer,
 } from 'three';
-import { sunState, type SunState } from '@nn/shared';
+import { localToWgs84, parseTimeOverride, sunState, type SunState } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { Hud } from './hud';
 import { WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
+import { DebugOverlay } from './debug';
 
 declare global {
   interface Window {
@@ -94,6 +95,23 @@ class FreeFly {
 const fly = new FreeFly(camera, canvas);
 const hud = new Hud(document.body);
 const world = new WorldLoader(scene, '/world/');
+let fps = 0;
+if (params.get('debug') === '1') {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  new DebugOverlay(document.body, () => {
+    const d = withDateParam(new Date(), dateOverride);
+    const t = parseTimeOverride(timeOverride) ?? { h: d.getHours(), m: d.getMinutes() };
+    return {
+      x: camera.position.x, y: camera.position.y, z: camera.position.z,
+      // inverse of FreeFly.setHeading: yaw = heading + PI
+      yawDeg: ((fly.yaw - Math.PI) * 180) / Math.PI, pitchDeg: (fly.pitch * 180) / Math.PI,
+      time: `${pad(t.h)}:${pad(t.m)}`, date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    };
+  }, () => ({
+    ...localToWgs84(camera.position.x, camera.position.z), fps,
+    drawCalls: renderer.info.render.calls, chunks: world.loadedKeys().size,
+  }));
+}
 // courtyards, forecourts and gaps between buildings
 const ground = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
 ground.rotation.x = -Math.PI / 2;
@@ -110,6 +128,7 @@ const timer = new Timer();
 renderer.setAnimationLoop((t: number) => {
   timer.update(t);
   const dt = Math.min(timer.getDelta(), 0.1);
+  if (dt > 0) fps += (1 / dt - fps) * 0.1;
   fly.update(dt);
   if (lighting && props) {
     world.update(camera.position);
