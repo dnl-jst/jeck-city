@@ -4,16 +4,38 @@ import {
   Object3D, Points, PointsMaterial, Quaternion, SRGBColorSpace, Vector3, type Scene, type Texture,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { chunkKey, type WorldManifest } from '@nn/shared';
+import { chunkKey, propHash as hash, treeScale, type PropPose, type WorldManifest } from '@nn/shared';
+import { SHOP } from './materials/storeys';
+
+/** Street trees are drawn only within this distance of the camera (m)… */
+export const TREE_RENDER_RADIUS = 250;
+/** …and cast shadows only within this one… */
+export const TREE_SHADOW_RADIUS = 80;
+/** …both sets rebuilt only after the camera moved more than this since the last rebuild (m). */
+export const TREE_REBUILD_MOVE = 20;
+
+type XZ = { x: number; z: number };
+
+/**
+ * Indices (ascending) of the trees in loaded chunks (`inside`) within `shadow` of (x, z) — drawn with shadows — and
+ * of those between `shadow` and `radius` — drawn without.
+ */
+export function treeSets(trees: readonly (readonly [number, number])[], x: number, z: number, inside: (x: number, z: number) => boolean = () => true, shadow = TREE_SHADOW_RADIUS, radius = TREE_RENDER_RADIUS): { near: number[]; far: number[] } {
+  const near: number[] = [], far: number[] = [];
+  trees.forEach(([tx, tz], i) => {
+    const d2 = (tx - x) ** 2 + (tz - z) ** 2;
+    if (d2 > radius * radius || !inside(tx, tz)) return;
+    (d2 <= shadow * shadow ? near : far).push(i);
+  });
+  return { near, far };
+}
+
+/** Whether the tree sets must be rebuilt: never built, or the camera moved more than TREE_REBUILD_MOVE since. */
+export const needsTreeRebuild = (last: XZ | null, x: number, z: number): boolean =>
+  !last || Math.hypot(x - last.x, z - last.z) > TREE_REBUILD_MOVE;
 
 /** Height of the lamp's light source above ground (m). */
 export const LAMP_LIGHT_Y = 5.55;
-
-/** Deterministic [0,1) value of a world position and a channel number. */
-function hash(x: number, z: number, k: number): number {
-  const s = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
-  return s - Math.floor(s);
-}
 
 /** Merged, non-indexed copy of geometries (mergeGeometries needs uniform indexing). */
 function merge(parts: BufferGeometry[]): BufferGeometry {
@@ -122,9 +144,10 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   return group;
 }
 
-/** Sign board centre height (m): the shopfront sign band of the facade shader spans 3.15–3.88 m. */
-export const SIGN_Y = 3.52;
-const SIGN_H = 0.6;
+/** Sign board centre height (m): the middle of the shopfront sign band of the facade shader (storeys.ts SHOP). */
+export const SIGN_Y = (SHOP.signBottom + SHOP.signTop) / 2;
+/** Sign board height (m); fits inside the sign band. */
+export const SIGN_H = 0.6;
 /** Sign atlas: boards 64 px high, at most 416 px wide, shelf-packed into rows 2048 px wide with 4 px gaps (mipmaps). */
 const ATLAS_W = 2048, CELL_H = 64, CELL_MAX_W = 416, GAP = 4;
 
@@ -226,7 +249,10 @@ export function buildShopSigns(shops: WorldManifest['shops'], material: MeshStan
   return mesh;
 }
 
-/** Street furniture: instanced lamps and trees plus tram stops, limited to loaded chunks; all shop signs. */
+/**
+ * Street furniture: instanced lamps and tram stops in loaded chunks; trees in loaded chunks within 250 m of the
+ * camera (shadows only within 80 m, updateTrees); all shop signs.
+ */
 export class Props {
   /** Lantern glass; Lighting drives its emissive intensity at night. */
   readonly lampGlass = new MeshStandardMaterial({ color: 0xdcd6c4, emissive: 0xffc98a, emissiveIntensity: 0, roughness: 0.2 });
@@ -237,8 +263,16 @@ export class Props {
   private readonly crownMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
   private readonly stopFrame = new MeshStandardMaterial({ color: 0x4a5258, roughness: 0.5, metalness: 0.15 });
   private readonly stopGlass = new MeshStandardMaterial({ color: 0xbcd0d8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.25, depthWrite: false });
+  /** Lantern glass of a knocked-down lamp: dark, it no longer glows. */
+  private readonly deadGlass = new MeshStandardMaterial({ color: 0x6f6c62, roughness: 0.25 });
+  private readonly lampGeo: { metal: BufferGeometry; glass: BufferGeometry };
+  /** Knocked-down lamps by manifest index: single meshes that follow their physics bodies. */
+  private readonly fallen = new Map<number, Group>();
+  private loaded: ReadonlySet<string> = new Set();
   private readonly lamps: [InstancedMesh, InstancedMesh];
-  private readonly trees: [InstancedMesh, InstancedMesh];
+  /** Trunks and crowns: trees within TREE_SHADOW_RADIUS (casting shadows), and those beyond (not casting). */
+  private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] };
+  private lastTrees: XZ | null = null;
   private readonly haloPoints: Points;
   /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
   private readonly stops = new Map<number, Group>();
@@ -248,22 +282,31 @@ export class Props {
   constructor(private readonly scene: Scene, private readonly manifest: WorldManifest) {
     const signs = buildShopSigns(manifest.shops, this.signMat);
     if (signs) scene.add(signs);
-    const lg = lampGeometries();
+    const lg = this.lampGeo = lampGeometries();
     const tg = treeGeometries();
     const n = manifest.lamps.length, t = manifest.trees.length;
     this.lamps = [new InstancedMesh(lg.metal, this.lampMetal, n), new InstancedMesh(lg.glass, this.lampGlass, n)];
-    this.trees = [new InstancedMesh(tg.trunk, this.trunkMat, t), new InstancedMesh(tg.crown, this.crownMat, t)];
-    this.trees[1].setColorAt(0, new Color()); // allocate instanceColor
+    const pair = (): [InstancedMesh, InstancedMesh] => {
+      const p: [InstancedMesh, InstancedMesh] = [new InstancedMesh(tg.trunk, this.trunkMat, t), new InstancedMesh(tg.crown, this.crownMat, t)];
+      p[1].setColorAt(0, new Color()); // allocate instanceColor
+      p[1].receiveShadow = true;
+      return p;
+    };
+    this.trees = { near: pair(), far: pair() };
     const haloGeo = new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(n * 3), 3).setUsage(DynamicDrawUsage));
     this.haloPoints = new Points(haloGeo, this.halo);
     this.haloPoints.frustumCulled = false;
-    for (const m of [...this.lamps, ...this.trees]) {
+    for (const m of this.lamps) {
       m.count = 0;
       m.castShadow = true;
       m.frustumCulled = false; // instances spread over the whole loaded area
       scene.add(m);
     }
-    this.trees[1].receiveShadow = true;
+    for (const m of [...this.trees.near, ...this.trees.far]) {
+      m.count = 0;
+      m.castShadow = this.trees.near.includes(m);
+      scene.add(m); // frustum-culled by the bounding sphere of the drawn instances
+    }
     scene.add(this.haloPoints);
   }
 
@@ -272,15 +315,39 @@ export class Props {
     this.signMat.emissiveIntensity = 1.1 * night;
   }
 
-  /** Rebuilds the instance sets for the loaded chunks; call when that set changes. */
+  /** Lamp i was knocked over: it leaves the instanced (lit) set and becomes a dark single mesh; place it with syncFallen. */
+  knockDown(i: number): void {
+    if (this.fallen.has(i)) return;
+    const g = new Group();
+    const metal = new Mesh(this.lampGeo.metal, this.lampMetal);
+    const glass = new Mesh(this.lampGeo.glass, this.deadGlass);
+    metal.castShadow = glass.castShadow = true;
+    g.add(metal, glass);
+    g.name = `fallenLamp:${i}`;
+    this.scene.add(g);
+    this.fallen.set(i, g);
+    this.rebuild(this.loaded);
+  }
+
+  /** Moves the knocked-down lamps to their physics poses (origin at the foot of the post). */
+  syncFallen(pose: (i: number) => PropPose): void {
+    for (const [i, g] of this.fallen) {
+      const p = pose(i);
+      g.position.set(p.x, p.y, p.z);
+      g.quaternion.set(p.qx, p.qy, p.qz, p.qw);
+    }
+  }
+
+  /** Rebuilds the instance sets for the loaded chunks; call when that set changes (trees: at the last camera position). */
   rebuild(loaded: ReadonlySet<string>): void {
+    this.loaded = loaded;
     const inside = (x: number, z: number) => loaded.has(chunkKey(x, z));
-    const m = new Matrix4(), q = new Quaternion(), s = new Vector3(), p = new Vector3(), up = new Vector3(0, 1, 0);
+    const m = new Matrix4();
 
     const halo = this.haloPoints.geometry.getAttribute('position') as BufferAttribute;
     let i = 0;
-    for (const [x, z] of this.manifest.lamps) {
-      if (!inside(x, z)) continue;
+    for (const [k, [x, z]] of this.manifest.lamps.entries()) {
+      if (!inside(x, z) || this.fallen.has(k)) continue;
       m.makeTranslation(x, 0, z);
       this.lamps[0].setMatrixAt(i, m);
       this.lamps[1].setMatrixAt(i, m);
@@ -291,22 +358,8 @@ export class Props {
     this.haloPoints.geometry.setDrawRange(0, i);
     halo.needsUpdate = true;
 
-    const c = new Color();
-    i = 0;
-    for (const [x, z] of this.manifest.trees) {
-      if (!inside(x, z)) continue;
-      const k = 0.75 + 0.55 * hash(x, z, 1);
-      q.setFromAxisAngle(up, hash(x, z, 2) * Math.PI * 2);
-      m.compose(p.set(x, 0, z), q, s.set(k * (0.9 + 0.2 * hash(x, z, 3)), k, k * (0.9 + 0.2 * hash(x, z, 4))));
-      this.trees[0].setMatrixAt(i, m);
-      this.trees[1].setMatrixAt(i, m);
-      c.setHSL(0.24 + 0.06 * hash(x, z, 5), 0.42 + 0.15 * hash(x, z, 6), 0.2 + 0.08 * hash(x, z, 7));
-      this.trees[1].setColorAt(i, c);
-      i++;
-    }
-    for (const t of this.trees) { t.count = i; t.instanceMatrix.needsUpdate = true; }
-    this.trees[1].instanceColor!.needsUpdate = true;
-    for (const t of [...this.lamps, ...this.trees]) t.computeBoundingSphere();
+    for (const l of this.lamps) l.computeBoundingSphere();
+    if (this.lastTrees) this.writeTrees(this.lastTrees.x, this.lastTrees.z);
 
     for (const [k, stop] of this.manifest.tramStops.entries()) {
       const want = inside(stop.x, stop.z);
@@ -326,6 +379,37 @@ export class Props {
         });
         this.stops.delete(k);
       }
+    }
+  }
+
+  /** Trees around the camera at (x, z): rebuilt after TREE_REBUILD_MOVE of movement (call every frame). */
+  updateTrees(x: number, z: number): void {
+    if (needsTreeRebuild(this.lastTrees, x, z)) this.writeTrees(x, z);
+  }
+
+  private writeTrees(x: number, z: number): void {
+    this.lastTrees = { x, z };
+    const loaded = this.loaded;
+    const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)));
+    const m = new Matrix4(), q = new Quaternion(), s = new Vector3(), p = new Vector3(), up = new Vector3(0, 1, 0), c = new Color();
+    for (const [which, idx] of [['near', sets.near], ['far', sets.far]] as const) {
+      const [trunk, crown] = this.trees[which];
+      idx.forEach((ti, i) => {
+        const [tx, tz] = this.manifest.trees[ti]!;
+        const k = treeScale(tx, tz); // same scale as the trunk collider (StreetProps)
+        q.setFromAxisAngle(up, hash(tx, tz, 2) * Math.PI * 2);
+        m.compose(p.set(tx, 0, tz), q, s.set(k * (0.9 + 0.2 * hash(tx, tz, 3)), k, k * (0.9 + 0.2 * hash(tx, tz, 4))));
+        trunk.setMatrixAt(i, m);
+        crown.setMatrixAt(i, m);
+        c.setHSL(0.24 + 0.06 * hash(tx, tz, 5), 0.42 + 0.15 * hash(tx, tz, 6), 0.2 + 0.08 * hash(tx, tz, 7));
+        crown.setColorAt(i, c);
+      });
+      for (const im of [trunk, crown]) {
+        im.count = idx.length;
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere();
+      }
+      crown.instanceColor!.needsUpdate = true;
     }
   }
 }

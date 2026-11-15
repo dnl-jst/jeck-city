@@ -1,11 +1,11 @@
 import type { BuildingMesh } from './buildings.js';
 import type { Pt } from './osm.js';
 
-type Footprint = { minX: number; minZ: number; maxX: number; maxZ: number; tris: number[] };
+export type Footprint = { minX: number; minZ: number; maxX: number; maxZ: number; tris: number[] };
 const cache = new WeakMap<BuildingMesh, Footprint>();
 
-/** Roof triangles projected onto x/z (LoD2 roofs cover the footprint) plus their bbox. */
-function footprintOf(b: BuildingMesh): Footprint {
+/** Roof triangles projected onto x/z (LoD2 roofs cover the footprint, flat x,z triples) plus their bbox. */
+export function footprintOf(b: BuildingMesh): Footprint {
   let fp = cache.get(b);
   if (fp) return fp;
   fp = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity, tris: [] };

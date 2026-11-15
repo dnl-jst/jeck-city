@@ -10,6 +10,7 @@ import { fetchOk, WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
+import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game, surfaceY } from './game';
@@ -29,11 +30,11 @@ declare global {
     /** Dev: the renderer's per-frame statistics (draw calls, triangles). */
     __nnInfo?: () => { calls: number; triangles: number };
     /**
-     * Dev/tests: what the player is doing (radio: the chosen station, null on foot), and the height of the first
-     * static surface below (x, 100, z).
+     * Dev/tests: what the player is doing (radio: the chosen station, null on foot), physics steps so far, and the
+     * height of the first static surface below (x, 100, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
+      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
@@ -80,7 +81,7 @@ window.__nnInfo = () => ({ calls: renderer.info.render.calls, triangles: rendere
 
 const scene = new Scene();
 
-const camera = new PerspectiveCamera(60, 1, 0.3, 2000);
+const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.3, 2000);
 function resize(): void {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -158,6 +159,11 @@ renderer.setAnimationLoop((t: number) => {
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
     game.frame(dt, nightFactor);
+    for (const i of game.props.takeFallen()) {
+      props.knockDown(i);
+      lighting.lampOut(i);
+    }
+    props.syncFallen((i) => game!.props.lampPose(i));
     radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     if (maps) {
       const flying = game.flying;
@@ -178,6 +184,7 @@ renderer.setAnimationLoop((t: number) => {
       propsRevision = world.revision;
       props.rebuild(world.loadedKeys());
     }
+    props.updateTrees(camera.position.x, camera.position.z);
     sunAge += dt;
     if (sunAge >= 1) {
       sunAge = 0;
@@ -239,7 +246,8 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnState = () => {
     const f = game!.focus();
     return {
-      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station,
+      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      radio: gameAudio.station,
       engine: game!.ignition.state, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
     };
   };

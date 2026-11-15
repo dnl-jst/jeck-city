@@ -1,3 +1,4 @@
+import { crossOf } from './fixture.js';
 import { expect, test } from 'vitest';
 import type { OsmFeatures } from './osm.js';
 import { placeShelter, SHELTER_OFFSET } from './stops.js';
@@ -16,7 +17,7 @@ test('shelter goes 3.5 m to the right of the track direction when both sides are
 });
 
 test('shelter avoids the side with a road ribbon; heading flips so the track stays on its left', () => {
-  const road = { id: 1, kind: 'secondary', points: [{ x: 6, z: 100 }, { x: 6, z: -100 }], width: 8, oneway: false, lanes: 2 };
+  const road = { id: 1, kind: 'secondary', points: [{ x: 6, z: 100 }, { x: 6, z: -100 }], width: 8, oneway: false, lanes: 2, cross: crossOf('secondary', 8) };
   const s = placeShelter({ x: 0, z: 0 }, { ...empty, roads: [road], tramTracks: [track] });
   expect(s.x).toBeCloseTo(-SHELTER_OFFSET);
   expect(Math.cos(s.heading)).toBeCloseTo(1); // south: west is on its right

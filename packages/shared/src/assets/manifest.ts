@@ -8,12 +8,13 @@
  * WORLD space (no per-chunk offset, node transform is identity): coordinates stay below ~3 km, where
  * float32 is still sub-millimetre, and client and collision share one frame without bookkeeping.
  *
- * chunk_{ix}_{iz}.glb layout: up to 7 meshes named buildings, road, sidewalk, curb, tram, green,
- * squares (empty ones omitted), EXT_meshopt_compression. `buildings` carries POSITION, NORMAL,
+ * chunk_{ix}_{iz}.glb layout: up to 9 meshes named buildings, road, sidewalk, curb, tram, green,
+ * squares, markings, parking (empty ones omitted), EXT_meshopt_compression. `buildings` carries POSITION, NORMAL,
  * _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0 Neusser Str.,
  * bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
  * per building (contiguous vertex ranges of the buildings mesh). Street meshes carry POSITION and
- * TEXCOORD_0 (metres).
+ * TEXCOORD_0 (metres); `markings` also _MARK (float, 0 white / 1 red cycle crossing), `parking` has
+ * uv.y = metres from the kerb.
  */
 export const CHUNK_SIZE = 200;
 

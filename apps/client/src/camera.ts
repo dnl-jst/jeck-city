@@ -4,7 +4,9 @@ import type { Input } from './input';
 import { angleDelta } from './player';
 
 /** Third-person offsets (m): behind and above the feet on foot; behind and above the road in the car. */
-export const CAMERA_WALK = { back: 4, up: 1.8, pivot: 1.5 };
+export const CAMERA_WALK = { back: 5, up: 2.3, pivot: 1.5 };
+/** Vertical field of view (degrees). */
+export const CAMERA_FOV = 60;
 export const CAMERA_DRIVE = { back: 7, up: 2.5, pivot: 1.7 };
 const MOUSE = 0.0025;
 const PITCH_MIN = -1.1, PITCH_MAX = 0.55;
