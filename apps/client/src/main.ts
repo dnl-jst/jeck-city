@@ -125,6 +125,7 @@ renderer.setAnimationLoop((t: number) => {
       propsRevision = world.revision;
       props.rebuild(world.loadedKeys());
     }
+    props.updateTrees(camera.position.x, camera.position.z);
     sunAge += dt;
     if (sunAge >= 1) {
       sunAge = 0;
