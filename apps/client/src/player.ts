@@ -151,8 +151,10 @@ export class PlayerFigure {
       arm.quaternion.identity();
       arm.updateMatrixWorld(true);
       // direction shoulder → grip in the torso frame; the arm hangs along −y
+      // grips are given in the group's parent frame (the bike's lean group): compare in world space
       const shoulder = arm.getWorldPosition(new Vector3());
-      const toGrip = grips[i]!.clone().sub(shoulder);
+      const grip = this.group.parent ? this.group.parent.localToWorld(grips[i]!.clone()) : grips[i]!.clone();
+      const toGrip = grip.sub(shoulder);
       const inv = new Quaternion();
       this.torso.getWorldQuaternion(inv).invert();
       toGrip.applyQuaternion(inv).normalize();

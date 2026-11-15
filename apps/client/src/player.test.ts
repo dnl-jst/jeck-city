@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { Scene, Vector3 } from 'three';
+import { Group, Scene, Vector3 } from 'three';
 import { PlayerFigure } from './player';
 
 const seat = new Vector3(0, 0.98, -0.25);
@@ -27,6 +27,20 @@ describe('riding pose', () => {
     const upright = f.torsoPitch();
     f.ride(seat, grips, pedals(0), 'race');
     expect(f.torsoPitch()).toBeGreaterThan(upright + 0.3);
+  });
+
+  test('hands reach the grips also when the figure hangs in a turned and leaning bike', () => {
+    const scene = new Scene();
+    const f = new PlayerFigure(scene);
+    const bike = new Group();
+    bike.position.set(5, 0.1, -3);
+    bike.rotation.set(0, 1.2, 0.2);
+    scene.add(bike);
+    bike.add(f.group);
+    f.ride(seat, grips, pedals(0.5), 'upright');
+    expect(f.hand(0).distanceTo(grips[0])).toBeLessThan(0.15);
+    expect(f.hand(1).distanceTo(grips[1])).toBeLessThan(0.15);
+    expect(f.foot(0).distanceTo(pedals(0.5)[0])).toBeLessThan(0.05);
   });
 
   test('hands reach towards the grips', () => {
