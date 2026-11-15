@@ -4,8 +4,9 @@ export type TerrainGrid = { x0: number; z0: number; cols: number; rows: number; 
 /**
  * Diagonal that splits each 1 m cell into two triangles; heightAt/terrainNormal and the physics heightfield must agree.
  * 'x0z0-x1z1': from cell corner (x0,z0) to (x1,z1); 'x1z0-x0z1': from (x1,z0) to (x0,z1).
+ * Rapier 0.21's heightfield uses 'x1z0-x0z1' (pinned by the 'heightfield matches heightAt' physics test).
  */
-export const TERRAIN_DIAGONAL: 'x0z0-x1z1' | 'x1z0-x0z1' = 'x0z0-x1z1';
+export const TERRAIN_DIAGONAL: 'x0z0-x1z1' | 'x1z0-x0z1' = 'x1z0-x0z1';
 
 type Cell = { h: number; gx: number; gz: number };
 

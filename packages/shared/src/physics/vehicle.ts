@@ -23,12 +23,13 @@ export class Vehicle {
   private occupied = false;
   private steerAngle = 0;
 
-  constructor(private readonly pw: PhysicsWorld, pose: { x: number; z: number; heading: number }) {
+  /** pose.y is the ground height under the car (default 0); the chassis starts at y + VEHICLE_REST_Y. */
+  constructor(private readonly pw: PhysicsWorld, pose: { x: number; z: number; heading: number; y?: number }) {
     const { rapier: R, world } = pw;
     const h = pose.heading;
     this.chassis = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
-        .setTranslation(pose.x, VEHICLE_REST_Y, pose.z)
+        .setTranslation(pose.x, (pose.y ?? 0) + VEHICLE_REST_Y, pose.z)
         .setRotation({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) })
         .setLinearDamping(T.linearDamping)
         .setAngularDamping(T.angularDamping)
