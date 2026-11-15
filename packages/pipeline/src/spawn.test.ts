@@ -1,8 +1,9 @@
 import { expect, test } from 'vitest';
-import { boxBuilding } from './fixture.js';
+import { boxBuilding, loadFixture } from './fixture.js';
 import type { Road } from './osm.js';
 import { footprintContains, footprintDistance, insideAnyFootprint } from './footprint.js';
 import { findSpawn } from './spawn.js';
+import { spawnCarSpot, withSpawnCar } from './parking.js';
 
 const road = (id: number, name: string, pts: [number, number][]): Road => ({
   id, name, kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2,
@@ -44,4 +45,26 @@ test('footprint test uses the projected roof', () => {
   expect(footprintContains(b, 5, -0.1)).toBe(false);
   expect(footprintDistance(b, 5, 2.5)).toBe(0);
   expect(footprintDistance(b, 13, 9)).toBeCloseTo(5, 5);
+});
+
+test('a parked car stands next to the spawn, on the carriageway, along the road', () => {
+  const road = (pts: [number, number][]): Road => ({ id: 2, name: 'Neusser Straße', kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2 });
+  const f = { ...loadFixture(), boundary: [{ x: -500, z: -500 }, { x: 500, z: -500 }, { x: 500, z: 500 }, { x: -500, z: 500 }], tramTracks: [] };
+  for (const pts of [[[30, 200], [30, -200]], [[30, -200], [30, 200]]] as [number, number][][]) {
+    const roads = [road(pts)];
+    const s = findSpawn(roads, { x: 0, z: 0 }, []);
+    const spot = spawnCarSpot({ ...f, roads }, s, []);
+    expect(Math.hypot(spot.pos.x - s.x, spot.pos.z - s.z)).toBeLessThanOrEqual(3);
+    expect(spot.pos.x).toBeCloseTo(30 + 5 - 1.1, 5); // 1.1 m inside the kerb, spawn's (east) side
+    expect(Math.abs(spot.pos.x - s.x) - 0.9).toBeGreaterThanOrEqual(1); // player to car contour (half width 0.9)
+    expect(Math.sin(spot.heading)).toBeCloseTo(0, 5); // east side: traffic goes north
+    expect(Math.cos(spot.heading)).toBeCloseTo(-1, 5);
+    expect(spot.pos.z).toBeLessThan(s.z); // ahead (north)
+  }
+});
+
+test('the spawn car comes first and drops overlapping cars only', () => {
+  const spot = { pos: { x: 0, z: 0 }, heading: 0 }; // faces +z
+  const near = { pos: { x: 1, z: 5 }, heading: 0 }, side = { pos: { x: 3, z: 0 }, heading: 0 }, far = { pos: { x: 0, z: 7 }, heading: 0 };
+  expect(withSpawnCar(spot, [near, side, far])).toEqual([spot, side, far]);
 });

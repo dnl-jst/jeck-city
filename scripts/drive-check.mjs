@@ -1,16 +1,15 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
-// Scripted drive in headless Chromium: spawn beside a parked car, press E, hold W (then W+D), and check that the
+// Scripted drive in headless Chromium: spawn (no ?cam) next to the spawn car, press E, hold W (then W+D), and check that the
 // car moved > 20 m, is not inside a building, and that getting out puts the player on foot again. Saves
 // task11-car.png (day) and task11-night-car.png (night) into shotsDir when given.
 import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const shots = process.argv[3];
-// parked car #2 (-1.34, -37.63, heading 1.76): stand 2.5 m to its left, facing along it
-const CAM = '-1.8,0,-40.1,101,-8';
+// no ?cam: the player starts at the spawn point, where the pipeline parks car #0 (within the 3 m enter radius)
 
 async function drive(page, time, shot) {
-  await page.goto(`${base}?cam=${CAM}&time=${time}&date=2026-06-15`);
+  await page.goto(`${base}?time=${time}&date=2026-06-15`);
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
   const state = () => page.evaluate(() => window.__nnState());

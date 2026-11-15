@@ -8,7 +8,7 @@ import { parseCityGml } from './citygml.js';
 import { fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
 import { parseOsm } from './osm.js';
-import { parkedCarSpots } from './parking.js';
+import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
@@ -127,7 +127,7 @@ async function main() {
       ...s, x: r2(s.x), z: r2(s.z),
       ...(s.sign ? { sign: { x: r2(s.sign.x), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
-    parked: parkedCars(parkedCarSpots(f, PARKING_SEED, buildings), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
+    parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));

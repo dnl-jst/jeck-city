@@ -1,6 +1,6 @@
 import type { BuildingMesh } from './buildings.js';
 import { insideAnyFootprint } from './footprint.js';
-import type { OsmFeatures, Pt } from './osm.js';
+import type { OsmFeatures, Pt, Road } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt, pointInPolygon } from './polyline.js';
 
 const SPACING = 6;
@@ -69,4 +69,59 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
     [keep[i], keep[j]] = [keep[j]!, keep[i]!];
   }
   return keep.slice(0, MAX_SPOTS).sort((a, b) => a - b).map((i) => spots[i]!);
+}
+
+const SPAWN_ROAD = 'Neusser Straße';
+const SPAWN_CAR_KERB = 1.1; // car centre this far from the kerb, on the carriageway
+const SPAWN_CAR_AHEAD = 1.2; // metres in front of the player: with the lateral offset this stays within the 3 m enter radius
+const CAR_CLEAR_ALONG = 6;
+const CAR_CLEAR_ACROSS = 2.5;
+
+type Spot = { pos: Pt; heading: number };
+
+/**
+ * The car next to the spawn: on the spawn's side of Neusser Straße, parked along the right-hand kerb (facing the
+ * way traffic goes on that side), its centre 1.1 m from the kerb (road width / 2 - 1.1 from the centre line)
+ * and 1.2 m ahead of the player (north). Throws when the spot is outside the play area, on the tracks or in a building.
+ */
+export function spawnCarSpot(f: OsmFeatures, spawn: Pt, buildings: BuildingMesh[]): Spot {
+  let best: { p: Pt; dir: Pt; road: Road; d: number } | undefined;
+  for (const r of f.roads) {
+    if (r.name !== SPAWN_ROAD) continue;
+    for (let i = 1; i < r.points.length; i++) {
+      const a = r.points[i - 1]!, b = r.points[i]!;
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const l2 = dx * dx + dz * dz;
+      if (l2 < 1e-12) continue;
+      const t = Math.min(1, Math.max(0, ((spawn.x - a.x) * dx + (spawn.z - a.z) * dz) / l2));
+      const p = { x: a.x + t * dx, z: a.z + t * dz };
+      const d = dist(p, spawn);
+      if (!best || d < best.d) best = { p, dir: { x: dx / Math.sqrt(l2), z: dz / Math.sqrt(l2) }, road: r, d };
+    }
+  }
+  if (!best) throw new Error(`spawnCarSpot: no road named ${SPAWN_ROAD}`);
+  // the side of the road the spawn is on, as a sign relative to the way direction (right of dir = (-dir.z, dir.x))
+  const side = (spawn.x - best.p.x) * -best.dir.z + (spawn.z - best.p.z) * best.dir.x >= 0 ? 1 : -1;
+  const fwd = { x: side * best.dir.x, z: side * best.dir.z }; // right-hand traffic: this side's travel direction
+  const north = best.dir.z > 0 ? { x: -best.dir.x, z: -best.dir.z } : best.dir; // the player (spawn) faces north
+  const off = side * (best.road.width / 2 - SPAWN_CAR_KERB);
+  const pos = {
+    x: best.p.x - best.dir.z * off + north.x * SPAWN_CAR_AHEAD,
+    z: best.p.z + best.dir.x * off + north.z * SPAWN_CAR_AHEAD,
+  };
+  const ring = [...f.boundary, f.boundary[0]!];
+  if (!pointInPolygon(pos, f.boundary) || distToPolyline(pos, ring) < BOUNDARY_CLEARANCE) throw new Error('spawnCarSpot: outside the play area');
+  if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) throw new Error('spawnCarSpot: on the tracks');
+  if (insideAnyFootprint(pos, buildings)) throw new Error('spawnCarSpot: inside a building');
+  return { pos, heading: Math.atan2(fwd.x, fwd.z) };
+}
+
+/** `spot` first, followed by those `spots` that do not overlap it (< 6 m along or < 2.5 m across its axis). */
+export function withSpawnCar(spot: Spot, spots: Spot[]): Spot[] {
+  const fx = Math.sin(spot.heading), fz = Math.cos(spot.heading);
+  const overlaps = (s: Spot) => {
+    const dx = s.pos.x - spot.pos.x, dz = s.pos.z - spot.pos.z;
+    return Math.abs(dx * fx + dz * fz) < CAR_CLEAR_ALONG && Math.abs(dx * fz - dz * fx) < CAR_CLEAR_ACROSS;
+  };
+  return [spot, ...spots.filter((s) => !overlaps(s))];
 }
