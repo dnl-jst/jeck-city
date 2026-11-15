@@ -30,7 +30,8 @@ const SIGNS = [0x1f3b2c, 0x5a1a22, 0x1c2a4a, 0x1d1d1f, 0xe9e1cc, 0x7a4a1c];
 /**
  * Per-vertex eave height of each wall surface: wall triangles are grouped into surfaces by shared
  * vertices; a surface's eave is its lowest vertex height that lies more than 1 m above its bottom
- * (rectangle: the top edge; gable wall: the corners, not the apex). Roof vertices get 0.
+ * (rectangle: the top edge; gable wall: the corners, not the apex). Plinth vertices (v < 0) are ignored
+ * for bottom and eave but get their surface's eave. Roof vertices get 0.
  */
 export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number): Float32Array {
   const parent = Int32Array.from({ length: vertexCount }, (_, i) => i);
@@ -47,17 +48,22 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
     parent[find(b)] = find(a);
     parent[find(c)] = find(a);
   }
+  // Plinth vertices (v < 0, below the LoD2 base on slopes) are welded to their wall but must not lower its bottom.
   const bottom = new Map<number, number>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
+    if (v < 0) continue;
     bottom.set(r, Math.min(bottom.get(r) ?? Infinity, v));
+  }
+  for (let i = 0; i < vertexCount; i++) {
+    if (kind[i] === 0 && !bottom.has(find(i))) bottom.set(find(i), 0); // plinth-only surface
   }
   const eave = new Map<number, number>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
-    if (v > bottom.get(r)! + 1) eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
+    if (v >= 0 && v > bottom.get(r)! + 1) eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
   }
   const out = new Float32Array(vertexCount);
   for (let i = 0; i < vertexCount; i++) {

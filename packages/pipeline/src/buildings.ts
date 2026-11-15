@@ -113,18 +113,23 @@ export function isInternalWall(footprint: Footprint, roofTris: ArrayLike<number>
 const PLINTH_TRIGGER = 0.3;
 /** …and reaches this far below the lowest terrain point (m). */
 const PLINTH_DEPTH = 0.3;
-/** Wall edge counts as a bottom edge when both ends are at most this far above the wall's lowest point (m). */
+/** Wall edge counts as a bottom edge when both ends are at most this far above the wall's lowest point (m)… */
 const BOTTOM_TOLERANCE = 0.05;
+/** …and at most this far above the building's base (walls on a lower part's roof get no plinth) (m). */
+const PLINTH_MAX_START = 0.3;
+/** Spacing of the terrain samples along each plinth edge (m). */
+const PLINTH_SAMPLE_STEP = 1;
 
 /**
  * Without `ground`, y is height above the building's lowest ground point (y = z − minZ). With `ground`,
  * y is absolute local height (z − datum); facade v stays z − minZ, and where the terrain under the walls
- * drops 0.3 m or more below the base, every wall bottom edge gets a plinth quad down to 0.3 m below
- * the lowest terrain point.
+ * comes within 0.3 m of the base or drops below it, every wall bottom edge at the base (within 0.3 m)
+ * gets a plinth quad down to 0.3 m below the lowest terrain point (sampled every 1 m along those edges
+ * and at the ground-surface corners).
  */
-export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; terrain: TerrainGrid }): BuildingMesh | null {
-  const ground = b.surfaces.filter((s) => s.kind === 'ground');
-  const groundPts = ground.flatMap((s) => s.outer);
+export function buildBuildingMesh(b: CityBuilding, ground?: { datum: number; terrain: TerrainGrid }): BuildingMesh | null {
+  const groundSurfaces = b.surfaces.filter((s) => s.kind === 'ground');
+  const groundPts = groundSurfaces.flatMap((s) => s.outer);
   const allPts = b.surfaces.flatMap((s) => s.outer);
   const refPts = groundPts.length > 0 ? groundPts : allPts;
   if (refPts.length === 0) return null;
@@ -137,7 +142,7 @@ export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; te
   }
   cx /= refPts.length; cz /= refPts.length;
 
-  const footprint: Footprint = ground.map((g) => ({
+  const footprint: Footprint = groundSurfaces.map((g) => ({
     outer: g.outer.map(([e, n]) => utmToLocal(e, n)),
     holes: g.holes.map((h) => h.map(([e, n]) => utmToLocal(e, n))),
   }));
@@ -161,7 +166,7 @@ export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; te
   }
 
   // Internal-wall and roof tests above work in the relative frame (y = z − minZ); emitted y is shifted by `base`.
-  const base = terrain ? minZ - terrain.datum : 0;
+  const base = ground ? minZ - ground.datum : 0;
   type Edge = { a: readonly [number, number, number]; b: readonly [number, number, number]; ua: number; ub: number; n: readonly [number, number, number] };
   const bottomEdges: Edge[] = [];
 
@@ -208,6 +213,7 @@ export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; te
     else flipSurface = tx * (mcx - cx) + tz * (mcz - cz) < 0;
     if (flipSurface) { tx = -tx; ty = -ty; tz = -tz; }
     if (isWall && hl >= 1e-6 && footprint.length > 0 && isInternalWall(footprint, roofTris, ring, { x: tx / hl, z: tz / hl })) continue;
+    const bottomMax = Math.min(Math.min(...ring.map((p) => p[1])) + BOTTOM_TOLERANCE, PLINTH_MAX_START);
     for (let k = 0; k < t.indices.length; k += 3) {
       let [a, bb, c] = tri(k);
       let n = normalOf(a, bb, c);
@@ -224,11 +230,10 @@ export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; te
         else uv.push(local[i]!, local[i + 2]!);
         kind.push(isWall ? 0 : 1);
       }
-      if (!terrain || !isWall) continue;
-      const wallMin = Math.min(...ring.map((p) => p[1]));
+      if (!ground || !isWall) continue;
       for (let e = 0; e < 3; e++) {
         const i = corners[e]!, j = corners[(e + 1) % 3]!;
-        if (local[i + 1]! > wallMin + BOTTOM_TOLERANCE || local[j + 1]! > wallMin + BOTTOM_TOLERANCE) continue;
+        if (local[i + 1]! > bottomMax || local[j + 1]! > bottomMax) continue;
         bottomEdges.push({
           a: [local[i]!, local[i + 1]! + base, local[i + 2]!],
           b: [local[j]!, local[j + 1]! + base, local[j + 2]!],
@@ -241,10 +246,16 @@ export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; te
   }
   if (pos.length === 0) return null;
 
-  if (terrain && bottomEdges.length > 0) {
+  if (ground && bottomEdges.length > 0) {
     let gmin = Infinity;
-    for (const e of bottomEdges) gmin = Math.min(gmin, heightAt(terrain.terrain, e.a[0], e.a[2]), heightAt(terrain.terrain, e.b[0], e.b[2]));
-    for (const g of footprint) for (const p of g.outer) gmin = Math.min(gmin, heightAt(terrain.terrain, p.x, p.z));
+    for (const { a, b: e } of bottomEdges) {
+      const steps = Math.max(1, Math.ceil(Math.hypot(e[0] - a[0], e[2] - a[2]) / PLINTH_SAMPLE_STEP));
+      for (let k = 0; k <= steps; k++) {
+        const f = k / steps;
+        gmin = Math.min(gmin, heightAt(ground.terrain, a[0] + (e[0] - a[0]) * f, a[2] + (e[2] - a[2]) * f));
+      }
+    }
+    for (const g of footprint) for (const p of g.outer) gmin = Math.min(gmin, heightAt(ground.terrain, p.x, p.z));
     if (gmin < base + PLINTH_TRIGGER) {
       const bottom = gmin - PLINTH_DEPTH;
       for (const { a, b: e, ua, ub, n } of bottomEdges) {

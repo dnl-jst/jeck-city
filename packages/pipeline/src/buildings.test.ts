@@ -255,3 +255,50 @@ test('without terrain unchanged', () => {
     expect(m.facadeUv[v * 2 + 1]!).toBeGreaterThanOrEqual(0);
   }
 });
+
+test('no plinth below a wall that stands on a lower part\'s roof', () => {
+  // 10 x 8 m block, 4 m high (flat roof at z 44); on top a 6 m wall at e = 356005 (bottom 44, top 50)
+  const E = 356000, N = 5647000, Z = 40;
+  const box = (e0: number, e1: number, n0: number, n1: number, z0: number, z1: number) => [
+    { kind: 'wall' as const, outer: [[e0, n0, z0], [e1, n0, z0], [e1, n0, z1], [e0, n0, z1]] as [number, number, number][], holes: [] },
+    { kind: 'wall' as const, outer: [[e1, n0, z0], [e1, n1, z0], [e1, n1, z1], [e1, n0, z1]] as [number, number, number][], holes: [] },
+    { kind: 'wall' as const, outer: [[e1, n1, z0], [e0, n1, z0], [e0, n1, z1], [e1, n1, z1]] as [number, number, number][], holes: [] },
+    { kind: 'wall' as const, outer: [[e0, n1, z0], [e0, n0, z0], [e0, n0, z1], [e0, n1, z1]] as [number, number, number][], holes: [] },
+  ];
+  const b = {
+    ...building(),
+    surfaces: [
+      { kind: 'ground' as const, outer: [[E, N, Z], [E, N + 8, Z], [E + 10, N + 8, Z], [E + 10, N, Z]] as [number, number, number][], holes: [] },
+      ...box(E, E + 10, N, N + 8, Z, Z + 4),
+      { kind: 'roof' as const, outer: [[E, N, Z + 4], [E + 10, N, Z + 4], [E + 10, N + 8, Z + 4], [E, N + 8, Z + 4]] as [number, number, number][], holes: [] },
+      { kind: 'wall' as const, outer: [[E + 5, N + 2, Z + 4], [E + 5, N + 6, Z + 4], [E + 5, N + 6, Z + 10], [E + 5, N + 2, Z + 10]] as [number, number, number][], holes: [] },
+    ],
+  };
+  const fp = footprintBox();
+  const m = buildBuildingMesh(b, groundOf((x) => BASE - (1.5 * (x - fp.minX)) / (fp.maxX - fp.minX)))!;
+  const upper = utmToLocal(E + 5, N + 4);
+  // the upper wall is emitted…
+  let upperWall = 0, plinthNearUpper = 0, plinthTris = 0;
+  for (let t = 0; t < m.positions.length / 9; t++) {
+    if (m.kind[t * 3] !== 0) continue;
+    const xs = [0, 1, 2].map((k) => m.positions[(t * 3 + k) * 3]!);
+    const zs = [0, 1, 2].map((k) => m.positions[(t * 3 + k) * 3 + 2]!);
+    const vs = [0, 1, 2].map((k) => m.facadeUv[(t * 3 + k) * 2 + 1]!);
+    const onUpper = xs.every((x) => Math.abs(x - upper.x) < 0.01) && zs.every((z) => Math.abs(z - upper.z) < 2.01);
+    if (vs.some((v) => v < -1e-6)) {
+      plinthTris++;
+      if (onUpper) plinthNearUpper++;
+    } else if (onUpper) upperWall++;
+  }
+  expect(upperWall).toBeGreaterThan(0);
+  // …but only the four outer walls (one bottom edge each) get plinths
+  expect(plinthNearUpper).toBe(0);
+  expect(plinthTris).toBe(8);
+});
+
+test('plinth depth follows a dip in the middle of a wall', () => {
+  // terrain at the base except a 2 m deep dip in the middle of the south wall (n = 5647000, e = 356005)
+  const dip = utmToLocal(356005, 5647000);
+  const m = buildBuildingMesh(building(), groundOf((x, z) => (Math.hypot(x - dip.x, z - dip.z) < 0.5 ? BASE - 2 : BASE)))!;
+  expect(Math.abs(minY(m) - (BASE - 2.3))).toBeLessThan(1e-3);
+});

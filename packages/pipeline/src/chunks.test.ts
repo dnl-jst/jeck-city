@@ -1,10 +1,14 @@
 import { NodeIO } from '@gltf-transform/core';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
-import { chunkKey, type TerrainGrid } from '@nn/shared';
+import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
+import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
 import { boxBuilding } from './fixture.js';
+import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
+import { parseCityGml } from './citygml.js';
+import { wallEaves } from '../../../apps/client/src/materials/facade';
 import type { Mesh } from './streets.js';
 
 const empty = (): Mesh => ({ positions: new Float32Array(), indices: new Uint32Array(), uv: new Float32Array() });
@@ -167,4 +171,26 @@ test('collision without ground rectangle when terrain is given', () => {
   expect(all).not.toContainEqual([-200, 0, -200]);
   expect(all).not.toContainEqual([500, 0, 500]);
   expect(col.indices.length).toBe((30 + 2) * 3); // 3 boxes × 10 + 2 kerb
+});
+
+test('plinths do not change the client eave heights of a merged building batch', () => {
+  const gml = readFileSync(new URL('../fixtures/gable-house.gml', import.meta.url), 'utf8');
+  const b = parseCityGml(gml)[0]!;
+  const eaves = (m: BuildingMesh) => {
+    const [chunk] = buildChunks([m], streets()).filter((c) => c.buildings);
+    const batch = chunk!.buildings!;
+    const e = wallEaves(batch.indices, batch.kind, batch.facadeUv, batch.positions.length / 3);
+    return [...new Set([...e].filter((_, i) => batch.kind[i] === 0))].sort((p, q) => p - q);
+  };
+  const flat = eaves(buildBuildingMesh(b)!);
+  // terrain falling 1.5 m across the house: plinths reach 1.8 m below the base
+  const pts = [[356000, 5647000], [356010, 5647008]].map(([e, n]) => utmToLocal(e!, n!));
+  const x0 = Math.floor(Math.min(pts[0]!.x, pts[1]!.x)) - 3, z0 = Math.floor(Math.min(pts[0]!.z, pts[1]!.z)) - 3;
+  const cols = 20, rows = 20, heights = new Float32Array(cols * rows);
+  const xa = Math.min(pts[0]!.x, pts[1]!.x), xb = Math.max(pts[0]!.x, pts[1]!.x);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = 5 - (1.5 * (x0 + c - xa)) / (xb - xa);
+  const plinthed = buildBuildingMesh(b, { datum: 35, terrain: { x0, z0, cols, rows, datum: 35, heights } })!;
+  expect(Math.min(...plinthed.facadeUv.filter((_, i) => i % 2 === 1))).toBeLessThan(-1);
+  expect(eaves(plinthed)).toEqual(flat);
+  expect(flat).not.toContain(0);
 });

@@ -22,4 +22,12 @@ describe('wallEaves', () => {
     const e = wallEaves(Uint32Array.from([0, 1, 2, 2, 1, 3]), new Float32Array(4), Float32Array.from([0, 6, 4, 6, 0, 9, 4, 9]), 4);
     expect([...e]).toEqual([9, 9, 9, 9]);
   });
+
+  it('wallEaves ignores plinth vertices', () => {
+    // wall 0..12 m with a plinth quad below it down to -1.5 m, sharing the wall's bottom vertices 0 and 1
+    const uv = [0, 0, 5, 0, 0, 12, 5, 12, 0, -1.5, 5, -1.5];
+    const index = [0, 1, 2, 2, 1, 3, 1, 0, 4, 1, 4, 5];
+    const e = wallEaves(Uint32Array.from(index), new Float32Array(6), Float32Array.from(uv), 6);
+    expect([...e]).toEqual([12, 12, 12, 12, 12, 12]);
+  });
 });
