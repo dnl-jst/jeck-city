@@ -1,6 +1,6 @@
 import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
 import {
-  Character, FixedStepper, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
+  Character, FixedStepper, staticWorldFilter, StreetProps, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
 } from '@nn/shared';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
@@ -38,6 +38,8 @@ export class Game {
   readonly figure: PlayerFigure;
   readonly cars: ParkedCars;
   readonly driven: DrivenCar;
+  /** Tree and lamp colliders; lamps hit hard enough fall over (see takeFallen). */
+  readonly props: StreetProps;
   readonly follow: FollowCamera;
   readonly fly: FreeFly;
   /** Door, starter, engine: throttle, radio and lights wait for it. */
@@ -73,6 +75,7 @@ export class Game {
     this.char = new Character(pw, { x: spawn.x, y: y + 0.02, z: spawn.z });
     this.prevPos = this.currPos = this.char.position();
     this.figure.heading = spawn.heading;
+    this.props = new StreetProps(pw, m.lamps, m.trees);
     this.cars = new ParkedCars(scene, pw, m.parked);
     this.follow = new FollowCamera(camera, pw);
     this.follow.yaw = spawn.heading;
@@ -262,7 +265,7 @@ export class Game {
   private exitFree(car: CarPose, x: number, z: number): boolean {
     const { rapier: R, world: w } = this.pw;
     const chassis = this.vehicle!.chassis;
-    const solid = staticWorldFilter(true, chassis); // city and other cars, not this car or the player
+    const solid = staticWorldFilter(true, chassis, true); // city, other cars, trees and lamps; not this car or the player
     const dx = x - car.x, dz = z - car.z, d = Math.hypot(dx, dz);
     const y = car.y + 0.1;
     const reach = d + TUNING.character.radius;
