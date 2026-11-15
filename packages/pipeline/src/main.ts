@@ -8,6 +8,7 @@ import { prepareModel } from './models.js';
 import { parseCityGml } from './citygml.js';
 import { fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
+import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
 import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
@@ -126,6 +127,10 @@ async function main() {
     edges: graph.edges,
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
+
+  const map = buildMapData(f, buildings);
+  await writeFile(join(OUT_DIR, 'map.json'), JSON.stringify(map));
+  console.log(`map: ${map.roads.length} roads (${map.roads.filter((r) => r.name).length} named), ${map.buildings.length} buildings, ${map.greens.length} greens`);
 
   const extraLamps = generatedLamps(f, buildings); // overridden footprints keep lamps out too
   const lamps = [...f.lamps, ...extraLamps];
