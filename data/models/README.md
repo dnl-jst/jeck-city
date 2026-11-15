@@ -6,6 +6,8 @@
 { "DENW37AL1000AEDb": "data/models/st-marien/st-marien.glb" }
 ```
 
+Several ids may point to the same GLB when LOD2 splits one structure into parts; the model is shipped once.
+
 The pipeline (`npm run pipeline`) then drops that building from the chunks and collision, ships the model as
 `apps/client/public/world/model_<name>.glb`, and the client loads it together with the chunk of the building.
 
@@ -29,8 +31,20 @@ Building ids and their LOD2 geometry come from `data/raw/lod2/*.gml` (fetched by
 Game coordinates: `utmToLocal` in `packages/shared/src/geo.ts`; heights are relative to the building's
 lowest ground point.
 
+## Building a model
+
+Each model has a `build.py` that generates its `.blend` and `.glb` (it overwrites both, so change the script,
+not the .blend). Shared helpers – builder with world-scale UVs, procedural textures, prisms, wall panels,
+glTF export – are in `nnmodel.py`. Headless:
+
+```sh
+cd data/models/<name> && blender -b --factory-startup --python-expr \
+  "P='$PWD/build.py'; exec(open(P).read(), {'__file__': P})"
+```
+
 ## Models
 
 | Id | Model | Source |
 |---|---|---|
-| DENW37AL1000AEDb | `st-marien/` – St. Marien, Baudriplatz | `build.py` generates the .blend and .glb (run it in Blender; it overwrites both) |
+| DENW37AL1000AEDb | `st-marien/` – St. Marien, Baudriplatz | LOD2 footprint, street photos |
+| DENW37AL1000APxJ, …BdpH, …Bdpd | `wilhelmplatz-tribuene/` – Tribüne with WC and kiosk, Wilhelmplatz | LOD2 footprint/heights, street photos, aerial |
