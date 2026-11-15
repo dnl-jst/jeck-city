@@ -127,6 +127,22 @@ describe('parked bikes', () => {
   });
 });
 
+describe('standing on a sidewalk', () => {
+  test('parked bikes and rack hoops stand on the surface, not on the terrain below it', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const R = pw.rapier;
+    const b = pw.world.createRigidBody(R.RigidBodyDesc.fixed());
+    pw.world.createCollider(R.ColliderDesc.cuboid(20, 0.06, 20).setTranslation(0, 0.06, 0), b); // 0.12 m sidewalk
+    pw.step();
+    const bikes = new ParkedBikes(pw, [bike(0, 0), bike(50, 0)]);
+    expect(bikes.poses[0]!.y).toBeCloseTo(0.12, 3);
+    expect(bikes.poses[1]!.y).toBeCloseTo(0, 3);
+    const racks = new BikeRacks(pw, [{ x: 1, z: 1, heading: 0, kind: 0 }, { x: 60, z: 0, heading: 0, kind: 1 }]);
+    expect(racks.ys[0]).toBeCloseTo(0.12, 3);
+    expect(racks.ys[1]).toBeCloseTo(0, 3);
+  });
+});
+
 describe('dismount spot', () => {
   const pose = { x: 0, y: 0, z: 0, heading: 0 };
   test('prefers left, then right, then behind', () => {

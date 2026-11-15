@@ -36,7 +36,8 @@ export class ParkedBikes {
   private riddenId: number | null = null;
 
   constructor(private readonly pw: PhysicsWorld, bikes: WorldManifest['bikes'], private readonly terrain?: TerrainGrid) {
-    this.poses = bikes.map((b) => ({ x: b.x, y: this.ground(b.x, b.z), z: b.z, heading: b.heading }));
+    // on the static surface (sidewalks lie 0.12 m above the terrain), else the terrain
+    this.poses = bikes.map((b) => ({ x: b.x, y: surfaceBelow(pw, b.x, b.z, this.ground(b.x, b.z) + 1.5) ?? this.ground(b.x, b.z), z: b.z, heading: b.heading }));
     this.types = bikes.map((b) => BIKE_TYPES[b.type]!);
     this.colors = bikes.map((b) => b.color);
   }
@@ -125,11 +126,8 @@ export class ParkedBikes {
     return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, staticWorldFilter(true, undefined, true)) === null;
   }
 
-  /** First static surface below (x, fromY, z) within 2 m. */
   private surface(x: number, z: number, fromY: number): number | null {
-    const { rapier: R, world: w } = this.pw;
-    const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), 2, true, undefined, undefined, undefined, undefined, staticWorldFilter());
-    return hit ? fromY - hit.timeOfImpact : null;
+    return surfaceBelow(this.pw, x, z, fromY);
   }
 
   private ground(x: number, z: number): number {
@@ -168,14 +166,28 @@ export class ParkedBikes {
 /** Hoop collider half extents: kind 0 stand (inverted U, long side along the bikes), 1 wall loop / bollard. */
 const RACK_HALF: Record<0 | 1, [number, number, number]> = { 0: [0.03, 0.4, 0.45], 1: [0.15, 0.45, 0.15] };
 
-/** Bike rack hoops as fixed street furniture (one collider per hoop). */
+/** First static surface (city, terrain) below (x, fromY, z) within 3 m, or null. */
+export function surfaceBelow(pw: PhysicsWorld, x: number, z: number, fromY: number): number | null {
+  const { rapier: R, world: w } = pw;
+  const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), 3, true, undefined, undefined, undefined, undefined, staticWorldFilter());
+  return hit ? fromY - hit.timeOfImpact : null;
+}
+
+/** Bike rack hoops as fixed street furniture (one collider per hoop). ys: the ground height of each hoop. */
 export class BikeRacks {
+  readonly ys: number[] = [];
+
   constructor(pw: PhysicsWorld, racks: WorldManifest['bikeRacks'], terrain?: TerrainGrid) {
     const { rapier: R, world } = pw;
-    const body = world.createRigidBody(R.RigidBodyDesc.fixed());
+    // surfaces first: the hoop colliders must not be hit by the rays of their neighbours
     for (const r of racks) {
+      const g = terrain ? heightAt(terrain, r.x, r.z) : 0;
+      this.ys.push(surfaceBelow(pw, r.x, r.z, g + 1.5) ?? g);
+    }
+    const body = world.createRigidBody(R.RigidBodyDesc.fixed());
+    for (const [i, r] of racks.entries()) {
       const [hx, hy, hz] = RACK_HALF[r.kind];
-      const y = terrain ? heightAt(terrain, r.x, r.z) : 0;
+      const y = this.ys[i]!;
       world.createCollider(
         R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(r.x, y + hy, r.z).setRotation(yawQuat(r.heading)).setCollisionGroups(PROP_GROUPS),
         body,
