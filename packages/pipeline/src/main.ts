@@ -15,6 +15,8 @@ import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
+import { sidewalkFit } from './sidewalkmetric.js';
+import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry } from './streets.js';
 import { streetTrees } from './streettrees.js';
 
@@ -80,9 +82,15 @@ async function main() {
   const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
   console.log(`shops: ${shops.length} (${Object.keys(curated).length} curated names, ${shops.filter((s) => s.sign).length} with sign)`);
 
-  const streets = buildStreetGeometry(f, active);
+  // the building line comes from every LoD2 footprint, overridden ones too (their footprint is where the model stands);
+  // streets, trees, lamps, parking and the spawn all use this one set
+  const sidewalks = allSidewalkWidths(f.roads, buildings);
+  const streets = buildStreetGeometry(f, sidewalks);
+  const fit = sidewalkFit(streets.sidewalk, [streets.road, streets.curb, streets.parking, streets.green, streets.squares], buildings);
+  const pc = (v: number) => `${((100 * v) / fit.area).toFixed(2)} %`;
+  console.log(`sidewalk: ${(fit.area / 1e3).toFixed(1)}k m², overshoot: ${fit.overshoot.toFixed(0)} m² (${pc(fit.overshoot)}), undershoot: ${fit.undershoot.toFixed(0)} m² (${pc(fit.undershoot)})`);
   const graph = buildRoadGraph(f);
-  const spawn = findSpawn(f.roads, SPAWN_TARGET, active);
+  const spawn = findSpawn(f.roads, SPAWN_TARGET, buildings);
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
 
   await mkdir(OUT_DIR, { recursive: true });
@@ -129,7 +137,7 @@ async function main() {
   const lamps = [...f.lamps, ...extraLamps];
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
-  const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps);
+  const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps, sidewalks);
   const trees = [...f.trees, ...extraTrees];
   const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);

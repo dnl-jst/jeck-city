@@ -1,13 +1,15 @@
 import type { BuildingMesh } from './buildings.js';
-import { footprintContains, footprintDistance, footprintOf } from './footprint.js';
+import { footprintContains, footprintOf } from './footprint.js';
 import type { Pt, Road } from './osm.js';
-import { edgeAt, edges } from './roadprofile.js';
-import { cumulative, dedupe, pointAt, ptKey } from './polyline.js';
+import { edgeAt } from './roadprofile.js';
+import { cumulative, dedupe, DRIVABLE } from './polyline.js';
 
 export const SIDEWALK_MIN = 1.5;
 export const SIDEWALK_MAX = 8;
 export const SIDEWALK_DEFAULT = 2.5;
-const NEAR = 10; // a building closer than this to the kerb defines the building line
+/** Sidewalk widths are sampled at every vertex and at most this far apart along the way (m). */
+export const SIDEWALK_STEP = 2;
+const NEAR = 10; // a facade closer than this to the kerb defines the building line
 const CELL = 50;
 
 /** Uniform grid over building footprint bboxes, for the "buildings near a point" query. */
@@ -43,94 +45,144 @@ export function buildingGrid(buildings: BuildingMesh[]): BuildingGrid {
   };
 }
 
-/** Distance along the ray p + t·d (d unit) to the first footprint edge of b, 0 if p is inside; Infinity if none. */
-function rayToFootprint(b: BuildingMesh, p: Pt, d: Pt): number {
-  if (footprintContains(b, p.x, p.z)) return 0;
-  const t = footprintOf(b).tris;
+/**
+ * Nearest facade straight out from the kerb point k: the smallest distance t (0 ≤ t ≤ tmax) along the outward unit
+ * direction d at which a footprint lies within the band |lateral offset| ≤ a (0 if k is inside a footprint);
+ * Infinity if none. Unlike a single ray it sees a facade that steps forward beside k and does not pass through gaps
+ * narrower than 2a.
+ */
+export function facadeDistance(buildings: BuildingMesh[], k: Pt, d: Pt, a: number, tmax: number): number {
+  const tx = -d.z, tz = d.x; // lateral axis
   let best = Infinity;
-  for (let i = 0; i < t.length; i += 6) {
-    for (let k = 0; k < 3; k++) {
-      const ax = t[i + k * 2]!, az = t[i + k * 2 + 1]!;
-      const ex = t[i + ((k + 1) % 3) * 2]! - ax, ez = t[i + ((k + 1) % 3) * 2 + 1]! - az;
-      const den = d.x * ez - d.z * ex;
-      if (Math.abs(den) < 1e-12) continue;
-      const wx = ax - p.x, wz = az - p.z;
-      const s = (wx * ez - wz * ex) / den; // along the ray
-      const u = (wx * d.z - wz * d.x) / den; // along the edge
-      if (s >= 0 && u >= 0 && u <= 1) best = Math.min(best, s);
+  for (const b of buildings) {
+    if (footprintContains(b, k.x, k.z)) return 0;
+    const t = footprintOf(b).tris;
+    for (let i = 0; i < t.length; i += 6) {
+      for (let e = 0; e < 3; e++) {
+        const ax = t[i + e * 2]! - k.x, az = t[i + e * 2 + 1]! - k.z;
+        const bx = t[i + ((e + 1) % 3) * 2]! - k.x, bz = t[i + ((e + 1) % 3) * 2 + 1]! - k.z;
+        const u0 = ax * tx + az * tz, u1 = bx * tx + bz * tz;
+        const t0 = ax * d.x + az * d.z, t1 = bx * d.x + bz * d.z;
+        // clip the edge (parameter l in [0, 1]) to -a ≤ u ≤ a, 0 ≤ t ≤ min(tmax, best)
+        let lo = 0, hi = 1;
+        const keep = (f0: number, f1: number): boolean => { // f(l) = f0 + l (f1 - f0) ≥ 0
+          if (f0 < 0 && f1 < 0) return false;
+          if (f0 < 0) lo = Math.max(lo, f0 / (f0 - f1));
+          else if (f1 < 0) hi = Math.min(hi, f0 / (f0 - f1));
+          return lo <= hi;
+        };
+        const lim = Math.min(tmax, best);
+        if (!keep(u0 + a, u1 + a) || !keep(a - u0, a - u1) || !keep(t0, t1) || !keep(lim - t0, lim - t1)) continue;
+        best = Math.min(best, t0 + (t1 - t0) * lo, t0 + (t1 - t0) * hi);
+      }
     }
   }
   return best;
 }
 
-/** Unit normals at the vertices (mitre direction, right of travel), as offsetLine uses them. */
-function vertexNormals(pts: Pt[]): Pt[] {
-  const seg = (i: number): Pt => {
-    const a = pts[i]!, b = pts[i + 1]!;
-    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
-    return { x: -(b.z - a.z) / l, z: (b.x - a.x) / l };
-  };
-  return pts.map((_, i) => {
-    const n0 = seg(Math.max(0, i - 1)), n1 = seg(Math.min(pts.length - 2, i));
-    const sx = n0.x + n1.x, sz = n0.z + n1.z;
-    const l = Math.hypot(sx, sz) || 1;
-    return { x: sx / l, z: sz / l };
-  });
+/**
+ * Sidewalk widths along a way, left and right of travel, at arc lengths `s`: every vertex of dedupe(road.points) plus
+ * the samples (≤ SIDEWALK_STEP apart) where the width does not run linearly between its neighbours.
+ */
+export type SidewalkWidths = { s: number[]; left: number[]; right: number[] };
+
+/** Width on side (+1 right of travel, -1 left) at arc length s (linear between samples, clamped). */
+export function widthAt(w: SidewalkWidths, side: number, s: number): number {
+  const v = side > 0 ? w.right : w.left;
+  let i = 1;
+  while (i < w.s.length - 1 && w.s[i]! < s) i++;
+  const t = Math.min(1, Math.max(0, (s - w.s[i - 1]!) / (w.s[i]! - w.s[i - 1]! || 1)));
+  return v[i - 1]! + (v[i]! - v[i - 1]!) * t;
+}
+
+/** Sample arc lengths: the vertices plus evenly spaced points so that no two are more than `step` apart. */
+function sampleArcs(cum: number[], step: number): number[] {
+  const out = [cum[0]!];
+  for (let i = 1; i < cum.length; i++) {
+    const n = Math.max(1, Math.ceil((cum[i]! - cum[i - 1]!) / step - 1e-9));
+    for (let j = 1; j <= n; j++) out.push(j === n ? cum[i]! : cum[i - 1]! + ((cum[i]! - cum[i - 1]!) * j) / n);
+  }
+  return out;
 }
 
 const median3 = (v: number[]): number[] =>
   v.map((x, i) => [v[Math.max(0, i - 1)]!, x, v[Math.min(v.length - 1, i + 1)]!].sort((a, b) => a - b)[1]!);
 
 /**
- * Values at the flagged vertices replaced by the nearest unflagged one (by index; the smaller of two equally near).
- * Returns null when every vertex is flagged.
+ * Sidewalk widths of a way, sampled every ≤ 2 m (SidewalkWidths), left and right of travel: from the kerb (that side's
+ * edge of the road profile) to the building line, clamped to [1.5, 8] m. The building line at a sample is the
+ * nearest facade straight out within a band of ±2 m (so the straight outer edge between two samples never reaches
+ * into a facade that either sample's band sees); where no facade lies within 10 m in that band (a gap: side street,
+ * passage, courtyard), the nearest facade within ±10 m, i.e. the neighbours' building line; 2.5 m where there is no
+ * facade within 10 m of the kerb at all. Smoothed with a median over 3 samples on kerb + width (the outer edge's
+ * distance from the centre line, so kerb ramps keep the facade line) that may only narrow a sample, never widen it.
  */
-function fromNeighbours(v: number[], flagged: boolean[]): number[] | null {
-  if (flagged.every(Boolean)) return null;
-  const ok = (j: number) => j >= 0 && j < v.length && !flagged[j];
-  return v.map((x, i) => {
-    if (!flagged[i]) return x;
-    for (let k = 1; ; k++) {
-      if (ok(i - k) && ok(i + k)) return Math.min(v[i - k]!, v[i + k]!);
-      if (ok(i - k)) return v[i - k]!;
-      if (ok(i + k)) return v[i + k]!;
+export function sidewalkWidths(road: Road, buildings: BuildingMesh[], grid: BuildingGrid = buildingGrid(buildings)): SidewalkWidths {
+  const pts = dedupe(road.points);
+  const cum = cumulative(pts);
+  const s = sampleArcs(cum, SIDEWALK_STEP);
+  // position and unit normal (right of travel; mitred at vertices) of each sample
+  const segNormal = (i: number): Pt => {
+    const a = pts[i]!, b = pts[i + 1]!;
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    return { x: -(b.z - a.z) / l, z: (b.x - a.x) / l };
+  };
+  let seg = 0;
+  const at = s.map((si) => {
+    while (seg < pts.length - 2 && cum[seg + 1]! < si - 1e-9) seg++;
+    const a = pts[seg]!, b = pts[seg + 1]!;
+    const len = cum[seg + 1]! - cum[seg]! || 1;
+    const t = Math.min(1, Math.max(0, (si - cum[seg]!) / len));
+    const p = { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
+    let n = segNormal(seg);
+    const atVertex = t < 1e-9 ? seg : t > 1 - 1e-9 ? seg + 1 : -1;
+    if (atVertex >= 0) {
+      const n0 = segNormal(Math.max(0, atVertex - 1)), n1 = segNormal(Math.min(pts.length - 2, atVertex));
+      const l = Math.hypot(n0.x + n1.x, n0.z + n1.z) || 1;
+      n = { x: (n0.x + n1.x) / l, z: (n0.z + n1.z) / l };
     }
+    return { p, n };
   });
+  const width = (p: Pt, n: Pt, side: 1 | -1, kerb: number): number => {
+    const d = { x: n.x * side, z: n.z * side };
+    const k = { x: p.x + d.x * kerb, z: p.z + d.z * kerb };
+    const cand = grid.near(k, 2 * NEAR);
+    const ahead = facadeDistance(cand, k, d, SIDEWALK_STEP, NEAR);
+    const line = ahead <= NEAR ? ahead : facadeDistance(cand, k, d, NEAR, NEAR);
+    return line <= NEAR ? Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, line)) : SIDEWALK_DEFAULT;
+  };
+  const side = (sd: 1 | -1): number[] => {
+    const kerb = s.map((si) => edgeAt(road, sd, 'kerb', si));
+    const own = at.map(({ p, n }, i) => kerb[i]! + width(p, n, sd, kerb[i]!));
+    return median3(own).map((o, i) => Math.min(o, own[i]!) - kerb[i]!);
+  };
+  return simplify({ s, left: side(-1), right: side(1) }, new Set(cum));
 }
 
-/**
- * Sidewalk width per vertex of dedupe(road.points), left and right of travel: distance from the kerb (that side's
- * edge of the road profile) to the nearest facade straight out from the road, clamped to [1.5, 8] m; 2.5 m where no building lies
- * within 10 m of the kerb. The way's endpoints and its junction vertices (`opts.junctions`, ptKeys) take the value
- * of the nearest other vertex, since their ray runs into the side street; a way with no other vertex samples its
- * middle. Then smoothed with a median over 3 vertices. Filling and smoothing work on kerb + width (the outer edge's
- * distance from the centre line), then that vertex's own kerb is subtracted, so kerb ramps keep the facade line.
- */
-export function sidewalkWidths(road: Road, buildings: BuildingMesh[], opts: { grid?: BuildingGrid; junctions?: ReadonlySet<string> } = {}): { left: number[]; right: number[] } {
-  const grid = opts.grid ?? buildingGrid(buildings);
-  const pts = dedupe(road.points);
-  const normals = vertexNormals(pts);
-  const kerbs = { left: edges(road, -1, 'kerb'), right: edges(road, 1, 'kerb') };
-  const flagged = pts.map((p, i) => i === 0 || i === pts.length - 1 || (opts.junctions?.has(ptKey(p)) ?? false));
-  const width = (p: Pt, n: Pt, s: 1 | -1, hw: number): number => {
-    const d = { x: n.x * s, z: n.z * s };
-    const kerb = { x: p.x + d.x * hw, z: p.z + d.z * hw };
-    const cand = grid.near(kerb, NEAR);
-    if (!cand.some((b) => footprintDistance(b, kerb.x, kerb.z) < NEAR)) return SIDEWALK_DEFAULT;
-    const hit = Math.min(...cand.map((b) => rayToFootprint(b, kerb, d)));
-    return Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, hit));
+/** Drops samples (never a vertex, arc lengths in `keep`) where both sides lie within 1 cm of the line between the kept neighbours. */
+function simplify(w: SidewalkWidths, keep: ReadonlySet<number>): SidewalkWidths {
+  const out: SidewalkWidths = { s: [w.s[0]!], left: [w.left[0]!], right: [w.right[0]!] };
+  let last = 0;
+  const fits = (j: number): boolean => { // the samples between `last` and j lie on the line between them
+    for (let m = last + 1; m < j; m++) {
+      const t = (w.s[m]! - w.s[last]!) / (w.s[j]! - w.s[last]! || 1);
+      for (const v of [w.left, w.right]) if (Math.abs(v[last]! + (v[j]! - v[last]!) * t - v[m]!) > 0.01) return false;
+    }
+    return true;
   };
-  const side = (s: 1 | -1) => {
-    const k = s > 0 ? kerbs.right : kerbs.left;
-    // filled and smoothed as the distance from the centre line to the outer edge, so a vertex whose kerb differs
-    // from its neighbour's (a kerb ramp) still reaches the same facade
-    const outer = pts.map((p, i) => k[i]! + width(p, normals[i]!, s, k[i]!));
-    const filled = fromNeighbours(outer, flagged);
-    if (filled) return median3(filled).map((o, i) => Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, o - k[i]!)));
-    const cum = cumulative(pts);
-    const mid = pointAt(pts, cum, cum[cum.length - 1]! / 2);
-    const v = width(mid.p, { x: -mid.dir.z, z: mid.dir.x }, s, edgeAt(road, s, 'kerb', cum[cum.length - 1]! / 2));
-    return pts.map(() => v);
-  };
-  return { left: side(-1), right: side(1) };
+  for (let j = 1; j < w.s.length; j++) {
+    const next = j + 1;
+    if (next < w.s.length && !keep.has(w.s[j]!) && fits(next)) continue;
+    out.s.push(w.s[j]!); out.left.push(w.left[j]!); out.right.push(w.right[j]!);
+    last = j;
+  }
+  return out;
+}
+
+/** Sidewalk widths of every drivable way, computed once from one building set (street meshes, trees and metrics share them). */
+export function allSidewalkWidths(roads: Road[], buildings: BuildingMesh[]): Map<Road, SidewalkWidths> {
+  const grid = buildingGrid(buildings);
+  const out = new Map<Road, SidewalkWidths>();
+  for (const r of roads) if (DRIVABLE.has(r.kind) && dedupe(r.points).length >= 2) out.set(r, sidewalkWidths(r, buildings, grid));
+  return out;
 }

@@ -40,6 +40,21 @@ export function subPolyline(points: Pt[], cum: number[], s0: number, s1: number)
   return dedupe(out);
 }
 
+/**
+ * subPolyline plus a vertex at each arc length of `at` strictly inside (s0, s1); returns the points and their arc
+ * lengths on the full line (points closer than 1 mm merged).
+ */
+export function subPolylineAt(points: Pt[], cum: number[], s0: number, s1: number, at: number[]): { pts: Pt[]; s: number[] } {
+  const ss = [s0, ...cum.slice(1, -1).filter((c) => c > s0 && c < s1), ...at.filter((c) => c > s0 && c < s1), s1].sort((a, b) => a - b);
+  const out: { pts: Pt[]; s: number[] } = { pts: [], s: [] };
+  for (const s of ss) {
+    if (out.s.length && s - out.s[out.s.length - 1]! < 1e-3) continue;
+    out.pts.push(pointAt(points, cum, s).p);
+    out.s.push(s);
+  }
+  return out;
+}
+
 export function distToPolyline(p: Pt, points: Pt[]): number {
   let best = Infinity;
   for (let i = 1; i < points.length; i++) {

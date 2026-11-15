@@ -3,6 +3,7 @@ import { boxBuilding, loadFixture } from './fixture.js';
 import { crossSectionFromTags, type CrossSection } from './crosssection.js';
 import type { Road } from './osm.js';
 import { distToPolyline } from './polyline.js';
+import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
 import { wgs84ToLocal } from '@nn/shared';
 
@@ -87,7 +88,7 @@ test('road ribbon is as wide as the carriageway from the cross-section', () => {
 test('sidewalk reaches the facade: building 4 m behind the kerb → outer edge on the facade', () => {
   const cross = crossSectionFromTags({}, 'residential'); // 6.0 m, kerbs at z = ±3
   const r: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 50, z: 0 }, { x: 100, z: 0 }], width: cross.carriageway, oneway: false, lanes: 2, cross };
-  const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, [boxBuilding('S', -10, 7, 110, 30, 12)]);
+  const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, allSidewalkWidths([r], [boxBuilding('S', -10, 7, 110, 30, 12)]));
   const south = verts(geo.sidewalk).filter((v) => v.z > 0);
   const north = verts(geo.sidewalk).filter((v) => v.z < 0);
   expect(Math.max(...south.map((v) => v.z))).toBeCloseTo(7, 4);
@@ -149,4 +150,51 @@ test('parking strip: own surface along the kerb, v = metres from the kerb, just 
 test('markings come out of buildStreetGeometry with a mark per vertex', () => {
   expect(g.markings.mark!.length).toBe(g.markings.positions.length / 3);
   expect(g.markings.indices.length).toBeGreaterThan(0); // Doppelstraße: lane dividers
+});
+
+const mkRoad = (id: number, kind: string, pts: [number, number][], tags: Record<string, string>, name?: string): Road => {
+  const cross = crossSectionFromTags(tags, kind);
+  return { id, name, kind, points: pts.map(([x, z]) => ({ x, z })), width: cross.carriageway, oneway: tags.oneway === 'yes', lanes: 2, cross };
+};
+
+test('a side street\'s sidewalks stop at the crossing road\'s kerb on their own side, not at its wider other side', () => {
+  // main road along x: 2 × 3.25 m lanes, a 4.5 m diagonal strip on the right (+z): kerbs at z = -3.25 and +7.75
+  const main = mkRoad(1, 'secondary', [[-100, 0], [0, 0], [100, 0]], { lanes: '2', 'parking:right': 'yes', 'parking:right:orientation': 'diagonal' });
+  const side = mkRoad(2, 'residential', [[0, 0], [0, -100]], {}); // leaves to the north (-z), the narrow side
+  const geo = buildStreetGeometry({ ...f, roads: [main, side], greens: [], squares: [], tramTracks: [] });
+  const sideWalk = verts(geo.sidewalk).filter((v) => Math.abs(v.x) < 4.9 && v.z < 0); // the main road's sidewalks end 5 m from the side street
+  expect(Math.max(...sideWalk.map((v) => v.z))).toBeGreaterThan(-5.01); // from the 5 m junction gap on, not from beyond 7.9 m
+});
+
+test('dual carriageway detection uses the kerbs facing each other: wide outer strips do not merge two separate roads', () => {
+  // two oneways 12 m apart, each 3.25 m lane with a 5 m perpendicular strip on its outer side; inner kerbs 1.625 m
+  const tags = { oneway: 'yes', 'parking:right': 'yes', 'parking:right:orientation': 'perpendicular' };
+  const east = mkRoad(1, 'secondary', [[-100, 0], [0, 0], [100, 0]], tags, 'Ring');
+  const west = mkRoad(2, 'secondary', [[100, -12], [0, -12], [-100, -12]], tags, 'Ring');
+  const geo = buildStreetGeometry({ ...f, roads: [east, west], greens: [], squares: [], tramTracks: [] });
+  expect(verts(geo.green).length).toBe(0);
+  expect(verts(geo.sidewalk).filter((v) => v.z < -1.625 - 0.1 && v.z > -12 + 1.625 + 0.1).length).toBeGreaterThan(4);
+});
+
+test('long way segment along a stepped facade: the sidewalk gets vertices between the way\'s vertices and stays out of the buildings', () => {
+  const r = mkRoad(1, 'residential', [[0, 0], [60, 0]], {}); // kerbs at z = ±3
+  const b = [boxBuilding('A', -10, 7, 20, 30, 12), boxBuilding('B', 20, 5, 40, 30, 12), boxBuilding('C', 40, 8, 70, 30, 12)];
+  const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, allSidewalkWidths([r], b));
+  const south = verts(geo.sidewalk).filter((v) => v.z > 0);
+  expect(south.some((v) => v.x > 1 && v.x < 59)).toBe(true); // outer-edge vertices at the facade steps
+  const facade = (x: number) => (x < 20 ? 7 : x <= 40 ? 5 : 8);
+  for (const v of south) expect(v.z).toBeLessThanOrEqual(Math.min(facade(v.x - 1e-3), facade(v.x + 1e-3)) + 1e-3);
+  expect(Math.max(...south.filter((v) => v.x < 16).map((v) => v.z))).toBeCloseTo(7, 3); // on the facade before the step
+});
+
+test('an overridden building still bounds the sidewalk: an override drops its mesh from the chunks, not its building line', async () => {
+  const { buildChunks } = await import('./chunks.js');
+  const r = mkRoad(1, 'residential', [[0, 10], [40, 10]], {}); // kerbs at z = 7 and 13
+  const church = boxBuilding('church', 5, 16, 35, 40, 20); // facade 3 m behind the south kerb
+  const overrides = { church: 'data/models/church.glb' };
+  const streets = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, allSidewalkWidths([r], [church]));
+  const chunk = buildChunks([church], streets, overrides).find((c) => c.streets.sidewalk)!;
+  expect(chunk.buildings).toBeUndefined(); // the model replaces the LoD2 mesh …
+  const sw = chunk.streets.sidewalk!;
+  for (let i = 0; i < sw.positions.length; i += 3) expect(sw.positions[i + 2]!).toBeLessThanOrEqual(16 + 1e-4); // … the sidewalk still ends at its facade
 });

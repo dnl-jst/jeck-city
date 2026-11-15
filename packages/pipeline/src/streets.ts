@@ -1,9 +1,8 @@
 import earcut from 'earcut';
-import type { BuildingMesh } from './buildings.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, offsetLine, ptKey, subPolyline } from './polyline.js';
+import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, offsetLine, ptKey, subPolylineAt } from './polyline.js';
 import { buildMarkings } from './markings.js';
-import { buildingGrid, sidewalkWidths } from './sidewalkwidth.js';
+import { allSidewalkWidths, type SidewalkWidths, widthAt } from './sidewalkwidth.js';
 import { edges } from './roadprofile.js';
 
 /** uv: u = metres along the ribbon, v = metres across (polygons: world x/z metres). */
@@ -111,9 +110,12 @@ function segSegDist(a: Pt, b: Pt, c: Pt, d: Pt): number {
   return Math.min(distToPolyline(a, [c, d]), distToPolyline(b, [c, d]), distToPolyline(c, [a, b]), distToPolyline(d, [a, b]));
 }
 
-type Arm = { dir: Pt; hw: number }; // a road leaving a junction node: unit direction away from it, wider kerb distance there
-/** hw: the wider half (kerb) of the way, for neighbours; kerb: per-vertex kerb distance per side. */
-type Prepared = { r: Road; pts: Pt[]; cum: number[]; hw: number; kerb: { left: number[]; right: number[] }; widths: { left: number[]; right: number[] }; median: MedianInfo[] };
+/** A road leaving a junction node: unit direction away from it, kerb distances there right and left of that direction. */
+type Arm = { dir: Pt; kerbR: number; kerbL: number };
+/** Kerb distance of an arm on the side of point p (relative to the node). */
+const armKerb = (o: Arm, node: Pt, p: Pt): number => ((p.x - node.x) * -o.dir.z + (p.z - node.z) * o.dir.x >= 0 ? o.kerbR : o.kerbL);
+/** kerb: per-vertex kerb distance per side; widths: sampled sidewalk widths (none for non-drivable ways). */
+type Prepared = { r: Road; pts: Pt[]; cum: number[]; kerb: { left: number[]; right: number[] }; widths: SidewalkWidths | null; median: MedianInfo[] };
 /** Per vertex: the side (+1 right, -1 left, 0 none) where the opposite carriageway of a dual carriageway lies, and its centre distance. */
 type MedianInfo = { side: number; d: number };
 
@@ -129,14 +131,19 @@ function armCut(node: Pt, t: Pt, sign: number, side: number, hw: number, outer: 
   for (let a = JUNCTION_GAP; a < MAX_JUNCTION_GAP; a += 0.25) {
     const p0 = { x: node.x + u.x * a + n.x * side * hw, z: node.z + u.z * a + n.z * side * hw };
     const p1 = { x: node.x + u.x * a + n.x * side * outer, z: node.z + u.z * a + n.z * side * outer };
-    const clear = rel.every((o) => segSegDist(p0, p1, node, { x: node.x + o.dir.x * 500, z: node.z + o.dir.z * 500 }) >= o.hw + CURB_W);
+    const mid = { x: (p0.x + p1.x) / 2, z: (p0.z + p1.z) / 2 };
+    const clear = rel.every((o) => segSegDist(p0, p1, node, { x: node.x + o.dir.x * 500, z: node.z + o.dir.z * 500 }) >= armKerb(o, node, mid) + CURB_W);
     if (clear) return a;
   }
   return MAX_JUNCTION_GAP;
 }
 
-/** Dual carriageways: two oneway ways of the same name, running opposite (±30°), centre lines closer than hw1 + hw2 + 6 m. */
-function medianInfo(r: Road, pts: Pt[], all: Prepared[]): MedianInfo[] {
+/**
+ * Dual carriageways: two oneway ways of the same name, running opposite (±30°), centre lines closer than the sum of
+ * their kerb distances on the sides facing each other + 6 m.
+ */
+function medianInfo(pr: Prepared, all: Prepared[]): MedianInfo[] {
+  const { r, pts } = pr;
   const partners = r.oneway && r.name ? all.filter((q) => q.r !== r && q.r.oneway && q.r.name === r.name) : [];
   return pts.map((p, i) => {
     const t = unit(pts[Math.max(0, i - 1)]!, pts[Math.min(pts.length - 1, Math.max(1, i))]!);
@@ -149,12 +156,19 @@ function medianInfo(r: Road, pts: Pt[], all: Prepared[]): MedianInfo[] {
         const dq = unit(a, b);
         if (dq.x * tm.x + dq.z * tm.z > -Math.cos((30 * Math.PI) / 180) * Math.hypot(tm.x, tm.z)) continue;
         const d = distToPolyline(p, [a, b]);
-        if (d >= best.d || d >= q.hw + r.width / 2 + DUAL_EXTRA) continue;
+        if (d >= best.d) continue;
         const ab = sub(b, a), l2 = ab.x * ab.x + ab.z * ab.z || 1;
         const s = Math.min(1, Math.max(0, ((p.x - a.x) * ab.x + (p.z - a.z) * ab.z) / l2));
         const foot = { x: a.x + ab.x * s, z: a.z + ab.z * s };
         const n = right(tm);
-        best = { side: (foot.x - p.x) * n.x + (foot.z - p.z) * n.z >= 0 ? 1 : -1, d };
+        const side = (foot.x - p.x) * n.x + (foot.z - p.z) * n.z >= 0 ? 1 : -1;
+        // the partner's kerb on the side facing p, this way's kerb on the side facing the partner
+        const qSide = (p.x - a.x) * -dq.z + (p.z - a.z) * dq.x >= 0 ? 1 : -1;
+        const qk = qSide > 0 ? q.kerb.right : q.kerb.left;
+        const theirs = qk[k - 1]! + (qk[k]! - qk[k - 1]!) * s;
+        const mine = (side > 0 ? pr.kerb.right : pr.kerb.left)[i]!;
+        if (d >= theirs + mine + DUAL_EXTRA) continue;
+        best = { side, d };
       }
     }
     return best;
@@ -167,8 +181,8 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
   addRibbon(b.road, pts, offsetLine(pts, pr.kerb.left.map((k) => -k)), offsetLine(pts, pr.kerb.right), y, y, 0, r.width);
   if (!DRIVABLE.has(r.kind)) return;
   const total = cum[cum.length - 1]!;
+  const sw = pr.widths!;
   for (const side of [1, -1]) {
-    const widths = side > 0 ? pr.widths.right : pr.widths.left;
     const kerb = side > 0 ? pr.kerb.right : pr.kerb.left;
     const cycle = edges(r, side, 'cycle'); // the parking strip runs from the cycle lane (or lanes) to the kerb
     const cuts: [number, number][] = [];
@@ -176,7 +190,7 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
       const key = ptKey(p);
       if (!junc.has(key)) return;
       const others = (arms.get(key) ?? []).filter((a) => a.road !== r);
-      const outer = kerb[i]! + widths[i]!;
+      const outer = kerb[i]! + widthAt(sw, side, cum[i]!);
       const back = i > 0 ? armCut(p, unit(pts[i - 1]!, p), -1, side, kerb[i]!, outer, others) : 0;
       const ahead = i < pts.length - 1 ? armCut(p, unit(p, pts[i + 1]!), 1, side, kerb[i]!, outer, others) : 0;
       cuts.push([cum[i]! - back, cum[i]! + ahead]);
@@ -196,12 +210,12 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
       b.green.strip(lift(g0, GREEN_Y), lift(g1, GREEN_Y), [cum[i - 1]!, cum[i]!], 0, 1);
     }
     for (const [s0, s1] of complement(cuts, total)) {
-      const seg = subPolyline(pts, cum, s0, s1);
+      // the sidewalk samples become vertices, so its outer edge follows the building line between the way's vertices
+      const { pts: seg, s: segCum } = subPolylineAt(pts, cum, s0, s1, sw.s); // segCum: arc lengths on the full road
       if (seg.length < 2) continue;
-      const segCum = cumulative(seg).map((c) => c + s0); // arc lengths on the full road
       const k = segCum.map((c) => valueAt(cum, kerb, c));
       const cyc = segCum.map((c) => valueAt(cum, cycle, c));
-      const w = segCum.map((c) => valueAt(cum, widths, c) - CURB_W); // paved width behind the kerb stone
+      const w = segCum.map((c) => widthAt(sw, side, c) - CURB_W); // paved width behind the kerb stone
       const inner = offsetLine(seg, k.map((v) => side * v));
       const outer = offsetLine(seg, k.map((v) => side * (v + CURB_W)));
       const far = offsetLine(seg, w.map((wi, j) => side * (k[j]! + CURB_W + wi)));
@@ -232,11 +246,11 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
 /**
  * Street meshes. Road ribbons run kerb to kerb as the road profile places them (roadprofile.ts: lanes symmetric about
  * the way, cycle lane and strip outwards per side, ramps between ways); kerbs at its edges; sidewalks from the kerb to the
- * building line (`sidewalkWidths`, 2.5 m without buildings), ending before junctions where they would reach into
+ * building line (`widths`: sidewalkWidths per way, computed once by the caller; default: no buildings, 2.5 m), ending before junctions where they would reach into
  * another carriageway; the inner sides of dual carriageways get a green median instead. Parking strips (cross-section)
  * are a surface from the cycle lane (or lanes) to the kerb wherever the kerb runs, tapering in ramps (uv.y = metres from the kerb); `markings` see markings.ts.
  */
-export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = []): { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh; markings: Mesh; parking: Mesh } {
+export function buildStreetGeometry(f: OsmFeatures, widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, [])): { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh; markings: Mesh; parking: Mesh } {
   const road = new MeshBuilder();
   const sidewalk = new MeshBuilder();
   const curb = new MeshBuilder();
@@ -247,17 +261,16 @@ export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = 
 
   const net = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = junctions(net.map((r) => dedupe(r.points)));
-  const grid = buildingGrid(buildings);
-  const juncKeys = new Set(junc.keys());
   const prepared: Prepared[] = [];
   for (const r of f.roads) {
     const pts = dedupe(r.points);
     if (pts.length < 2) continue;
     const kerb = { left: edges(r, -1, 'kerb'), right: edges(r, 1, 'kerb') };
-    const widths = DRIVABLE.has(r.kind) ? sidewalkWidths(r, buildings, { grid, junctions: juncKeys }) : { left: [], right: [] };
-    prepared.push({ r, pts, cum: cumulative(pts), hw: Math.max(...kerb.left, ...kerb.right), kerb, widths, median: [] });
+    const w = widths.get(r);
+    if (DRIVABLE.has(r.kind) && !w) throw new Error(`buildStreetGeometry: no sidewalk widths for way ${r.id}`);
+    prepared.push({ r, pts, cum: cumulative(pts), kerb, widths: w ?? null, median: [] });
   }
-  for (const p of prepared) p.median = medianInfo(p.r, p.pts, prepared.filter((q) => DRIVABLE.has(q.r.kind)));
+  for (const p of prepared) p.median = medianInfo(p, prepared.filter((q) => DRIVABLE.has(q.r.kind)));
   // every arm of a network road at each junction node
   const arms = new Map<string, (Arm & { road: Road })[]>();
   for (const p of prepared) {
@@ -266,9 +279,9 @@ export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = 
       const key = ptKey(pt);
       if (!junc.has(key)) return;
       const list = arms.get(key) ?? [];
-      const hw = Math.max(p.kerb.left[i]!, p.kerb.right[i]!);
-      if (i > 0) list.push({ dir: unit(pt, p.pts[i - 1]!), hw, road: p.r });
-      if (i < p.pts.length - 1) list.push({ dir: unit(pt, p.pts[i + 1]!), hw, road: p.r });
+      // an arm pointing back along the way has the way's left side on its right
+      if (i > 0) list.push({ dir: unit(pt, p.pts[i - 1]!), kerbR: p.kerb.left[i]!, kerbL: p.kerb.right[i]!, road: p.r });
+      if (i < p.pts.length - 1) list.push({ dir: unit(pt, p.pts[i + 1]!), kerbR: p.kerb.right[i]!, kerbL: p.kerb.left[i]!, road: p.r });
       arms.set(key, list);
     });
   }

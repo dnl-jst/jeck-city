@@ -1,9 +1,9 @@
 import { FLAG_NEUSSER, type BuildingMesh } from './buildings.js';
 import { footprintContains, footprintDistance } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt } from './polyline.js';
+import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, pointAt } from './polyline.js';
 import { edgeAt, inRamp, nearestOn, onCarriageway, profileOf } from './roadprofile.js';
-import { buildingGrid, sidewalkWidths } from './sidewalkwidth.js';
+import { allSidewalkWidths, buildingGrid, type SidewalkWidths, widthAt } from './sidewalkwidth.js';
 
 /** Mean distance between street trees along a sidewalk (m), and the seeded jitter of each gap (±). */
 export const TREE_SPACING = 14;
@@ -34,23 +34,18 @@ function rand(seed: number, id: number, side: number, k: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-/** Linear value of per-vertex `v` at arc length s. */
-function atS(v: number[], cum: number[], s: number): number {
-  let i = 1;
-  while (i < cum.length - 1 && cum[i]! < s) i++;
-  const t = Math.min(1, Math.max(0, (s - cum[i - 1]!) / (cum[i]! - cum[i - 1]! || 1)));
-  return v[i - 1]! + (v[i]! - v[i - 1]!) * t;
-}
-
 /**
- * Street trees generated along drivable roads on each side whose sidewalk (sidewalkWidths, as the street meshes
- * use them) is ≥ 3.5 m wide: every 14 ± 2 m (seeded per road and side), 1.2 m behind that side's kerb (road profile;
+ * Street trees generated along drivable roads on each side whose sidewalk (`widths`: the sidewalk widths the street
+ * meshes use; computed from `buildings` when not given) is ≥ 3.5 m wide: every 14 ± 2 m (seeded per road and side), 1.2 m behind that side's kerb (road profile;
  * none in a kerb ramp). A candidate is skipped near an OSM tree (8 m), within 2.5 m of a shopfront building (bit 0),
  * within 8 m of a crossing carriageway's kerb (junctions), near a tram stop (15 m), a tram track (2.5 m), a lamp
  * (2 m), the spawn (4 m), another generated tree (7 m), on a carriageway or inside a building footprint.
  * Deterministic: depends on the seed and the input order. OSM trees are not included.
  */
-export function streetTrees(f: OsmFeatures, buildings: BuildingMesh[], spawn: Pt, seed: number, lamps: Pt[] = f.lamps): Pt[] {
+export function streetTrees(
+  f: OsmFeatures, buildings: BuildingMesh[], spawn: Pt, seed: number, lamps: Pt[] = f.lamps,
+  widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, buildings),
+): Pt[] {
   const net = f.roads.filter((r) => (DRIVABLE.has(r.kind) || r.kind === 'service') && dedupe(r.points).length >= 2).map((r) => {
     const pts = dedupe(r.points);
     const p = profileOf(r);
@@ -59,7 +54,6 @@ export function streetTrees(f: OsmFeatures, buildings: BuildingMesh[], spawn: Pt
   });
   type Box = (typeof net)[number]['box'];
   const inBox = (q: Pt, b: Box) => q.x >= b.minX && q.x <= b.maxX && q.z >= b.minZ && q.z <= b.maxZ;
-  const juncKeys = new Set(junctions(net.map((n) => dedupe(n.r.points))).keys());
   const grid = buildingGrid(buildings);
   const out: Pt[] = [];
 
@@ -76,12 +70,12 @@ export function streetTrees(f: OsmFeatures, buildings: BuildingMesh[], spawn: Pt
     const pts = dedupe(r.points);
     const cum = cumulative(pts);
     const total = cum[cum.length - 1]!;
-    const widths = sidewalkWidths(r, buildings, { grid, junctions: juncKeys });
+    const sw = widths.get(r);
+    if (!sw) throw new Error(`streetTrees: no sidewalk widths for way ${r.id}`);
     for (const side of [1, -1] as const) {
-      const w = side > 0 ? widths.right : widths.left;
       let k = 0;
       for (let s = TREE_SPACING / 2 + (rand(seed, r.id, side, k) - 0.5) * 2 * TREE_JITTER; s <= total; k++, s += TREE_SPACING + (rand(seed, r.id, side, k) - 0.5) * 2 * TREE_JITTER) {
-        if (s < 0 || atS(w, profileOf(r).cum, s) < TREE_MIN_SIDEWALK) continue;
+        if (s < 0 || widthAt(sw, side, s) < TREE_MIN_SIDEWALK) continue;
         if (inRamp(r, s - 1, s + 1)) continue; // the kerb moves there
         const { p, dir } = pointAt(pts, cum, s);
         const off = side * (edgeAt(r, side, 'kerb', s) + TREE_KERB_OFFSET);

@@ -5,7 +5,7 @@ import { boxBuilding, loadFixture } from './fixture.js';
 import { buildMarkings } from './markings.js';
 import type { OsmFeatures, Road } from './osm.js';
 import { parkedCarSpots } from './parking.js';
-import { edges, sideOffsets, withProfiles } from './roadprofile.js';
+import { edgeAt, sideOffsets, withProfiles } from './roadprofile.js';
 import { sidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
 
@@ -21,7 +21,7 @@ const f: OsmFeatures = {
   ...loadFixture(), roads, tramTracks: [], tramStops: [], greens: [], squares: [],
   boundary: [{ x: -300, z: -300 }, { x: 300, z: -300 }, { x: 300, z: 300 }, { x: -300, z: 300 }],
 };
-const g = buildStreetGeometry(f, []);
+const g = buildStreetGeometry(f);
 const verts = (m: Mesh) => Array.from({ length: m.positions.length / 3 }, (_, i) => ({ x: m.positions[i * 3]!, y: m.positions[i * 3 + 1]!, z: m.positions[i * 3 + 2]! }));
 /** Inner kerb edge on one side (sign of z): per distinct x, the curb vertex nearest to the axis. */
 function kerbLine(side: number): { x: number; d: number }[] {
@@ -139,10 +139,7 @@ test('sidewalk outer edge stays on the facade through a ramp (width filled as di
   const walls = [boxBuilding('N', -200, -40, 200, -12, 10), boxBuilding('S', -200, 12, 200, 40, 10)]; // widths 2.65..7.15 m, inside the 1.5..8 m clamp
   for (const r of roads) {
     const w = sidewalkWidths(r, walls);
-    for (const side of [-1, 1]) {
-      const k = edges(r, side, 'kerb');
-      (side > 0 ? w.right : w.left).forEach((wi, i) => expect(k[i]! + wi).toBeCloseTo(12, 2));
-    }
+    for (const side of [-1, 1]) (side > 0 ? w.right : w.left).forEach((wi, i) => expect(edgeAt(r, side, 'kerb', w.s[i]!) + wi).toBeCloseTo(12, 2));
   }
 });
 
