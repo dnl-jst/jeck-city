@@ -73,3 +73,11 @@ test('at most 300 spots', () => {
   const long: Road = { id: 1, kind: 'tertiary', points: [{ x: 0, z: 0 }, { x: 20000, z: 0 }], width: 8, oneway: false, lanes: 1 };
   expect(parkedCarSpots({ ...f, roads: [long], tramTracks: [], tramStops: [] }, 3)).toHaveLength(300);
 });
+
+test('T-junction with a primary road blocks parking within 10 m', () => {
+  const main: Road = { id: 1, kind: 'primary', points: [{ x: -300, z: 0 }, { x: 0, z: 0 }, { x: 300, z: 0 }], width: 10, oneway: false, lanes: 1 };
+  const side: Road = { id: 2, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 0, z: 200 }], width: 6.5, oneway: false, lanes: 1 };
+  const s = parkedCarSpots({ ...f, roads: [main, side], tramTracks: [], tramStops: [] }, 5);
+  expect(s.length).toBeGreaterThan(0);
+  expect(s.every((p) => Math.hypot(p.pos.x, p.pos.z) >= 10)).toBe(true);
+});

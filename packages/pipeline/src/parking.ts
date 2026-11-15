@@ -1,5 +1,5 @@
 import type { OsmFeatures, Pt } from './osm.js';
-import { cumulative, dedupe, dist, distToPolyline, junctions, pointAt } from './polyline.js';
+import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt } from './polyline.js';
 
 const SPACING = 6;
 const OCCUPANCY = 0.4;
@@ -29,7 +29,7 @@ function rng(seed: number): () => number {
  */
 export function parkedCarSpots(f: OsmFeatures, seed: number): { pos: Pt; heading: number }[] {
   const rand = rng(seed);
-  const roads = f.roads.filter((r) => PARKABLE.has(r.kind) || r.kind === 'service' || r.kind === 'unclassified' || r.kind === 'living_street');
+  const roads = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = [...junctions(roads.map((r) => dedupe(r.points))).values()];
   const blockers = [...junc, ...f.tramStops.map((s) => s.pos)];
   const spots: { pos: Pt; heading: number }[] = [];

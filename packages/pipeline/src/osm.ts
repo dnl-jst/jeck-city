@@ -116,13 +116,14 @@ export function parseOsm(json: unknown): OsmFeatures {
   return f;
 }
 
-/** Stadtbahn/tram stop: tram_stop node, stop_position for light rail/tram, or a named platform that is not bus-only. */
+/** Stadtbahn/tram stop: tram_stop node, stop_position for light rail/tram, or a named platform with rail evidence (railway=platform, tram/light_rail/train=yes); highway=bus_stop never. */
 function isStopTags(t: Tags): boolean {
   if (!t.name) return false;
   if (t.railway === 'tram_stop') return true;
+  if (t.highway === 'bus_stop') return false;
   const rail = t.light_rail === 'yes' || t.tram === 'yes';
   if (t.public_transport === 'stop_position') return rail;
-  return t.public_transport === 'platform' && (rail || t.bus !== 'yes');
+  return t.public_transport === 'platform' && (rail || t.railway === 'platform' || t.train === 'yes');
 }
 
 /** Same-named stops within 60 m collapse to one; stop positions beat platform centres. */

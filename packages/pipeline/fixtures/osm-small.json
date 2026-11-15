@@ -374,6 +374,28 @@
    "tags": {
     "railway": "rail"
    }
+  },
+  {
+   "type": "node",
+   "id": 2003,
+   "lat": 50.9629,
+   "lon": 6.954,
+   "tags": {
+    "public_transport": "platform",
+    "highway": "bus_stop",
+    "bus": "yes",
+    "name": "Busplatz"
+   }
+  },
+  {
+   "type": "node",
+   "id": 2004,
+   "lat": 50.9628,
+   "lon": 6.9542,
+   "tags": {
+    "public_transport": "platform",
+    "name": "Nur Name"
+   }
   }
  ]
 }
