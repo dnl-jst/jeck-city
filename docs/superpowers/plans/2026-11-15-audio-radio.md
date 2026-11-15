@@ -278,3 +278,96 @@ Verhalten `GameAudio`:
 - [ ] **Step 2:** `npm run dev` im Hintergrund, dann `npm run drive-check` → PASS-Ausgabe inkl. Radio-Zeilen, keine Konsolenfehler/unbehandelten Rejections.
 - [ ] **Step 3:** Manuelle Hörprobe dem Nutzer übergeben (Ton lässt sich nicht automatisch beurteilen): Checkliste – Einsteigen (Tür, Start, Köllefornia), R/Mausrad, Radio aus, N, Schritte gehen/rennen, Sprung, Vollgas/Bremsen/Handbremse, gegen Wand fahren, Haltestelle (Klingel kann bis 3 min dauern), Tab wechseln.
 - [ ] **Step 4: Commit** `test(audio): drive-check covers the car radio`
+
+---
+
+## Nachtrag: Tasks 9–11 (Nutzerwünsche, Spec-Abschnitt „Nachtrag 2026-11-15“)
+
+Ausführungsreihenfolge: 7 → 9 → 10 → 11 → 8 (Browser-Prüfung zuletzt, deckt alles ab).
+
+### Task 9: Tieferes Drehzahlmodell
+
+**Files:**
+- Modify: `apps/client/src/audio/engine-model.ts`, `apps/client/src/audio/engine-model.test.ts`
+
+**Interfaces:**
+- Produces (geändert): `GEAR_TOP_KMH = [20, 35, 50, Infinity]`; neue Konstanten `GEAR1_TOP_RPM = 3000`, `SHIFT_LOW_RPM = 1500`, `CRUISE_TOP_RPM = 3200`, `REV_IN_PLACE_RPM = 1800`. `IDLE_RPM = 800` bleibt; `REDLINE_RPM` entfällt, falls nirgends mehr genutzt.
+
+Algorithmus: Gang 1: `rpm = IDLE + f·(GEAR1_TOP_RPM − IDLE)`; höhere Gänge: `rpm = SHIFT_LOW_RPM + f·(CRUISE_TOP_RPM − SHIFT_LOW_RPM)` (letzter Gang `top = 60`). Gas im Stand: `max(rpm, REV_IN_PLACE_RPM)`. Ohne Gas: `max(IDLE, rpm·0.85)` wie bisher.
+
+- [ ] **Step 1: Tests anpassen** (alte Erwartungen ersetzen):
+  - `idle at standstill`: `engineTarget(0,0)` → `{gear:0, rpm:800}`.
+  - `revving in place`: `engineTarget(0,1).rpm` → `1800`.
+  - `city speed sounds relaxed`: `engineTarget(50,1)` → `gear 3`, `rpm` zwischen 1500 und 2200; `engineTarget(45,1).rpm` zwischen 2500 und 3200.
+  - `top speed`: `engineTarget(60,1).rpm` ≈ 3200 (±1).
+  - `shift drop`: `engineTarget(19,1).rpm > 2700`, `engineTarget(21,1)` → `gear 1`, `rpm < 1700`.
+  - `never above 3200 under 60 km/h`: für kmh 0..60 in 0.5er-Schritten, throttle 1 → `rpm ≤ 3200`.
+- [ ] **Step 2:** `npx vitest run apps/client/src/audio/engine-model.test.ts apps/client/src/audio/vehicle-sound.test.ts` → neue FAIL.
+- [ ] **Step 3:** Konstanten/Formeln ändern; `vehicle-sound.test.ts` nur anpassen, falls dort feste Drehzahlwerte erwartet werden.
+- [ ] **Step 4:** → PASS, `npm test`, `npm run typecheck`.
+- [ ] **Step 5: Commit** `fix(audio): calmer engine rpm model for city speeds`
+
+---
+
+### Task 10: Anlassen – Gas, Radio und Lichter erst bei laufendem Motor
+
+**Files:**
+- Create: `apps/client/src/ignition.ts`, `apps/client/src/ignition.test.ts`
+- Modify: `apps/client/src/game.ts` (getIn/getOut, frame: Gas sperren, render: Lichter), `apps/client/src/car.ts` (`DrivenCar.setLights`), `apps/client/src/audio/game-audio.ts` (+ Test), `apps/client/src/main.ts` (`__nnState` um `engine`)
+
+**Interfaces:**
+- Produces:
+  - `export const DOOR_CLOSE_AT = 0.35, CRANK_AT = 0.5` und `export const ENGINE_CATCH_S` = Zeitpunkt (s) innerhalb von `engine-start.ogg`, ab dem der Motor hörbar rund läuft – mit `ffmpeg` (Pegelverlauf/`astats` in 50-ms-Fenstern) am Ende des Anlasser-Orgelns bestimmen, als Konstante mit Kommentar zur Messung.
+  - `export type IgnitionEvent = 'doorClose' | 'crank' | 'running'`
+  - `export class Ignition { readonly state: 'off' | 'starting' | 'running'; start(): void; stop(): void; update(dt: number): IgnitionEvent[]; lightPower(rand: () => number): number }` – `start()` setzt t=0; Ereignisse bei `DOOR_CLOSE_AT`, `CRANK_AT`, `CRANK_AT + ENGINE_CATCH_S` (dann `state = 'running'`). `lightPower`: 0 vor `CRANK_AT`; während des Anlassens `0.25 + 0.35·rand()` (Flackern, je Frame neu); `1` wenn `running`; `0` wenn `off`.
+  - `DrivenCar.setLights(night: number, braking: boolean, power: number)` – alle bisherigen Intensitäten × `power`; Bremslicht nur wenn `power > 0.5`; Lichtkegel nur sichtbar wenn `power > 0.5 && night > 0.02`.
+  - `GameAudio`: `enterCar()` spielt nur noch `doorOpen` und setzt In-Car-Mix; neue Methoden `doorClosed(): void` (spielt `doorClose`), `crank(): void` (spielt `engineStart`), `engineRunning(): void` (startet `VehicleSound` gemäß Load/Unlock-Regel und tunt `tuner.enterCar()` → Flash Sendername). `exitCar()` vor `engineRunning()`: kein `engineStop`, kein Radio; sonst wie bisher. Der bisherige interne Tür-Timer in GameAudio entfällt (Ignition taktet).
+- Game: `getIn` → `ignition.start()`, `audio.enterCar()`; jedes Frame `ignition.update(dt)` → Ereignisse an `audio.doorClosed()/crank()/engineRunning()`; solange `state !== 'running'`: `vehicle.applyInput({ throttle: 0, steer, brake })`; `getOut` → `ignition.stop()`. `render`: `driven.setLights(night, braking, ignition.lightPower(Math.random))`. `__nnState().engine` = `ignition.state`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `ignition.test.ts`:
+    - `sequence`: nach `start()` liefert `update` in 1/60-Schritten genau einmal `doorClose` (bei ≥ 0.35 s), einmal `crank` (≥ 0.5 s), einmal `running` (≥ 0.5 + ENGINE_CATCH_S); `state` `starting` → `running`.
+    - `stop during start`: `start(); update(0.6); stop()` → `state 'off'`, weitere `update` liefern nichts.
+    - `lights`: vor 0.5 s → 0; während Anlassen mit `rand=()=>0` → 0.25, `rand=()=>1` → 0.6; laufend → 1; aus → 0.
+  - `game-audio.test.ts` (bestehende Tests an neuen Ablauf anpassen):
+    - `radio waits for the engine`: `enterCar()` → kein `radio.tune` mit Sender, kein Flash; `engineRunning()` → `tune('koellefornia')`, Flash „Radio Köllefornia“.
+    - `crank plays the starter`: `crank()` → OneShot `engineStart`; `doorClosed()` → `doorClose`.
+    - `leaving while cranking`: `enterCar(); crank(); exitCar()` → kein `engineStop`, `radio.tune` nur mit `null`, Station `null`.
+    - `radioStep before the engine runs does nothing`.
+- [ ] **Step 2:** `npx vitest run apps/client/src/ignition.test.ts apps/client/src/audio/game-audio.test.ts` → FAIL.
+- [ ] **Step 3:** Implementieren (Ignition, GameAudio, Game, DrivenCar, main).
+- [ ] **Step 4:** `npm test`, `npm run typecheck` grün; `node scripts/drive-check.mjs` gegen laufenden Dev-Server: Skript muss nach E zusätzlich auf `__nnState().engine === 'running'` warten, bevor W gedrückt wird (Skript entsprechend anpassen).
+- [ ] **Step 5: Commit** `feat(car): engine start sequence gates throttle, radio and lights`
+
+---
+
+### Task 11: Radio-Rad mit Fantasie-Logos
+
+**Files:**
+- Create: `apps/client/src/audio/wheel-control.ts` (+ `.test.ts`), `apps/client/src/radio-wheel.ts` (DOM-Overlay), `apps/client/src/audio/logos.ts` (Inline-SVG-Strings)
+- Modify: `apps/client/src/audio/stations.ts` (+ Test: `RadioTuner.select`), `apps/client/src/audio/game-audio.ts` (+ Test: `radioSelect`), `apps/client/src/game.ts` (R-Handling, Maus während Rad), `apps/client/src/main.ts`, `apps/client/src/hud.ts` (CSS), `scripts/drive-check.mjs`
+
+**Interfaces:**
+- Produces:
+  - `RadioTuner.select(id: StationId | null): StationId | null` – nur im Auto, sonst `current` unverändert.
+  - `GameAudio.radioSelect(id: StationId | null): void` – nur bei laufendem Motor (wie `radioStep`); gleicher Sender wie aktuell → nichts neu tunen, nur Flash.
+  - `export const WHEEL_SLOTS: readonly (StationId | null)[] = ['koellefornia', 'radiokoeln', 'einslive', null]` (oben, rechts, unten, links).
+  - `export const HOLD_S = 0.2, PICK_RADIUS_PX = 40`
+  - `export class WheelControl { update(i: { held: boolean; dx: number; dy: number; dt: number; current: StationId | null }): { open: boolean; highlighted: StationId | null; commit?: StationId | null; tap?: true }; cancel(): void }` – R gehalten < `HOLD_S` und losgelassen → `{ tap: true }`; gehalten ≥ `HOLD_S` → `open`, Mausbewegung summiert in einen Vektor (auf `2·PICK_RADIUS_PX` Länge begrenzt); Länge ≥ `PICK_RADIUS_PX` → Feld nach Winkel (Bildschirm: dy positiv = unten), sonst `highlighted = current`; Loslassen bei offenem Rad → `commit = highlighted`. `cancel()` schließt ohne commit.
+  - `export class RadioWheel { constructor(root: HTMLElement); render(s: { open: boolean; highlighted: StationId | null; current: StationId | null }): void }` – DOM-Overlay mittig, vier Felder als Ring (Kreis Ø ≈ 340 px, auf schmalen Fenstern `min(340px, 80vmin)`), jedes mit Logo (`logos.ts`) und Name darunter, hervorgehobenes Feld vergrößert/aufgehellt, aktueller Sender mit Punkt markiert; nur Klassen-/Text-Updates bei Änderung (kein Neuaufbau je Frame).
+  - `logos.ts`: `export const LOGOS: Record<StationId | 'off', string>` – eigene, schlichte Fantasie-SVGs (viewBox 0 0 100 100, keine Ähnlichkeit zu echten Senderlogos): Köllefornia z. B. Palme + Dom-Silhouette in Sonnenuntergangsfarben; Radio Köln z. B. Dom-Spitzen in Rot/Weiß mit Wellen; 1LIVE z. B. große „1“ mit Funkwellen in Neon; Aus: durchgestrichener Lautsprecher.
+- Game: im Fahrmodus (nicht fliegend) jedes Frame `wheel.update({ held: input.held('KeyR'), dx, dy, dt, current })`; während `open`: Maus **nicht** an `follow.turn` geben; `tap` → `audio.radioStep(1)`; `commit` → `audio.radioSelect(commit)`. Bisheriges `consume('KeyR')` entfällt (Druck verwerfen, damit keine alte Betätigung nachwirkt). Beim Aussteigen `wheel.cancel()`. `__nnState().wheelOpen` für das Skript.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `wheel-control.test.ts`:
+    - `tap is next station`: held 0.1 s, dann losgelassen → letztes Ergebnis `{ tap: true }`, nie `open`.
+    - `hold opens the wheel`: held 0.25 s → `open: true`, `highlighted === current`.
+    - `point and release selects`: offen, `dx = +60` → `highlighted 'radiokoeln'`; `dy = +60` (ab Null) → `'einslive'`; `dx = −60` → `null`; `dy = −60` → `'koellefornia'`; loslassen → `commit` = zuletzt hervorgehoben.
+    - `small movement keeps current`: offen, `dx = 10` → `highlighted === current`.
+    - `cancel closes without commit`.
+  - `stations.test.ts`: `select jumps to a station, only in the car`.
+  - `game-audio.test.ts`: `radioSelect tunes and flashes`; `radioSelect same station only flashes`.
+- [ ] **Step 2:** `npx vitest run apps/client/src/audio/` → neue FAIL.
+- [ ] **Step 3:** Implementieren; Overlay-CSS in `HUD_CSS` (Farben passend zum HUD: Gold `#f2c46b`, dunkles Glas `rgba(10,12,20,0.6)`), `pointer-events: none`.
+- [ ] **Step 4:** `npm test`, `npm run typecheck`; `drive-check.mjs` ergänzen: nach Motorstart `R` 0.4 s halten (`keyboard.down`, warten auf `__nnState().wheelOpen`), Maus nach rechts bewegen (`page.mouse.move` wirkt nur bei Pointer-Lock – stattdessen Test-Hook `window.__nnWheelNudge(dx, dy)` nur im Dev-Build) , loslassen → `radio === 'radiokoeln'`; Screenshot des offenen Rads nach `shotsDir` (falls angegeben). Gegen Dev-Server laufen lassen → PASS.
+- [ ] **Step 5: Commit** `feat(radio): GTA-style radio wheel with fantasy station logos`

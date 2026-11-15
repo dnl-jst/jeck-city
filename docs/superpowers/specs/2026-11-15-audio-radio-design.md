@@ -108,3 +108,11 @@ Gewählt: **B**, vom Nutzer bestätigt („nimm gerne freie Aufnahmen“). Umset
 - Modulaufteilung (z. B. `apps/client/src/audio/`), Three.js-Audio oder rohe Web Audio API.
 - Konkrete Aufnahmen und Schnitt, Mixwerte.
 - Ob Untergrund-Erkennung für Schritte billig genug ist.
+
+## Nachtrag 2026-11-15 (Nutzerwünsche während der Umsetzung)
+
+- **Motorstart zuerst:** Beim Einsteigen Tür auf/zu, dann Anlasser. Erst wenn der Motor hörbar läuft, nimmt das Auto Gas an und das Radio startet. Lenken, Bremsen und Aussteigen gehen schon vorher. Aussteigen während des Anlassens bricht ab (kein Motor, kein Radio).
+- **Lichter:** Scheinwerfer/Rücklichter sind vor dem Anlassen aus, flackern beim Anlassen leicht (Batterie-Einbruch) und gehen an, wenn der Motor läuft.
+- **Motor klingt zu hochtourig:** Bei ~50 km/h soll der Motor nach Stadtverkehr klingen (≈ 2500–3200 U/min), nicht nach Drehzahlbegrenzer. Höchsttempo bleibt 60 km/h; das Drehzahlmodell wird niedriger abgestimmt (früher schalten, tiefere Drehzahlen). *(Claudes Wahl: Modell statt Tempo ändern – Fahrphysik bleibt unberührt.)*
+- **Radio-Rad wie bei GTA:** R gedrückt halten öffnet ein Rad in der Bildmitte mit vier Feldern (oben Köllefornia, rechts Radio Köln, unten 1LIVE, links Aus); Maus zeigt auf ein Feld (Kamera steht so lange still), Loslassen von R schaltet ein. R kurz antippen = nächster Sender wie bisher; Mausrad bleibt. Spiel läuft weiter (keine Zeitlupe, wegen späterem Multiplayer). Aktueller Sender hervorgehoben.
+- **Logos:** Fantasie-Logos (eigene SVGs, keine echten Senderlogos), je eines pro Sender plus Symbol für „Aus“.
