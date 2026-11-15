@@ -71,8 +71,8 @@ export class Vehicle {
     });
   }
 
-  /** Driver input; call once per fixed step before PhysicsWorld.step(). Ignored while unoccupied. */
-  applyInput(i: VehicleInput, dt: number): void {
+  /** Driver input for one fixed step (TUNING.world.dt); call once per step before PhysicsWorld.step(). Ignored while unoccupied. */
+  applyInput(i: VehicleInput): void {
     if (!this.occupied) return;
     const c = this.ctrl;
     const v = this.speed();
@@ -83,7 +83,7 @@ export class Vehicle {
     const k = Math.max(0, Math.min(1, (kmh - T.steerLowKmh) / (T.steerHighKmh - T.steerLowKmh)));
     const lock = T.steerLowLock + (T.steerHighLock - T.steerLowLock) * k;
     const target = -Math.max(-1, Math.min(1, i.steer)) * lock; // positive wheel angle turns left
-    const maxDelta = T.steerRate * dt;
+    const maxDelta = T.steerRate * TUNING.world.dt;
     this.steerAngle += Math.max(-maxDelta, Math.min(maxDelta, target - this.steerAngle));
 
     // Throttle against the direction of travel brakes first; only near standstill does it change gear.

@@ -60,8 +60,10 @@ export async function createPhysicsWorld(c: CollisionAsset): Promise<PhysicsWorl
   world.timestep = TUNING.world.dt;
 
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  const mesh = subdivideLargeTriangles(c.vertices, c.indices, TUNING.world.maxTriangleEdge);
-  world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices), ground);
+  const mesh = subdivideLargeTriangles(c.vertices, dropZeroAreaTriangles(c.vertices, c.indices), TUNING.world.maxTriangleEdge);
+  // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
+  // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
+  world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
   addBoundaryWalls(world, ground, c.boundary);
   // One empty step builds the broad phase, so ray casts and character queries work right away
   // (World.updateSceneQueries is declared in the typings but missing at runtime in 0.21.0).
@@ -97,6 +99,21 @@ function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float3
       body,
     );
   }
+}
+
+/** Indices without the triangles of zero area (coincident or collinear corners); the same array if there are none. */
+export function dropZeroAreaTriangles(v: Float32Array, idx: Uint32Array): Uint32Array {
+  const keep: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = 3 * idx[t]!, b = 3 * idx[t + 1]!, c = 3 * idx[t + 2]!;
+    const ux = v[b]! - v[a]!, uy = v[b + 1]! - v[a + 1]!, uz = v[b + 2]! - v[a + 2]!;
+    const wx = v[c]! - v[a]!, wy = v[c + 1]! - v[a + 1]!, wz = v[c + 2]! - v[a + 2]!;
+    if (uy * wz - uz * wy !== 0 || uz * wx - ux * wz !== 0 || ux * wy - uy * wx !== 0) keep.push(t);
+  }
+  if (keep.length === idx.length / 3) return idx;
+  const out = new Uint32Array(keep.length * 3);
+  keep.forEach((t, k) => out.set(idx.subarray(t, t + 3), 3 * k));
+  return out;
 }
 
 /**

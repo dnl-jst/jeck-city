@@ -8,6 +8,8 @@ export type CharacterInput = { forward: number; right: number; run: boolean; yaw
 type Vec3 = { x: number; y: number; z: number };
 
 const T = TUNING.character;
+/** Every step is exactly one fixed world step, so client prediction and server stay in lockstep. */
+const DT = TUNING.world.dt;
 /** Capsule centre above the feet (the controller keeps a skin gap below the capsule). */
 const CENTRE = T.height / 2 + T.skin;
 
@@ -38,7 +40,7 @@ export class Character {
     this.kcc.setMinSlopeSlideAngle(T.maxSlope);
   }
 
-  applyInput(i: CharacterInput, dt: number): void {
+  applyInput(i: CharacterInput): void {
     if (!this.enabled) return;
     let f = i.forward, r = i.right;
     const l = Math.hypot(f, r);
@@ -52,11 +54,11 @@ export class Character {
       this.vy = T.jumpSpeed;
       this.grounded = false;
     }
-    this.vy += T.gravity * dt;
+    this.vy += T.gravity * DT;
 
     this.kcc.computeColliderMovement(
       this.collider,
-      { x: vx * dt, y: this.vy * dt, z: vz * dt },
+      { x: vx * DT, y: this.vy * DT, z: vz * DT },
       this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS,
     );
     const m = this.kcc.computedMovement();
@@ -65,7 +67,7 @@ export class Character {
     if (this.grounded) this.vy = 0;
     const p = this.body.translation();
     this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
-    this.vel = { x: m.x / dt, y: m.y / dt, z: m.z / dt };
+    this.vel = { x: m.x / DT, y: m.y / DT, z: m.z / DT };
   }
 
   /** Feet position. */
@@ -94,5 +96,11 @@ export class Character {
     this.enabled = on;
     this.collider.setEnabled(on);
     if (!on) { this.vy = 0; this.vel = { x: 0, y: 0, z: 0 }; }
+  }
+
+  /** Removes the character (controller, body and its collider) from the world. The instance must not be used afterwards. */
+  dispose(): void {
+    this.pw.world.removeCharacterController(this.kcc);
+    this.pw.world.removeRigidBody(this.body);
   }
 }

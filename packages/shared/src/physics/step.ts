@@ -18,9 +18,12 @@ export class FixedStepper {
     return this.acc / this.step;
   }
 
-  /** Adds dt seconds of frame time and calls fn once per fixed step due. Returns the number of steps run. */
+  /**
+   * Adds dt seconds of frame time and calls fn once per fixed step due. Returns the number of steps run.
+   * A NaN, negative or infinite dt (clock glitches) counts as 0.
+   */
   advance(dt: number, fn: () => void): number {
-    this.acc += dt;
+    if (Number.isFinite(dt) && dt > 0) this.acc += dt;
     let n = 0;
     // A tiny tolerance so that e.g. three frames of 1/60 s give three steps despite rounding.
     const eps = 1e-9;

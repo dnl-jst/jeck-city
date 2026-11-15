@@ -96,10 +96,10 @@ export class Game {
     const steer = this.flying ? { forward: 0, right: 0 } : input.axes();
     this.stepper.advance(dt, () => {
       if (this.mode === 'walk') {
-        this.char.applyInput({ forward: steer.forward, right: steer.right, run: input.run() && !this.flying, yaw: this.follow.yaw, jump: this.jumpPending }, DT);
+        this.char.applyInput({ forward: steer.forward, right: steer.right, run: input.run() && !this.flying, yaw: this.follow.yaw, jump: this.jumpPending });
         this.jumpPending = false;
       } else {
-        this.vehicle!.applyInput({ throttle: steer.forward, steer: steer.right, brake: input.brake() && !this.flying }, DT);
+        this.vehicle!.applyInput({ throttle: steer.forward, steer: steer.right, brake: input.brake() && !this.flying });
       }
       this.pw.step();
       this.prevPos = this.currPos;
