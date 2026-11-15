@@ -1,10 +1,12 @@
 import { wgs84ToLocal } from '@nn/shared';
+import { withProfiles, type Profile } from './roadprofile.js';
 import { crossSectionFromTags, reversed, type CrossSection, type SeparateSides } from './crosssection.js';
 import { separateParkingSides, type ParkingArea } from './separateparking.js';
 
 export type Pt = { x: number; z: number };
 /** width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order. */
-export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection };
+/** width = carriageway (kerb to kerb); profile (withProfiles): side edges per vertex incl. ramps between ways. */
+export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile };
 export type OsmFeatures = {
   boundary: Pt[];
   roads: Road[];
@@ -146,6 +148,8 @@ export function parseOsm(json: unknown): OsmFeatures {
   f.tramStops = dedupeStops(stops);
   // parking:*=separate becomes a strip where a street-side parking area runs alongside
   for (const p of pending) f.roads[p.index] = parseRoad(p.el, p.pts, p.t, separateParkingSides(p.pts, parkingAreas))!;
+  // kerbs, strips and cycle lanes run on across way splits (ramps instead of steps)
+  f.roads = withProfiles(f.roads);
   return f;
 }
 

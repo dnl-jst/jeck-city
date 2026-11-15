@@ -1,6 +1,7 @@
 import type { Pt, Road } from './osm.js';
 import { cumulative, dedupe, dist, DRIVABLE, junctions, offsetLine, pointAt, ptKey, subPolyline } from './polyline.js';
 import type { Mesh } from './streets.js';
+import { edgeAt, edges, sideOffsets } from './roadprofile.js';
 
 /** Markings lie this far above their road ribbon. */
 export const MARK_DY = 0.004;
@@ -29,7 +30,11 @@ export type PieceKind = 'centre' | 'lane' | 'cycle' | 'park' | 'furt' | 'red' | 
  */
 export type Piece = { kind: PieceKind; road: number; side: number; s0: number; s1: number; x: number; z: number; travel?: number };
 
-type Arm = { dir: Pt; hw: number; road: Road; y: number };
+/** kl/kr: kerb distance left/right of the arm's direction (away from the node). */
+type Arm = { dir: Pt; kl: number; kr: number; road: Road; y: number };
+/** An offset from the centre line, constant or per arc length. */
+type Off = number | ((s: number) => number);
+const val = (o: Off, s: number): number => (typeof o === 'number' ? o : o(s));
 /** One arm of a road at a junction node: the other carriageways it crosses there, and whether the road goes straight on. */
 type NodeArm = { conflicts: Arm[]; through: boolean };
 type RoadNode = { p: Pt; s: number; back?: NodeArm; ahead?: NodeArm };
@@ -116,9 +121,10 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
       const key = ptKey(p);
       if (!junc.has(key)) return;
       const list = arms.get(key) ?? [];
-      const a = { hw: r.width / 2, road: r, y: roadY(r) };
-      if (i > 0) list.push({ ...a, dir: unit(p, pts[i - 1]!) });
-      if (i < pts.length - 1) list.push({ ...a, dir: unit(p, pts[i + 1]!) });
+      const kl = edges(r, -1, 'kerb')[i]!, kr = edges(r, 1, 'kerb')[i]!;
+      const a = { road: r, y: roadY(r) };
+      if (i > 0) list.push({ ...a, dir: unit(p, pts[i - 1]!), kl: kr, kr: kl }); // against the way: sides swap
+      if (i < pts.length - 1) list.push({ ...a, dir: unit(p, pts[i + 1]!), kl, kr });
       arms.set(key, list);
     });
   }
@@ -170,8 +176,8 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
         for (const a of na.conflicts) {
           // beside the arm's centre line, on its side of the node (no round cap reaching across the through road)
           const along = (q.x - n.p.x) * a.dir.x + (q.z - n.p.z) * a.dir.z;
-          const across = Math.abs((q.x - n.p.x) * a.dir.z - (q.z - n.p.z) * a.dir.x);
-          if (along > -0.5 && along < ARM_LEN && across < a.hw + margin) return { node: n, arm: a, through: na.through };
+          const across = (q.x - n.p.x) * -a.dir.z + (q.z - n.p.z) * a.dir.x; // > 0: right of the arm
+          if (along > -0.5 && along < ARM_LEN && Math.abs(across) < (across >= 0 ? a.kr : a.kl) + margin) return { node: n, arm: a, through: na.through };
         }
       }
       return null;
@@ -185,12 +191,14 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
     for (let s = 0; s < len; s += STEP) samples.push(s);
     samples.push(len);
 
-    const emit = (kind: PieceKind, side: number, a: number, b: number, d0: number, d1: number, m: number) => {
+    const emit = (kind: PieceKind, side: number, a: number, b: number, d0: Off, d1: Off, m: number) => {
       if (b - a < MIN_PIECE) return;
       const seg = subPolyline(pts, cum, a, b);
       if (seg.length < 2) return;
-      out.strip(offsetLine(seg, d0), offsetLine(seg, d1), cumulative(seg).map((u) => u + a), d1 - d0, y, m);
-      const mid = at((a + b) / 2, (d0 + d1) / 2);
+      const u = cumulative(seg).map((v) => v + a);
+      const sm = (a + b) / 2;
+      out.strip(offsetLine(seg, u.map((v) => val(d0, v))), offsetLine(seg, u.map((v) => val(d1, v))), u, val(d1, sm) - val(d0, sm), y, m);
+      const mid = at(sm, (val(d0, sm) + val(d1, sm)) / 2);
       pieces.push({ kind, road: r.id, side, s0: a, s1: b, x: mid.x, z: mid.z });
     };
     /** Runs of consecutive samples with the same non-null state. */
@@ -209,23 +217,24 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
       return res;
     };
     /** A white line centred at d, width w; `cycleAt` (cycle lane centre) makes it a cycle line broken 1/1 across crossings. */
-    const line = (kind: PieceKind, side: number, d: number, w: number, pattern: [number, number] | null, cycleAt?: number) => {
+    const line = (kind: PieceKind, side: number, d: Off, w: number, pattern: [number, number] | null, cycleAt?: Off, when?: (s: number) => boolean) => {
       const state = (s: number): 'n' | 'f' | null => {
-        const q0 = at(s, d - w / 2), q1 = at(s, d + w / 2);
+        if (when && !when(s)) return null;
+        const q0 = at(s, val(d, s) - w / 2), q1 = at(s, val(d, s) + w / 2);
         if (nearNode(q0) || nearNode(q1)) return null;
-        if (cycleAt !== undefined && furtNode(s, cycleAt)) return 'f';
+        if (cycleAt !== undefined && furtNode(s, val(cycleAt, s))) return 'f';
         return conflict(s, q0, CONFLICT_MARGIN) || conflict(s, q1, CONFLICT_MARGIN) ? null : 'n';
       };
       for (const { st, a, b } of runs(state)) {
         const pat = st === 'f' ? FURT : pattern;
-        for (const [s0, s1] of pat ? dashes(a, b, pat) : [[a, b] as [number, number]]) emit(st === 'f' ? 'furt' : kind, side, s0, s1, d - w / 2, d + w / 2, 0);
+        for (const [s0, s1] of pat ? dashes(a, b, pat) : [[a, b] as [number, number]]) emit(st === 'f' ? 'furt' : kind, side, s0, s1, (s) => val(d, s) - w / 2, (s) => val(d, s) + w / 2, 0);
       }
     };
 
     const c = r.cross;
-    const hw = r.width / 2;
     const lw = c.laneWidth;
-    const centre = -hw + c.parkLeft + c.cycleLeft + c.lanesBackward * lw;
+    // lanes lie symmetric about the way's centre line (roadprofile.ts); lane markings stay straight
+    const centre = -sideOffsets(c).left.lane + c.lanesBackward * lw;
     if (c.lanesForward > 0 && c.lanesBackward > 0 && CENTRE_KINDS.has(r.kind)) {
       // ≥ 2 lanes per direction: solid double line (Doppellinie), otherwise a dashed Leitlinie
       if (c.lanesForward >= 2 && c.lanesBackward >= 2) for (const k of [-1, 1]) line('centre', 0, centre + k * LINE_W, LINE_W, null);
@@ -238,35 +247,37 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
       const cyc = side > 0 ? c.cycleRight : c.cycleLeft;
       const park = side > 0 ? c.parkRight : c.parkLeft;
       if (cyc <= 0) continue;
-      const inner = side > 0 ? centre + c.lanesForward * lw : -hw + park + cyc; // edge towards the traffic lane
-      const outer = inner + side * cyc; // edge towards the kerb or parking strip
-      const lineIn = inner + side * WIDE_W; // free cycle lane between the two lines
-      const lineOut = park > 0 ? outer - side * LINE_W : outer;
-      const mid = (lineIn + lineOut) / 2;
-      line('cycle', side, inner + (side * WIDE_W) / 2, WIDE_W, null, mid);
-      if (park > 0) line('park', side, outer - (side * LINE_W) / 2, LINE_W, null, mid);
+      // edges follow the profile (ramps between ways); a strip counts where it is ≥ 0.5 m wide
+      const inner = (s: number) => side * edgeAt(r, side, 'lane', s); // edge towards the traffic lane
+      const outer = (s: number) => side * edgeAt(r, side, 'cycle', s); // edge towards the kerb or parking strip
+      const hasPark = (s: number) => edgeAt(r, side, 'kerb', s) - edgeAt(r, side, 'cycle', s) >= 0.5;
+      const lineIn = (s: number) => inner(s) + side * WIDE_W; // free cycle lane between the two lines
+      const lineOut = (s: number) => (hasPark(s) ? outer(s) - side * LINE_W : outer(s));
+      const mid = (s: number) => (lineIn(s) + lineOut(s)) / 2;
+      line('cycle', side, (s) => inner(s) + (side * WIDE_W) / 2, WIDE_W, null, mid);
+      if (park > 0) line('park', side, (s) => outer(s) - (side * LINE_W) / 2, LINE_W, null, mid, hasPark);
       // red crossing: the free cycle lane between the lines, where every corner is ≤ RED_MAX from the node
       const [d0, d1] = side > 0 ? [lineIn, lineOut] : [lineOut, lineIn];
       const red = (s: number): RoadNode | null => {
-        const n = furtNode(s, mid);
-        return n && dist(at(s, d0), n.p) <= RED_MAX && dist(at(s, d1), n.p) <= RED_MAX ? n : null;
+        const n = furtNode(s, mid(s));
+        return n && dist(at(s, d0(s)), n.p) <= RED_MAX && dist(at(s, d1(s)), n.p) <= RED_MAX ? n : null;
       };
       for (const { a, b } of runs(red)) emit('red', side, a, b, d0, d1, 1);
       // pictograms facing the direction of travel of this lane
-      const half = Math.abs(lineOut - lineIn) / 2;
-      const sx = Math.min(1.1, (0.85 * half) / BIKE_HALF_X);
       for (let s = BIKE_FIRST; s < len - BIKE_HALF_Y; s += BIKE_EVERY) {
+        const half = Math.abs(lineOut(s) - lineIn(s)) / 2;
+        const sx = Math.min(1.1, (0.85 * half) / BIKE_HALF_X);
         const clear = [s - BIKE_HALF_Y, s + BIKE_HALF_Y].every((sa) =>
-          [mid - half, mid + half].every((dd) => {
+          [mid(sa) - half, mid(sa) + half].every((dd) => {
             const q = at(sa, dd);
             return !nearNode(q) && !conflict(sa, q, CONFLICT_MARGIN);
-          }) && !furtNode(sa, mid));
+          }) && !furtNode(sa, mid(sa)));
         if (!clear) continue;
         const { p, dir } = pointAt(pts, cum, s);
         const travel = side > 0 ? c.cycleRightDir : c.cycleLeftDir;
         const f = { x: dir.x * travel, z: dir.z * travel };
         const rt = { x: -f.z, z: f.x };
-        const o = at(s, mid);
+        const o = at(s, mid(s));
         const w = (x: number, yy: number): Pt => ({ x: o.x + rt.x * x * sx + f.x * yy * BIKE_SY, z: o.z + rt.z * x * sx + f.z * yy * BIKE_SY });
         const bar = (x0: number, y0: number, x1: number, y1: number) => {
           const l = Math.hypot(x1 - x0, y1 - y0) || 1;

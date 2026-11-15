@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { decodeCollision, TUNING } from '@nn/shared';
 import { boxBuilding, loadFixture, crossOf } from './fixture.js';
 import { crossSectionFromTags } from './crosssection.js';
+import { sideOffsets } from './roadprofile.js';
 import type { Road } from './osm.js';
 import { footprintContains, footprintDistance, insideAnyFootprint } from './footprint.js';
 import { findSpawn } from './spawn.js';
@@ -84,7 +85,7 @@ test('spawn prefers the sidewalk beside a parking strip, 1.0 m from the kerb; th
   // way drawn north (-z): right of travel = (-dz, dx) = east; strip on the left (west) only
   for (const [pts, tag] of [[[[30, 200], [30, -200]], 'parking:left'], [[[30, -200], [30, 200]], 'parking:right']] as [[number, number][], string][]) {
     const r = neusser(pts, { lanes: '2', 'cycleway:both': 'lane', [tag]: 'lane' });
-    const hw = r.width / 2;
+    const hw = sideOffsets(r.cross)[tag === 'parking:left' ? 'left' : 'right'].kerb; // the west kerb
     const s = findSpawn([r], { x: 0, z: 0 }, []);
     expect(s.x).toBeCloseTo(30 - hw - 1.0, 5); // west sidewalk
     const spot = spawnCarSpot({ ...bigWorld, roads: [r] }, s, []);
@@ -97,7 +98,7 @@ test('spawn prefers the sidewalk beside a parking strip, 1.0 m from the kerb; th
 test('the spawn car stands ahead along the spawn heading, not along a guessed north', () => {
   // an east–west Neusser Straße drawn west → east, strip on the right (south); the spawn faces west
   const r = neusser([[-200, 30], [200, 30]], { 'parking:right': 'lane' });
-  const spawn = { x: 0, y: 0.12, z: 30 + r.width / 2 + 1, heading: -Math.PI / 2 };
+  const spawn = { x: 0, y: 0.12, z: 30 + sideOffsets(r.cross).right.kerb + 1, heading: -Math.PI / 2 };
   const spot = spawnCarSpot({ ...bigWorld, roads: [r] }, spawn, []);
   expect(spot.pos.x).toBeLessThan(0);
   expect(Math.hypot(spot.pos.x - spawn.x, spot.pos.z - spawn.z)).toBeLessThanOrEqual(2.7);

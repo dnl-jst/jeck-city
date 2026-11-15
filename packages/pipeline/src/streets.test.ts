@@ -130,19 +130,19 @@ test('sidewalks of a side street stop before a wide crossing carriageway', () =>
 });
 
 test('parking strip: own surface along the kerb, v = metres from the kerb, just above the road', () => {
-  const cross = crossSectionFromTags({ 'parking:right': 'lane' }, 'residential'); // 6.0 + 2.0 → kerbs at ±4
+  const cross = crossSectionFromTags({ 'parking:right': 'lane' }, 'residential'); // lanes ±3.0, strip 3..5 on the right
   const r: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 100, z: 0 }], width: cross.carriageway, oneway: false, lanes: 2, cross };
   const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] });
   const v = verts(geo.parking);
   expect(v.length).toBeGreaterThan(0);
   const roadY = verts(geo.road)[0]!.y;
   v.forEach((p, i) => {
-    expect(p.z).toBeGreaterThanOrEqual(2 - 1e-4); // right of travel (east) is +z
-    expect(p.z).toBeLessThanOrEqual(4 + 1e-4);
-    expect(geo.parking.uv[i * 2 + 1]).toBeCloseTo(4 - p.z, 4);
+    expect(p.z).toBeGreaterThanOrEqual(3 - 1e-4); // right of travel (east) is +z
+    expect(p.z).toBeLessThanOrEqual(5 + 1e-4);
+    expect(geo.parking.uv[i * 2 + 1]).toBeCloseTo(5 - p.z, 4);
     expect(p.y).toBeCloseTo(roadY + 0.002, 6);
   });
-  expect(v.some((p) => Math.abs(p.z - 2) < 1e-4)).toBe(true);
+  expect(v.some((p) => Math.abs(p.z - 3) < 1e-4)).toBe(true);
   expect(geo.markings.indices.length).toBe(0); // residential, no cycle lanes: no markings
 });
 
