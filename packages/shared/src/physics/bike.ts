@@ -19,8 +19,8 @@ const T = TUNING.bike;
 const DT = TUNING.world.dt;
 const KMH = 1 / 3.6;
 const G = 9.81;
-/** Front wheel angle follows the input at this rate (rad/s). */
-const STEER_RATE = 4;
+/** The front wheel angle eases towards the requested one with this time constant (s): steering builds up gently. */
+const STEER_TAU = 0.25;
 /** Pedal revolutions per wheel revolution are 1/GEAR; with a 0.35 m wheel. */
 const GEAR = 2.5;
 const WHEEL_R = 0.35;
@@ -121,10 +121,12 @@ export class RiddenBike {
     // steering: lock tapers with speed; front wheel eases towards it
     const kmh = Math.abs(s.speed) / KMH;
     const k = Math.max(0, Math.min(1, (kmh - T.steerLowKmh) / (T.steerHighKmh - T.steerLowKmh)));
-    const lock = sp.steerLowLock + (sp.steerHighLock - sp.steerLowLock) * k;
+    // the lock tapers with speed and never asks for more than maxYaw (turn rate = v · tan(angle) / wheelbase)
+    const v = Math.abs(s.speed);
+    const yawLock = v > 0.1 ? Math.atan((sp.maxYaw * sp.wheelbase) / v) : Infinity;
+    const lock = Math.min(sp.steerLowLock + (sp.steerHighLock - sp.steerLowLock) * k, yawLock);
     const target = steerIn * lock * (s.grounded ? 1 : T.airSteer);
-    const md = STEER_RATE * DT;
-    s.steer += Math.max(-md, Math.min(md, target - s.steer));
+    s.steer += (target - s.steer) * (1 - Math.exp(-DT / STEER_TAU));
     // turning right lowers the heading (forward (sin h, cos h), right (−cos h, sin h))
     s.heading -= (s.speed * Math.tan(s.steer) / sp.wheelbase) * DT;
     s.heading = Math.atan2(Math.sin(s.heading), Math.cos(s.heading));

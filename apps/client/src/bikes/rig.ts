@@ -11,6 +11,8 @@ const SPOT_INTENSITY = 2500;
 const LAMP_GLOW = 3;
 
 const WHEELS = ['wheel_front', 'wheel_front_l', 'wheel_front_r', 'wheel_rear'];
+/** The shown lean follows the physics lean with this time constant (s): the bike tips in and out softly. */
+const LEAN_TAU = 0.22;
 
 /**
  * The ridden bike: a clone of a bike model (nodes per data/models/bikes/README.md) under a pose group (position,
@@ -27,6 +29,8 @@ export class BikeRig {
   private readonly nodes = new Map<string, Object3D>();
   private readonly radius = new Map<string, number>();
   private spot: SpotLight | null = null;
+  private lean = 0;
+  private snap = false;
 
   constructor(model: Object3D, readonly type: BikeType) {
     this.root.add(this.leanGroup);
@@ -75,16 +79,23 @@ export class BikeRig {
     }
   }
 
+  /** Shows the target lean at once on the next update (getting on, tests). */
+  snapLean(): void {
+    this.snap = true;
+  }
+
   /** The node `name` of the model (frame, fork, wheel_front, …), if it has one. */
   node(name: string): Object3D | undefined {
     return this.nodes.get(name);
   }
 
-  /** Places the bike at its state and animates it; dt = seconds since the last call (wheel spin). */
+  /** Places the bike at its state and animates it; dt = seconds since the last call (wheel spin, lean easing). */
   update(s: BikeState, lean: number, dt: number): void {
     this.root.position.set(s.x, s.y, s.z);
     this.root.rotation.y = s.heading;
-    this.leanGroup.rotation.z = lean;
+    this.lean = this.snap ? lean : this.lean + (lean - this.lean) * (1 - Math.exp(-dt / LEAN_TAU));
+    this.snap = false;
+    this.leanGroup.rotation.z = this.lean;
     const yaw = -s.steer; // positive steer = right = towards −x
     for (const n of ['fork', 'bar']) {
       const o = this.nodes.get(n);

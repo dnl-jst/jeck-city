@@ -8,7 +8,7 @@ describe('bike sound curves', () => {
     expect(freewheelTickRate(5, false)).toBeGreaterThan(0);
     expect(freewheelTickRate(5, true)).toBe(0);
     expect(freewheelTickRate(0, false)).toBe(0);
-    expect(freewheelTickRate(8, false)).toBeGreaterThan(freewheelTickRate(4, false));
+    expect(freewheelTickRate(2, false)).toBeGreaterThan(freewheelTickRate(1, false)); // below the cap
   });
 
   test('rolling noise rises with speed up to 40 km/h', () => {
@@ -29,8 +29,22 @@ describe('synthesised samples', () => {
     expect(early).toBeLessThanOrEqual(1);
     expect(late).toBeLessThan(early * 0.2);
   });
-  test('tick is short, loops are seamless', () => {
-    expect(synthTick(48000).length).toBeLessThan(48000 * 0.03);
+  test('tick is a short metallic click: rings in the 3–7 kHz band, gone within 30 ms', () => {
+    const t = synthTick(48000);
+    expect(t.length).toBeLessThan(48000 * 0.03);
+    expect(peak(t, 0, 48)).toBeGreaterThan(0.3);
+    expect(peak(t, t.length - 48)).toBeLessThan(0.02);
+    // zero crossings in the first 5 ms ≈ 2 × dominant frequency × 5 ms
+    let zc = 0;
+    for (let i = 1; i < 240; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
+    const f = zc / 2 / 0.005;
+    expect(f).toBeGreaterThan(2500);
+    expect(f).toBeLessThan(8000);
+  });
+  test('freewheel ticks stay below a buzz', () => {
+    expect(freewheelTickRate(15, false)).toBeLessThanOrEqual(36);
+  });
+  test('loops are seamless', () => {
     const loop = synthNoiseLoop(48000, 1, 800);
     // the jump across the loop point is no bigger than any step inside the loop (no click)
     let maxStep = 0;

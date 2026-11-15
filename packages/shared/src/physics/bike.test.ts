@@ -75,6 +75,20 @@ describe('ridden bike', () => {
     expect(await turnPerMetre(10)).toBeGreaterThan(await turnPerMetre(30));
   });
 
+  test('steering builds up gently and the turn rate is capped', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const b = new RiddenBike(pw, 'dutch', { x: 0, y: 0, z: -150, heading: 0 }, 20 * KMH);
+    const h0 = b.state().heading;
+    ride(pw, b, hold(b, 20, { steer: 1 }), 0.1);
+    expect(Math.abs(b.state().heading - h0)).toBeLessThan(0.05);
+    ride(pw, b, hold(b, 20, { steer: 1 }), 1);
+    const h1 = b.state().heading;
+    ride(pw, b, hold(b, 20, { steer: 1 }), 0.5);
+    const yawRate = Math.abs(b.state().heading - h1) / 0.5;
+    expect(yawRate).toBeLessThanOrEqual(b.spec.maxYaw * 1.05);
+    expect(yawRate).toBeGreaterThan(b.spec.maxYaw * 0.7);
+  });
+
   test('steer right turns right', async () => {
     const pw = await createPhysicsWorld(flat());
     const b = new RiddenBike(pw, 'dutch', { x: 0, y: 0, z: 0, heading: 0 }, 15 * KMH);

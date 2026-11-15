@@ -41,11 +41,21 @@ describe('bike rig', () => {
 
   test('steering turns the fork (right = negative yaw), lean rolls the bike, pose places it', () => {
     const rig = new BikeRig(model().root, 'dutch');
+    rig.snapLean();
     rig.update(state({ x: 3, y: 0.12, z: -4, heading: 1, steer: 0.3 }), 0.2, 0);
     expect(rig.node('fork')!.rotation.y).toBeCloseTo(-0.3, 9);
     expect(rig.leanGroup.rotation.z).toBeCloseTo(0.2, 9);
     expect(rig.root.position.toArray()).toEqual([3, 0.12, -4]);
     expect(rig.root.rotation.y).toBeCloseTo(1, 9);
+  });
+
+  test('the lean eases in instead of snapping', () => {
+    const rig = new BikeRig(model().root, 'dutch');
+    rig.update(state(), 0.4, 0.05);
+    expect(rig.leanGroup.rotation.z).toBeGreaterThan(0);
+    expect(rig.leanGroup.rotation.z).toBeLessThan(0.2);
+    for (let i = 0; i < 60; i++) rig.update(state(), 0.4, 1 / 60);
+    expect(rig.leanGroup.rotation.z).toBeCloseTo(0.4, 2);
   });
 
   test('wheels spin with the distance ridden, crank from the state, pedals stay level', () => {

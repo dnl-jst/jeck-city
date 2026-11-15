@@ -2,14 +2,20 @@ import { MIX, type LoopVoice, type ShotVoice } from './mixer';
 import type { SoundId } from './sounds';
 
 /**
- * Bike sounds, synthesised (no recordings): freewheel pawl ticks while coasting, a chain whirr while pedalling, tyre
+ * Bike sounds, synthesised (no recordings): metallic freewheel pawl ticks while coasting, a chain whirr while pedalling, tyre
  * rolling noise and a two-tone bell. The samples are generated once by the mixer (SYNTH in mixer.ts).
  */
 
-/** Freewheel ticks per second: ~12 per wheel turn-equivalent metre, only while rolling without pedalling. */
+/** Pawl engagements per wheel turn (a typical rear hub) and the wheel circumference (m). */
+const ENGAGEMENTS = 24;
+const WHEEL_CIRCUMFERENCE = 2.2;
+/** Above this many ticks per second the clicks would blur into noise: the rate stays here and only quietens. */
+const MAX_TICKS = 34;
+
+/** Freewheel ticks per second while rolling without pedalling (0 when pedalling or standing), capped at MAX_TICKS. */
 export function freewheelTickRate(speed: number, pedalling: boolean): number {
   if (pedalling || speed < 0.3) return 0;
-  return Math.min(60, speed * 12);
+  return Math.min(MAX_TICKS, (speed / WHEEL_CIRCUMFERENCE) * ENGAGEMENTS);
 }
 
 /** Rolling noise gain 0..1: square-root curve, full at 40 km/h. */
@@ -47,17 +53,23 @@ export function synthBell(rate: number): Float32Array {
   return out;
 }
 
-/** One freewheel pawl click: a few milliseconds of band-limited noise. */
+/**
+ * One freewheel pawl click: a hard transient, then the hub shell ringing briefly at a few inharmonic metallic modes
+ * (3.3 / 4.9 / 6.6 kHz) – a bright, dry "tick" rather than a noise burst.
+ */
 export function synthTick(rate: number): Float32Array {
-  const n = Math.round(rate * 0.012);
+  const n = Math.round(rate * 0.022);
   const out = new Float32Array(n);
   const r = noise(7);
-  let lp = 0;
+  const modes: [number, number, number][] = [[3300, 0.55, 0.0045], [4900, 0.3, 0.003], [6600, 0.15, 0.002]];
   for (let i = 0; i < n; i++) {
-    const x = r();
-    lp += (x - lp) * 0.5;
-    out[i] = (x - lp) * Math.exp(-i / (rate * 0.002));
+    const t = i / rate;
+    let v = r() * 0.5 * Math.exp(-t / 0.0003); // the pawl hitting the tooth
+    for (const [f, a, tau] of modes) v += a * Math.exp(-t / tau) * Math.sin(2 * Math.PI * f * t);
+    out[i] = v * Math.min(1, i / 4); // no step at the very start
   }
+  const peak = out.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
+  for (let i = 0; i < n; i++) out[i] = (out[i]! / peak) * 0.8;
   return out;
 }
 
@@ -123,9 +135,12 @@ export class BikeSound {
       return;
     }
     this.tickClock += rate * dt;
+    // at the cap the clicks get softer with more speed, so a fast roll is a fine whirr, not a rattle
+    const soft = v > 0 ? Math.min(1, (MAX_TICKS * WHEEL_CIRCUMFERENCE) / ENGAGEMENTS / v) : 1;
     while (this.tickClock >= 1) {
-      this.tickClock -= 1;
-      this.out.oneShot('bikeTick', { gain: MIX.bikeTick, rate: 0.9 + 0.2 * Math.abs(this.rand()) });
+      // a little jitter in timing and pitch, like real pawls
+      this.tickClock -= 1 + 0.12 * this.rand();
+      this.out.oneShot('bikeTick', { gain: MIX.bikeTick * (0.75 + 0.25 * soft), rate: 0.94 + 0.12 * Math.abs(this.rand()) });
     }
   }
 

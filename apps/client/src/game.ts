@@ -360,6 +360,7 @@ export class Game {
     this.rig = this.rigFor(type);
     if (this.rig) {
       this.rig.setColor(this.bikes.colors[id]!);
+      this.rig.snapLean();
       this.ctx.scene.add(this.rig.root);
       this.rig.leanGroup.add(this.figure.group);
     }
