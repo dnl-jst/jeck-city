@@ -1,7 +1,7 @@
 import type { Pt, Road } from './osm.js';
 import { cumulative, dedupe, dist, DRIVABLE, junctions, offsetLine, pointAt, ptKey, subPolyline } from './polyline.js';
 import type { Mesh } from './streets.js';
-import { edgeAt, edges, sideOffsets } from './roadprofile.js';
+import { centreAt, edgeAt, edges, laneCountsAt } from './roadprofile.js';
 
 /** Markings lie this far above their road ribbon. */
 export const MARK_DY = 0.004;
@@ -233,15 +233,18 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
 
     const c = r.cross;
     const lw = c.laneWidth;
-    // lanes lie symmetric about the way's centre line (roadprofile.ts); lane markings stay straight
-    const centre = -sideOffsets(c).left.lane + c.lanesBackward * lw;
+    // lanes lie symmetric about the way's centre line (roadprofile.ts); the centre line follows the profile (it
+    // ramps where the lane layout changes between ways), lines of lanes the next way lacks end at the ramp start
+    const centre = (s: number) => centreAt(r, s);
+    const counts = (s: number) => laneCountsAt(r, s);
     if (c.lanesForward > 0 && c.lanesBackward > 0 && CENTRE_KINDS.has(r.kind)) {
+      const twoWay = (s: number) => counts(s).fwd > 0 && counts(s).bwd > 0;
       // ≥ 2 lanes per direction: solid double line (Doppellinie), otherwise a dashed Leitlinie
-      if (c.lanesForward >= 2 && c.lanesBackward >= 2) for (const k of [-1, 1]) line('centre', 0, centre + k * LINE_W, LINE_W, null);
-      else line('centre', 0, centre, LINE_W, DASH);
+      if (c.lanesForward >= 2 && c.lanesBackward >= 2) for (const k of [-1, 1]) line('centre', 0, (s) => centre(s) + k * LINE_W, LINE_W, null, undefined, twoWay);
+      else line('centre', 0, centre, LINE_W, DASH, undefined, twoWay);
     }
-    for (let k = 1; k < c.lanesForward; k++) line('lane', 1, centre + k * lw, LINE_W, DASH);
-    for (let k = 1; k < c.lanesBackward; k++) line('lane', -1, centre - k * lw, LINE_W, DASH);
+    for (let k = 1; k < c.lanesForward; k++) line('lane', 1, (s) => centre(s) + k * lw, LINE_W, DASH, undefined, (s) => counts(s).fwd > k);
+    for (let k = 1; k < c.lanesBackward; k++) line('lane', -1, (s) => centre(s) - k * lw, LINE_W, DASH, undefined, (s) => counts(s).bwd > k);
 
     for (const side of [1, -1]) {
       const cyc = side > 0 ? c.cycleRight : c.cycleLeft;

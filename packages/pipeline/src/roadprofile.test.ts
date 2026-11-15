@@ -1,11 +1,12 @@
 import { expect, test } from 'vitest';
 import { buildCollision } from './chunks.js';
 import { crossSectionFromTags } from './crosssection.js';
-import { loadFixture } from './fixture.js';
+import { boxBuilding, loadFixture } from './fixture.js';
 import { buildMarkings } from './markings.js';
 import type { OsmFeatures, Road } from './osm.js';
 import { parkedCarSpots } from './parking.js';
-import { sideOffsets, withProfiles } from './roadprofile.js';
+import { edges, sideOffsets, withProfiles } from './roadprofile.js';
+import { sidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
 
 const mk = (id: number, pts: [number, number][], tags: Record<string, string>): Road => {
@@ -94,4 +95,73 @@ test('no parked car in a ramp', () => {
   const spots = parkedCarSpots(f, 7, []);
   expect(spots.length).toBeGreaterThan(0);
   for (const s of spots) expect(Math.abs(s.pos.x)).toBeGreaterThan(6 + 2.1);
+});
+
+test('collision: kerb and sidewalk run on continuously across the split (no step, no hole)', () => {
+  const col = buildCollision({ buildings: [], curb: g.curb, sidewalk: g.sidewalk, boundary: f.boundary });
+  const v = col.vertices, idx = col.indices;
+  /** Expected kerb distance per side at x (ramps: left in A over [-6, 0], right in B over [0, 6]). */
+  const kerb = (side: number, x: number) => side < 0
+    ? (x <= -6 ? 6.85 : x >= 0 ? 4.85 : 6.85 - ((x + 6) / 6) * 2)
+    : (x <= 0 ? 6.85 : x >= 6 ? 9.35 : 6.85 + (x / 6) * 2.5);
+  // inner kerb line of the collision: the bottom vertices of the kerb faces (curb and sidewalk are the only
+  // street surfaces in the collision, so y < 0.05 is exactly the foot of the kerb face)
+  for (const side of [-1, 1]) {
+    const by = new Map<string, number[]>();
+    for (let i = 0; i < v.length; i += 3) {
+      if (Math.abs(v[i]!) > 150 || v[i + 1]! > 0.05 || Math.sign(v[i + 2]!) !== side) continue;
+      const k = v[i]!.toFixed(3);
+      by.set(k, [...(by.get(k) ?? []), Math.abs(v[i + 2]!)]);
+    }
+    const line = [...by].map(([x, ds]) => ({ x: Number(x), ds })).sort((a, b) => a.x - b.x);
+    expect(line.length).toBeGreaterThan(1);
+    for (const p of line) expect(Math.max(...p.ds) - Math.min(...p.ds)).toBeLessThan(1e-3); // two kerb ends at one x = a step
+    for (let i = 1; i < line.length; i++) {
+      expect(Math.abs(line[i]!.ds[0]! - line[i - 1]!.ds[0]!)).toBeLessThanOrEqual((line[i]!.x - line[i - 1]!.x) * (2.5 / 6) + 1e-3);
+    }
+    // every point just behind the kerb is covered by a collision surface at pavement height
+    for (let x = -15; x <= 15; x += 0.25) {
+      const p = { x, z: side * (kerb(side, x) + 0.4) };
+      let hit = false;
+      for (let t = 0; t < idx.length && !hit; t += 3) {
+        const [a, b, c] = [idx[t]! * 3, idx[t + 1]! * 3, idx[t + 2]! * 3];
+        if (Math.abs(v[a + 1]! - 0.12) > 1e-3 || Math.abs(v[b + 1]! - 0.12) > 1e-3 || Math.abs(v[c + 1]! - 0.12) > 1e-3) continue;
+        const cr = (i: number, j: number) => (v[j]! - v[i]!) * (p.z - v[i + 2]!) - (v[j + 2]! - v[i + 2]!) * (p.x - v[i]!);
+        const s1 = cr(a, b), s2 = cr(b, c), s3 = cr(c, a);
+        hit = (s1 >= -1e-6 && s2 >= -1e-6 && s3 >= -1e-6) || (s1 <= 1e-6 && s2 <= 1e-6 && s3 <= 1e-6);
+      }
+      expect(hit, `no pavement at x=${x}, side ${side}`).toBe(true);
+    }
+  }
+});
+
+test('sidewalk outer edge stays on the facade through a ramp (width filled as distance to the outer edge)', () => {
+  const walls = [boxBuilding('N', -200, -40, 200, -12, 10), boxBuilding('S', -200, 12, 200, 40, 10)]; // widths 2.65..7.15 m, inside the 1.5..8 m clamp
+  for (const r of roads) {
+    const w = sidewalkWidths(r, walls);
+    for (const side of [-1, 1]) {
+      const k = edges(r, side, 'kerb');
+      (side > 0 ? w.right : w.left).forEach((wi, i) => expect(k[i]! + wi).toBeCloseTo(12, 2));
+    }
+  }
+});
+
+// 2+1 lanes (way A) continuing as 1+1 (way B): the centre line ramps with the lanes, A's extra divider ends at the ramp
+const A2 = mk(11, [[-200, 0], [-100, 0], [0, 0]], { 'lanes:forward': '2', 'lanes:backward': '1' });
+const B2 = mk(12, [[0, 0], [100, 0], [200, 0]], { lanes: '2' });
+const lanesRoads = withProfiles([A2, B2]);
+
+test('lane count change: centre line ramps to the narrower way, no jump; the extra divider ends at the ramp', () => {
+  const pieces = buildMarkings(lanesRoads, () => 0.01).pieces;
+  const expected = (x: number) => (x <= -6 ? -1.625 : x >= 0 ? 0 : -1.625 * (-x / 6)); // left of travel is -z
+  const centre = pieces.filter((p) => p.kind === 'centre');
+  expect(centre.some((p) => p.x > -6 && p.x < 0)).toBe(true);
+  for (const p of centre) expect(Math.abs(p.z - expected(p.x))).toBeLessThan(0.05);
+  const lanes = pieces.filter((p) => p.kind === 'lane');
+  expect(lanes.length).toBeGreaterThan(0);
+  for (const p of lanes) {
+    expect(p.road).toBe(11);
+    expect(p.s1).toBeLessThanOrEqual(200 - 6 + 1e-6); // ends at the start of the ramp
+    expect(Math.abs(p.z - (-1.625 + 3.25))).toBeLessThan(0.05); // one lane width right of the centre line
+  }
 });

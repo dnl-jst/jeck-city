@@ -20,8 +20,18 @@ export function sideOffsets(c: CrossSection): { left: SideEdges; right: SideEdge
   return { left: side(c.cycleLeft, c.parkLeft), right: side(c.cycleRight, c.parkRight) };
 }
 
-/** Per vertex of dedupe(road.points): the edges on each side; arc lengths; ramp intervals [s0, s1] (incl. their run-out to the node). */
-export type Profile = { cum: number[]; left: SideEdges[]; right: SideEdges[]; ramps: [number, number][] };
+/**
+ * Per vertex of dedupe(road.points): the edges on each side and the centre line's offset (between the directions'
+ * lanes, signed, right of travel > 0); arc lengths; ramp intervals [s0, s1] (incl. their run-out to the node);
+ * laneEnds: where this way's lanes ramp to a neighbour with other lane counts (counts in this way's direction).
+ */
+export type Profile = {
+  cum: number[]; left: SideEdges[]; right: SideEdges[]; centre: number[]; ramps: [number, number][];
+  laneEnds: { s0: number; s1: number; fwd: number; bwd: number }[];
+};
+
+/** Centre line offset of a cross-section: lanes symmetric about the way, the backward lanes on the left. */
+export const centreOffset = (c: CrossSection): number => -sideOffsets(c).left.lane + c.lanesBackward * c.laneWidth;
 
 const cache = new WeakMap<Road, Profile>();
 
@@ -32,7 +42,7 @@ export function profileOf(r: Road): Profile {
   if (!p) {
     const pts = dedupe(r.points);
     const o = sideOffsets(r.cross);
-    p = { cum: cumulative(pts), left: pts.map(() => o.left), right: pts.map(() => o.right), ramps: [] };
+    p = { cum: cumulative(pts), left: pts.map(() => o.left), right: pts.map(() => o.right), centre: pts.map(() => centreOffset(r.cross)), ramps: [], laneEnds: [] };
     cache.set(r, p);
   }
   return p;
@@ -53,6 +63,26 @@ export function edgeAt(r: Road, side: number, key: EdgeKey, s: number): number {
   while (i < cum.length - 1 && cum[i]! < s) i++;
   const t = Math.min(1, Math.max(0, (s - cum[i - 1]!) / (cum[i]! - cum[i - 1]! || 1)));
   return v[i - 1]![key] + (v[i]![key] - v[i - 1]![key]) * t;
+}
+
+/** Centre line offset at arc length s (follows lane ramps). */
+export function centreAt(r: Road, s: number): number {
+  const p = profileOf(r);
+  let i = 1;
+  while (i < p.cum.length - 1 && p.cum[i]! < s) i++;
+  const t = Math.min(1, Math.max(0, (s - p.cum[i - 1]!) / (p.cum[i]! - p.cum[i - 1]! || 1)));
+  return p.centre[i - 1]! + (p.centre[i]! - p.centre[i - 1]!) * t;
+}
+
+/** Lanes per direction at arc length s: inside a lane ramp only those the neighbouring way also has. */
+export function laneCountsAt(r: Road, s: number): { fwd: number; bwd: number } {
+  let fwd = r.cross.lanesForward, bwd = r.cross.lanesBackward;
+  for (const e of profileOf(r).laneEnds) {
+    if (s < Math.min(e.s0, e.s1) || s > Math.max(e.s0, e.s1)) continue;
+    fwd = Math.min(fwd, e.fwd);
+    bwd = Math.min(bwd, e.bwd);
+  }
+  return { fwd, bwd };
 }
 
 /** Whether [s0, s1] overlaps a ramp of the road. */
@@ -99,9 +129,13 @@ const outward = (e: End): Pt => {
 
 /**
  * Roads with profiles: where two consecutive ways of the same name meet end to end (continuing within ±30°) and an
- * edge of one side changes, the wider way narrows linearly to the other's value over max(6 m, 2 × |Δ|) before the
- * node (at a junction: beyond the widest crossing kerb + 1 m, the rest up to the node at the narrower value), so
- * kerbs, cycle lanes and strips run on without steps. Ramp ends become vertices; road.points are deduplicated.
+ * edge of one side changes, the wider way narrows linearly to the other's value over max(6 m, 2 × the largest |Δ|
+ * at that end; the centre line's shift counts too) before the
+ * node (at a junction: beyond the widest crossing kerb + 1 m, the rest up to the node at the narrower value; on
+ * short ways the run-out, then the ramp shrinks to fit half the way), so
+ * kerbs, cycle lanes and strips run on without steps. Where the lanes change (width, centre line, counts), the way
+ * with the wider lanes (equal: the lower id) ramps its centre line and records a laneEnd, so its extra dividers end
+ * at the ramp start. Ramp ends become vertices; road.points are deduplicated.
  */
 export function withProfiles(roads: Road[]): Road[] {
   const net = roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
@@ -123,9 +157,11 @@ export function withProfiles(roads: Road[]): Road[] {
     if (pts.length < 2 || !DRIVABLE.has(r.kind) || !r.name) return { ...r, points: pts };
     const base = sideOffsets(r.cross);
     const total = cumulative(pts)[pts.length - 1]!;
-    /** Per side and key: ramps as (s at the wide end, s at the narrow end, target value). */
-    const ramps: { side: number; key: EdgeKey; s0: number; s1: number; to: number }[] = [];
+    const centre0 = centreOffset(r.cross);
+    /** Ramps per side (0: the centre line) and key: (s at the wide end, s at the narrow end, target value). */
+    const ramps: { side: number; key: EdgeKey | 'centre'; s0: number; s1: number; to: number }[] = [];
     const intervals: [number, number][] = [];
+    const laneEnds: Profile['laneEnds'] = [];
     for (const atStart of [true, false]) {
       const me: End = { road: r, pts, atStart };
       const k = ptKey(atStart ? pts[0]! : pts[pts.length - 1]!);
@@ -138,33 +174,45 @@ export function withProfiles(roads: Road[]): Road[] {
         if (dot >= COS30 && (!next || dot > next.dot)) next = { e, dot };
       }
       if (!next) continue;
+      const nb = next.e.road;
       const same = atStart !== next.e.atStart; // both drawn the same way through the node
-      const other = sideOffsets(next.e.road.cross);
-      const others = (touching.get(k) ?? []).filter((q) => q !== r && q !== next!.e.road);
+      const other = sideOffsets(nb.cross);
+      const others = (touching.get(k) ?? []).filter((q) => q !== r && q !== nb);
       const runout = others.length ? Math.max(...others.map((q) => { const o = sideOffsets(q.cross); return Math.max(o.left.kerb, o.right.kerb); })) + JUNCTION_RUNOUT : 0;
+      // edges: the wider way narrows to the other's value
+      const changes: { side: number; key: EdgeKey | 'centre'; to: number; d: number }[] = [];
       for (const side of [1, -1]) {
         const mine = side > 0 ? base.right : base.left;
         const theirs = (side > 0) === same ? other.right : other.left;
-        const deltas = KEYS.filter((key) => mine[key] - theirs[key] > 1e-3);
-        if (!deltas.length) continue;
-        const len = Math.max(RAMP_MIN, 2 * Math.max(...deltas.map((key) => mine[key] - theirs[key])));
-        const room = total / 2 - runout;
-        if (room < 1) continue; // way too short for a ramp: keep its own width
-        const l = Math.min(len, room);
-        const [wide, narrow, node] = atStart ? [runout + l, runout, 0] : [total - runout - l, total - runout, total];
-        for (const key of deltas) ramps.push({ side, key, s0: wide, s1: narrow, to: theirs[key] });
-        intervals.push(atStart ? [node, wide] : [wide, node]);
+        for (const key of KEYS) if (mine[key] - theirs[key] > 1e-3) changes.push({ side, key, to: theirs[key], d: mine[key] - theirs[key] });
       }
+      // centre line and lane counts: the way with the wider lanes ramps them (equal width: the lower id)
+      const theirCentre = (same ? 1 : -1) * centreOffset(nb.cross);
+      const counts = same ? { fwd: nb.cross.lanesForward, bwd: nb.cross.lanesBackward } : { fwd: nb.cross.lanesBackward, bwd: nb.cross.lanesForward };
+      const dLane = base.left.lane - other.left.lane;
+      const lanesDiffer = Math.abs(centre0 - theirCentre) > 1e-3 || counts.fwd !== r.cross.lanesForward || counts.bwd !== r.cross.lanesBackward;
+      const ownsLanes = lanesDiffer && (dLane > 1e-3 || (Math.abs(dLane) <= 1e-3 && r.id < nb.id));
+      if (ownsLanes && Math.abs(centre0 - theirCentre) > 1e-3) changes.push({ side: 0, key: 'centre', to: theirCentre, d: Math.abs(centre0 - theirCentre) });
+      if (!changes.length && !ownsLanes) continue;
+      if (total / 2 < 0.5) continue; // a stub: keep its own width
+      const len = Math.max(RAMP_MIN, 2 * Math.max(0, ...changes.map((c) => c.d)));
+      // short ways between junctions: the run-out shrinks first, then the ramp (it never passes the middle)
+      const run = Math.max(0, Math.min(runout, total / 2 - len));
+      const l = Math.min(len, total / 2 - run);
+      const [wide, narrow, node] = atStart ? [run + l, run, 0] : [total - run - l, total - run, total];
+      for (const c of changes) ramps.push({ side: c.side, key: c.key, s0: wide, s1: narrow, to: c.to });
+      intervals.push(atStart ? [node, wide] : [wide, node]);
+      if (ownsLanes) laneEnds.push({ s0: wide, s1: node, ...counts });
     }
-    if (!ramps.length) return { ...r, points: pts };
+    if (!ramps.length && !laneEnds.length) return { ...r, points: pts };
     // ramp ends become vertices
-    const cuts = [...new Set(ramps.flatMap((q) => [q.s0, q.s1]))].filter((s) => s > 1e-3 && s < total - 1e-3);
+    const cuts = [...new Set([...ramps.flatMap((q) => [q.s0, q.s1]), ...laneEnds.map((e) => e.s0)])].filter((s) => s > 1e-3 && s < total - 1e-3);
     const cum0 = cumulative(pts);
     const all = [...cum0.map((s, i) => ({ s, p: pts[i]! })), ...cuts.map((s) => ({ s, p: pointAt(pts, cum0, s).p }))].sort((a, b) => a.s - b.s);
     const points = dedupe(all.map((q) => q.p));
     const cum = cumulative(points);
-    const value = (side: number, key: EdgeKey, s: number): number => {
-      let v = (side > 0 ? base.right : base.left)[key];
+    const value = (side: number, key: EdgeKey | 'centre', s: number): number => {
+      let v = key === 'centre' ? centre0 : (side > 0 ? base.right : base.left)[key];
       for (const q of ramps) {
         if (q.side !== side || q.key !== key) continue;
         const t = (s - q.s0) / (q.s1 - q.s0); // 0 at the wide end, 1 at the narrow end, > 1 towards the node
@@ -173,6 +221,6 @@ export function withProfiles(roads: Road[]): Road[] {
       return v;
     };
     const at = (side: number) => cum.map((s) => ({ lane: value(side, 'lane', s), cycle: value(side, 'cycle', s), kerb: value(side, 'kerb', s) }));
-    return { ...r, points, profile: { cum, left: at(-1), right: at(1), ramps: intervals } };
+    return { ...r, points, profile: { cum, left: at(-1), right: at(1), centre: cum.map((s) => value(0, 'centre', s)), ramps: intervals, laneEnds } };
   });
 }

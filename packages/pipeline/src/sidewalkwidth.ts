@@ -103,7 +103,8 @@ function fromNeighbours(v: number[], flagged: boolean[]): number[] | null {
  * edge of the road profile) to the nearest facade straight out from the road, clamped to [1.5, 8] m; 2.5 m where no building lies
  * within 10 m of the kerb. The way's endpoints and its junction vertices (`opts.junctions`, ptKeys) take the value
  * of the nearest other vertex, since their ray runs into the side street; a way with no other vertex samples its
- * middle. Then smoothed with a median over 3 vertices.
+ * middle. Then smoothed with a median over 3 vertices. Filling and smoothing work on kerb + width (the outer edge's
+ * distance from the centre line), then that vertex's own kerb is subtracted, so kerb ramps keep the facade line.
  */
 export function sidewalkWidths(road: Road, buildings: BuildingMesh[], opts: { grid?: BuildingGrid; junctions?: ReadonlySet<string> } = {}): { left: number[]; right: number[] } {
   const grid = opts.grid ?? buildingGrid(buildings);
@@ -121,9 +122,11 @@ export function sidewalkWidths(road: Road, buildings: BuildingMesh[], opts: { gr
   };
   const side = (s: 1 | -1) => {
     const k = s > 0 ? kerbs.right : kerbs.left;
-    const raw = pts.map((p, i) => width(p, normals[i]!, s, k[i]!));
-    const filled = fromNeighbours(raw, flagged);
-    if (filled) return median3(filled);
+    // filled and smoothed as the distance from the centre line to the outer edge, so a vertex whose kerb differs
+    // from its neighbour's (a kerb ramp) still reaches the same facade
+    const outer = pts.map((p, i) => k[i]! + width(p, normals[i]!, s, k[i]!));
+    const filled = fromNeighbours(outer, flagged);
+    if (filled) return median3(filled).map((o, i) => Math.min(SIDEWALK_MAX, Math.max(SIDEWALK_MIN, o - k[i]!)));
     const cum = cumulative(pts);
     const mid = pointAt(pts, cum, cum[cum.length - 1]! / 2);
     const v = width(mid.p, { x: -mid.dir.z, z: mid.dir.x }, s, edgeAt(road, s, 'kerb', cum[cum.length - 1]! / 2));
