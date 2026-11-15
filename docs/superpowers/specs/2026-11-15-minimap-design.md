@@ -80,8 +80,10 @@ landen. Der Export in `packages/shared/src/index.ts` wird mit dem Terrain-Branch
 
 - Neues Modul `apps/client/src/map/` (z. B. `map-render.ts` für das Zeichnen, `minimap.ts`, `big-map.ts`,
   `street-label.ts`). Kartenlogik ohne DOM testbar (Projektion, Labelplatzierung, nächste Straße).
-- Basiskarte ohne Beschriftung einmal in ein Offscreen-Canvas rendern (hoch genug aufgelöst für die
-  Minimap). Minimap: pro Frame Ausschnitt gedreht blitten, dann Pfeil. Große Karte: bei Zoom/Pan neu
+- Minimap: pro Frame die Vektoren im 250-m-Ausschnitt direkt zeichnen (über einen Raster-Index gefiltert),
+  gedreht, ohne Labels, dann Pfeil. (Ursprünglich als Offscreen-Bild gedacht; ganz Nippes in brauchbarer
+  Auflösung wäre ein ~30-Megapixel-Canvas, direktes Zeichnen eines kleinen Ausschnitts ist billiger und
+  schärfer.) Große Karte: bei Zoom/Pan neu
   zeichnen (Vektoren direkt), Beschriftung immer aufrecht und waagerecht bzw. entlang der Straße, nie
   kopfüber; Kollisionsvermeidung zwischen Labels; bei kleinem Zoom nur wichtige Straßen beschriften.
 - **Aktuelle Straße:** nächstgelegene benannte Straße zur Spielerposition (zu Fuß Fußwege eingeschlossen,
