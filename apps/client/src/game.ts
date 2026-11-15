@@ -1,6 +1,6 @@
 import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
 import {
-  Character, FixedStepper, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
+  Character, FixedStepper, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
 } from '@nn/shared';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
@@ -16,11 +16,12 @@ const DT = TUNING.world.dt;
 /** What the game needs from the page: scene and camera, input, HUD and the dev URL parameters. */
 export type GameContext = { scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null };
 
+const STATIC_ONLY = staticWorldFilter();
+
 /** Height of the first static surface below (x, fromY, z), or null. */
 export function surfaceY(pw: PhysicsWorld, x: number, z: number, fromY: number): number | null {
   const { rapier: R, world: w } = pw;
-  const flags = R.QueryFilterFlags.EXCLUDE_DYNAMIC | R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS;
-  const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), fromY + 5, true, flags);
+  const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), fromY + 5, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
   return hit ? fromY - hit.timeOfImpact : null;
 }
 
@@ -190,16 +191,16 @@ export class Game {
   private exitFree(car: CarPose, x: number, z: number): boolean {
     const { rapier: R, world: w } = this.pw;
     const chassis = this.vehicle!.chassis;
-    const flags = R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS;
+    const solid = staticWorldFilter(true, chassis); // city and other cars, not this car or the player
     const dx = x - car.x, dz = z - car.z, d = Math.hypot(dx, dz);
     const y = car.y + 0.1;
     const reach = d + TUNING.character.radius;
-    if (w.castRay(new R.Ray({ x: car.x, y, z: car.z }, { x: dx / d, y: 0, z: dz / d }), reach, true, flags, undefined, undefined, chassis)) return false;
+    if (w.castRay(new R.Ray({ x: car.x, y, z: car.z }, { x: dx / d, y: 0, z: dz / d }), reach, true, undefined, undefined, undefined, undefined, solid)) return false;
     const T = TUNING.character;
     const capsule = new R.Capsule(T.height / 2 - T.radius, T.radius);
     // bottom 0.3 m above the road: clears kerbs, touches walls, posts and other cars
     const centre = { x, y: car.y - VEHICLE_REST_Y + 0.3 + T.height / 2, z };
-    return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, flags, undefined, undefined, chassis) === null;
+    return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, solid) === null;
   }
 }
 

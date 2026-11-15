@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
-import { onBeforeStep, type PhysicsWorld } from './world';
+import { onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
 export type VehicleInput = { throttle: number; steer: number; brake: boolean };
@@ -64,10 +64,10 @@ export class Vehicle {
     }
     this.ctrl = c;
 
-    // Wheel rays ignore kinematic bodies (characters) and sensors.
-    const flags = R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS;
+    // Wheel rays hit the city and other cars; never this chassis, characters (kinematic) or sensors.
+    const wheelFilter = staticWorldFilter(true, this.chassis);
     this.unsubscribe = onBeforeStep(pw, () => {
-      if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, flags);
+      if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
     });
   }
 
@@ -104,7 +104,7 @@ export class Vehicle {
       c.setWheelBrake(w, brake);
       c.setWheelSteering(w, w < 2 ? this.steerAngle : 0);
     }
-    if (throttle !== 0 || i.steer !== 0) this.chassis.wakeUp();
+    if (throttle !== 0 || i.steer !== 0 || i.brake) this.chassis.wakeUp();
   }
 
   /** Chassis centre and orientation. */
@@ -112,6 +112,13 @@ export class Vehicle {
     const p = this.chassis.translation();
     const q = this.chassis.rotation();
     return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+  }
+
+  /** Number of wheels whose ray currently touches something (0–4). */
+  wheelsInContact(): number {
+    let n = 0;
+    for (let w = 0; w < 4; w++) if (this.ctrl.wheelIsInContact(w)) n++;
+    return n;
   }
 
   /** Signed speed along the heading (m/s); negative when reversing. */

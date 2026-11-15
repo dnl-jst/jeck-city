@@ -1,11 +1,14 @@
+import type { BuildingMesh } from './buildings.js';
+import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt } from './osm.js';
-import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt } from './polyline.js';
+import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt, pointInPolygon } from './polyline.js';
 
 const SPACING = 6;
 const OCCUPANCY = 0.4;
 const CLEARANCE = 10;
 const TRACK_CLEARANCE = 3;
 const EDGE_INSET = 1; // car centre this far inside the road edge
+const BOUNDARY_CLEARANCE = 3; // car centre at least this far inside the play-area boundary
 const MAX_SPOTS = 300;
 const PARKABLE = new Set(['residential', 'tertiary']);
 
@@ -26,12 +29,16 @@ function rng(seed: number): () => number {
  * heading = atan2(dx, dz) of the direction the car faces (local x east, z south), i.e. forward = (sin h, cos h),
  * which is the yaw about +y for a model whose nose points along +z. A car parked on the right side faces
  * the way of the road; on the opposite side of a two-way road it faces against it.
+ * Spots lie inside the play-area boundary (≥ 3 m from it, so also on the collision ground, which covers the
+ * boundary bbox + 200 m) and outside every building footprint.
  */
-export function parkedCarSpots(f: OsmFeatures, seed: number): { pos: Pt; heading: number }[] {
+export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: BuildingMesh[]): { pos: Pt; heading: number }[] {
   const rand = rng(seed);
   const roads = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = [...junctions(roads.map((r) => dedupe(r.points))).values()];
   const blockers = [...junc, ...f.tramStops.map((s) => s.pos)];
+  const ring = [...f.boundary, f.boundary[0]!]; // closed, for the distance to its last edge
+  const inPlayArea = (p: Pt) => pointInPolygon(p, f.boundary) && distToPolyline(p, ring) >= BOUNDARY_CLEARANCE;
   const spots: { pos: Pt; heading: number }[] = [];
 
   for (const r of f.roads) {
@@ -49,6 +56,7 @@ export function parkedCarSpots(f: OsmFeatures, seed: number): { pos: Pt; heading
         if (!occupied) continue;
         if (blockers.some((b) => dist(b, pos) < CLEARANCE)) continue;
         if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) continue;
+        if (!inPlayArea(pos) || insideAnyFootprint(pos, buildings)) continue;
         spots.push({ pos, heading: Math.atan2(side * dir.x, side * dir.z) });
       }
     }

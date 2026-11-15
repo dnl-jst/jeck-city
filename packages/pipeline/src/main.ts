@@ -127,7 +127,7 @@ async function main() {
       ...s, x: r2(s.x), z: r2(s.z),
       ...(s.sign ? { sign: { x: r2(s.sign.x), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
-    parked: parkedCars(parkedCarSpots(f, PARKING_SEED), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
+    parked: parkedCars(parkedCarSpots(f, PARKING_SEED, buildings), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));

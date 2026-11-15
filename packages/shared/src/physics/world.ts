@@ -7,12 +7,37 @@ export type Rapier = typeof RAPIER;
 /** One Rapier world with the static city in it. step() advances exactly one fixed step (TUNING.world.dt). */
 export type PhysicsWorld = { rapier: Rapier; world: RAPIER.World; step(): void };
 
+/** The Rapier version this code is written for; must equal the dependency pinned in packages/shared/package.json. */
+export const EXPECTED_RAPIER = '0.21.0';
+
 let ready: Promise<void> | null = null;
 
-/** Loads the Rapier WASM once per process (memoised; safe to call from many places). */
+/**
+ * Loads the Rapier WASM once per process (memoised; safe to call from many places) and rejects if another
+ * Rapier version got bundled: query-flag semantics differ between versions (in 0.12 EXCLUDE_KINEMATIC also
+ * dropped fixed bodies, so wheel rays missed the ground), which would otherwise fail silently.
+ */
 export function initRapier(): Promise<void> {
-  ready ??= RAPIER.init();
+  ready ??= RAPIER.init().then(() => {
+    const v = RAPIER.version();
+    if (v !== EXPECTED_RAPIER) throw new Error(`Rapier ${v} geladen, erwartet ${EXPECTED_RAPIER} – bitte node_modules neu installieren (npm ci)`);
+  });
   return ready;
+}
+
+/**
+ * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars)
+ * if `withDynamic`; never sensors, kinematic bodies (characters) or `skip`. A predicate instead of
+ * QueryFilterFlags, whose meaning changed between Rapier versions.
+ */
+export function staticWorldFilter(withDynamic = false, skip?: RAPIER.RigidBody): (c: RAPIER.Collider) => boolean {
+  return (c) => {
+    if (c.isSensor()) return false;
+    const b = c.parent();
+    if (!b) return true; // a collider without a body is static
+    if (skip && b.handle === skip.handle) return false;
+    return b.isFixed() || (withDynamic && b.isDynamic());
+  };
 }
 
 /** Callbacks run right before every world.step() (vehicle controllers live here). */

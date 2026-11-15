@@ -1,5 +1,5 @@
 import { Euler, Vector3, type PerspectiveCamera } from 'three';
-import { VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
+import { staticWorldFilter, VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
 import type { Input } from './input';
 import { angleDelta } from './player';
 
@@ -10,6 +10,8 @@ const MOUSE = 0.0025;
 const PITCH_MIN = -1.1, PITCH_MAX = 0.55;
 /** Closest the camera may get to the pivot when a wall is in the way (m). */
 const MIN_DIST = 0.9;
+/** The camera only collides with the static city (not cars, not the player). */
+const STATIC_ONLY = staticWorldFilter();
 
 /**
  * Third-person follow camera. yaw uses the heading convention (looks along (sin yaw, cos yaw));
@@ -94,8 +96,7 @@ export class FollowCamera {
   /** How far the camera may sit from p along (dx, dy, dz) before hitting static geometry (≤ max). */
   private clearDistance(p: Vector3, dx: number, dy: number, dz: number, max: number): number {
     const { rapier: R, world } = this.pw;
-    const flags = R.QueryFilterFlags.EXCLUDE_DYNAMIC | R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS;
-    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, flags);
+    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
     return hit ? Math.max(MIN_DIST, Math.min(max, hit.timeOfImpact - 0.3)) : max;
   }
 }

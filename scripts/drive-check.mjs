@@ -6,8 +6,8 @@ import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const shots = process.argv[3];
-// parked car #191 (90.4, -55.36, heading 1.76): stand 2.5 m to its left, facing along it
-const CAM = '89.9,0,-57.8,101,-8';
+// parked car #2 (-1.34, -37.63, heading 1.76): stand 2.5 m to its left, facing along it
+const CAM = '-1.8,0,-40.1,101,-8';
 
 async function drive(page, time, shot) {
   await page.goto(`${base}?cam=${CAM}&time=${time}&date=2026-06-15`);

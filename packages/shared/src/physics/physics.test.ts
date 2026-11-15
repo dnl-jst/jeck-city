@@ -6,8 +6,8 @@ import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { Character, type CharacterInput } from './character';
 import { FixedStepper } from './step';
 import { TUNING } from './tuning';
-import { Vehicle, type VehicleInput } from './vehicle';
-import { createPhysicsWorld, type PhysicsWorld } from './world';
+import { Vehicle, VEHICLE_REST_Y, type VehicleInput } from './vehicle';
+import { createPhysicsWorld, EXPECTED_RAPIER, initRapier, staticWorldFilter, type PhysicsWorld } from './world';
 
 const DT = 1 / 60;
 const KMH = 3.6;
@@ -56,6 +56,26 @@ function runCar(pw: PhysicsWorld, car: Vehicle, input: VehicleInput, seconds: nu
     each?.();
   }
 }
+
+describe('rapier', () => {
+  test('the loaded Rapier is the expected version, which is the one @nn/shared depends on', async () => {
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+    expect(EXPECTED_RAPIER).toBe(pkg.dependencies['@dimforge/rapier3d-compat']);
+    await initRapier();
+    const pw = await createPhysicsWorld(miniScene());
+    expect(pw.rapier.version()).toBe(EXPECTED_RAPIER);
+  });
+
+  test('staticWorldFilter: a ray down from (0, 1, 0) hits the fixed ground, not a character standing there', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const c = new Character(pw, { x: 0, y: 0, z: 0 });
+    runChar(pw, c, idle, 0.2);
+    const R = pw.rapier;
+    const hit = pw.world.castRay(new R.Ray({ x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }), 2, true, undefined, undefined, undefined, undefined, staticWorldFilter());
+    expect(hit).not.toBeNull();
+    expect(hit!.timeOfImpact).toBeCloseTo(1, 3);
+  });
+});
 
 describe('character', () => {
   test('spawned at y = 1 stands on the ground after 1 s', async () => {
@@ -172,6 +192,28 @@ describe('character', () => {
 
 describe('vehicle', () => {
   const full: VehicleInput = { throttle: 1, steer: 0, brake: false };
+
+  test('an occupied car on flat ground rests on all 4 wheels after 30 steps', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: 0 });
+    car.setOccupied(true);
+    for (let i = 0; i < 30; i++) {
+      car.applyInput({ throttle: 0, steer: 0, brake: false }, DT);
+      pw.step();
+    }
+    expect(car.wheelsInContact()).toBe(4);
+    expect(car.pose().y).toBeGreaterThan(VEHICLE_REST_Y - 0.05);
+  });
+
+  test('brake alone wakes a sleeping occupied car', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: 0 });
+    car.setOccupied(true);
+    car.chassis.sleep();
+    expect(car.chassis.isSleeping()).toBe(true);
+    car.applyInput({ throttle: 0, steer: 0, brake: true }, DT);
+    expect(car.chassis.isSleeping()).toBe(false);
+  });
 
   test('full throttle for 10 s: 50 km/h < speed ≤ 61 km/h', async () => {
     const pw = await createPhysicsWorld(miniScene());
