@@ -14,8 +14,8 @@ import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from bikeparts import (Matrix, Part, V, bike_materials, check_bike, clear_default_scene, crankset, empty, export_bike, fender,  # noqa: E402
-                       handlebar, lamp, pedal, reset_collection, saddle, wheel)
+from bikeparts import (Matrix, Part, V, bike_materials, clear_default_scene, crankset, empty, fender, handlebar,  # noqa: E402
+                       lamp, pedal, reset_collection, run, saddle, wheel)
 
 NAME = 'longjohn'
 
@@ -130,45 +130,4 @@ def build():
     return frame
 
 
-def render(root, out_dir):
-    """Workbench stills (3/4 front and side) for review."""
-    scene = bpy.context.scene
-    scene.render.engine = 'BLENDER_WORKBENCH'
-    scene.display.shading.light = 'STUDIO'
-    scene.display.shading.color_type = 'MATERIAL'
-    scene.display.shading.show_shadows = True
-    scene.display.shading.show_cavity = True
-    scene.render.resolution_x, scene.render.resolution_y = 1400, 900
-    scene.render.film_transparent = False
-    scene.world = scene.world or bpy.data.worlds.new('World')
-    cam = bpy.data.objects.get('ReviewCam') or bpy.data.objects.new('ReviewCam', bpy.data.cameras.new('ReviewCam'))
-    if cam.name not in scene.collection.objects:
-        scene.collection.objects.link(cam)
-    scene.camera = cam
-    cam.data.lens = 50
-    os.makedirs(out_dir, exist_ok=True)
-    shots = {'34': (V((-3.2, -3.4, 1.9)), V((0, 0, 0.5))), 'side': (V((-4.6, 0, 0.75)), V((0, 0, 0.55))),
-             'top': (V((-0.8, -0.6, 4.2)), V((0, 0, 0.4)))}
-    paths = []
-    for tag, (pos, look) in shots.items():
-        cam.location = pos
-        cam.rotation_euler = (look - pos).to_track_quat('-Z', 'Y').to_euler()
-        path = os.path.join(out_dir, f'{NAME}-{tag}.png')
-        scene.render.filepath = path
-        bpy.ops.render.render(write_still=True)
-        paths.append(path)
-    return paths
-
-
-def main():
-    root = build()
-    rep = check_bike(root, (2.3, 2.7))
-    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(HERE, f'{NAME}.blend'))
-    export_bike(os.path.join(HERE, f'{NAME}.glb'), root)
-    repo = os.path.abspath(os.path.join(HERE, '..', '..', '..', '..'))
-    rep['shots'] = render(root, os.path.join(repo, 'shots', 'bikes'))
-    print('BIKE_REPORT', rep)
-    return rep
-
-
-result = main()
+result = run(NAME, HERE, build, (2.3, 2.7))

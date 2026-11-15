@@ -174,11 +174,20 @@ def _place(ob, location, parent):
 
 
 def clear_default_scene():
-    """Removes the factory-startup cube, light and camera (headless builds)."""
+    """Removes the factory-startup cube, light and camera and every earlier BIKE_* / RACK_* collection, so node
+    names stay unique when several models are built in one Blender session (exported names must be exact)."""
     for name in ('Cube', 'Light', 'Camera'):
         ob = bpy.data.objects.get(name)
         if ob is not None:
             bpy.data.objects.remove(ob, do_unlink=True)
+    for c in list(bpy.data.collections):
+        if c.name.startswith(('BIKE_', 'RACK_')):
+            for o in list(c.objects):
+                bpy.data.objects.remove(o, do_unlink=True)
+            bpy.data.collections.remove(c)
+    for m in list(bpy.data.meshes):
+        if m.users == 0:
+            bpy.data.meshes.remove(m)
 
 
 def empty(coll, name, loc, parent=None):
@@ -343,5 +352,45 @@ def check_bike(root, length_range, wheels=('wheel_front', 'wheel_rear')):
     return rep
 
 
-__all__ = ['Part', 'V', 'Matrix', 'bike_materials', 'check_bike', 'clear_default_scene', 'crankset', 'empty', 'export_bike', 'fender',
+def render(name, out_dir, shots=None):
+    """Workbench stills (3/4 front, side, top) of the scene for review: shots/bikes/<name>-<view>.png."""
+    scene = bpy.context.scene
+    scene.render.engine = 'BLENDER_WORKBENCH'
+    scene.display.shading.light = 'STUDIO'
+    scene.display.shading.color_type = 'MATERIAL'
+    scene.display.shading.show_shadows = True
+    scene.display.shading.show_cavity = True
+    scene.render.resolution_x, scene.render.resolution_y = 1400, 900
+    cam = bpy.data.objects.get('ReviewCam') or bpy.data.objects.new('ReviewCam', bpy.data.cameras.new('ReviewCam'))
+    if cam.name not in scene.collection.objects:
+        scene.collection.objects.link(cam)
+    scene.camera = cam
+    cam.data.lens = 50
+    os.makedirs(out_dir, exist_ok=True)
+    shots = shots or {'34': (V((-3.2, -3.4, 1.9)), V((0, 0, 0.5))), 'side': (V((-4.6, 0, 0.75)), V((0, 0, 0.55))),
+                      'top': (V((-0.8, -0.6, 4.2)), V((0, 0, 0.4)))}
+    paths = []
+    for tag, (pos, look) in shots.items():
+        cam.location = pos
+        cam.rotation_euler = (look - pos).to_track_quat('-Z', 'Y').to_euler()
+        path = os.path.join(out_dir, f'{name}-{tag}.png')
+        scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        paths.append(path)
+    return paths
+
+
+def run(name, here, build, length_range, wheels=('wheel_front', 'wheel_rear'), check=True, shots=None):
+    """build() → check → save <name>.blend, export <name>.glb, render review stills. Returns the report."""
+    root = build()
+    rep = check_bike(root, length_range, wheels) if check else {'ok': True}
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(here, f'{name}.blend'))
+    export_bike(os.path.join(here, f'{name}.glb'), root)
+    repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
+    rep['shots'] = render(name, os.path.join(repo, 'shots', 'bikes'), shots)
+    print('BIKE_REPORT', name, rep)
+    return rep
+
+
+__all__ = ['Part', 'render', 'run', 'V', 'Matrix', 'bike_materials', 'check_bike', 'clear_default_scene', 'crankset', 'empty', 'export_bike', 'fender',
            'handlebar', 'lamp', 'pedal', 'reset_collection', 'saddle', 'wheel']
