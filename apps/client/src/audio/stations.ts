@@ -31,6 +31,12 @@ export class RadioTuner {
     return this.step(-1);
   }
 
+  /** Jumps straight to a station (or off); only in a car. */
+  select(id: StationId | null): StationId | null {
+    if (this.inCar) this.current = id;
+    return this.current;
+  }
+
   /** Cycle order: every station, then off (index STATIONS.length), then wrap. */
   private step(dir: 1 | -1): StationId | null {
     if (!this.inCar) return this.current;

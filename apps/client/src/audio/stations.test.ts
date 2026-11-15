@@ -47,3 +47,15 @@ test('labels', () => {
   expect(stationLabel('einslive')).toBe('1LIVE');
   expect(stationLabel(null)).toBe('Radio aus');
 });
+
+test('select jumps to a station, only in the car', () => {
+  const t = new RadioTuner();
+  expect(t.select('einslive')).toBe('koellefornia');
+  expect(t.current).toBe('koellefornia');
+  t.enterCar();
+  expect(t.select('einslive')).toBe('einslive');
+  expect(t.select(null)).toBeNull();
+  expect(t.next()).toBe('koellefornia');
+  t.exitCar();
+  expect(t.select('radiokoeln')).toBe('koellefornia');
+});

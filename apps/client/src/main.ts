@@ -17,6 +17,7 @@ import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
 import { GameAudio } from './audio/game-audio';
+import { RadioWheel } from './radio-wheel';
 
 declare global {
   interface Window {
@@ -29,10 +30,13 @@ declare global {
      */
     __nnState?: () => {
       mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
-      engine: 'off' | 'starting' | 'running';
+      engine: 'off' | 'starting' | 'running'; wheelOpen: boolean;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
+    /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
+    __nnWheelNudge?: (dx: number, dy: number) => void;
   }
+  interface ImportMeta { readonly env: { readonly DEV: boolean } }
 }
 
 const params = new URLSearchParams(location.search);
@@ -94,6 +98,7 @@ const radio = new Radio(() => new Audio(), {
   onUnreachable: () => gameAudio.radioEvents.onUnreachable(),
 });
 const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
+const radioWheel = new RadioWheel(document.body);
 gameAudio.load().catch(console.error);
 window.addEventListener('pointerdown', () => gameAudio.unlock(), { once: true });
 window.addEventListener('keydown', () => gameAudio.unlock(), { once: true });
@@ -142,6 +147,7 @@ renderer.setAnimationLoop((t: number) => {
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
     game.frame(dt, nightFactor);
+    radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     world.update(camera.position);
     if (world.revision !== propsRevision) {
       propsRevision = world.revision;
@@ -186,8 +192,12 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   window.__nnState = () => {
     const f = game!.focus();
-    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station, engine: game!.ignition.state };
+    return {
+      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station,
+      engine: game!.ignition.state, wheelOpen: game!.wheelState.open,
+    };
   };
+  if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

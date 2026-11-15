@@ -148,6 +148,13 @@ export class GameAudio {
     this.tune(dir === 1 ? this.d.tuner.next() : this.d.tuner.prev());
   }
 
+  /** Radio wheel pick; only with the engine running. Same station as now: no retune, just the name again. */
+  radioSelect(id: StationId | null): void {
+    if (!this.engineOn) return;
+    if (id === this.d.tuner.current) this.d.flash(stationLabel(id));
+    else this.tune(this.d.tuner.select(id));
+  }
+
   /** On foot, every frame: footsteps and landings. */
   walk(s: { speed: number; grounded: boolean; airTime: number }, dt: number): void {
     dt = Math.min(dt, MAX_DT);

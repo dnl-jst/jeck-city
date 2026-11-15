@@ -3,6 +3,7 @@ import {
   Character, FixedStepper, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
 } from '@nn/shared';
 import type { GameAudio } from './audio/game-audio';
+import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
@@ -41,6 +42,9 @@ export class Game {
   readonly fly: FreeFly;
   /** Door, starter, engine: throttle, radio and lights wait for it. */
   readonly ignition = new Ignition();
+  /** Hold R in the car: radio wheel (tap R = next station). */
+  readonly wheel = new WheelControl();
+  wheelState: WheelState = { open: false, highlighted: null };
   private readonly stepper = new FixedStepper(DT, 5);
   private vehicle: Vehicle | null = null;
   private carColor = 0;
@@ -98,13 +102,19 @@ export class Game {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
     } else {
-      this.follow.turn(mouse.dx, mouse.dy);
+      input.consume('KeyR'); // the wheel reads the held key; a stale press must not act later
+      if (this.mode === 'drive') {
+        this.wheelState = this.wheel.update({ held: input.held('KeyR'), dx: mouse.dx, dy: mouse.dy, dt, current: audio?.station ?? null });
+        if (this.wheelState.tap) audio?.radioStep(1);
+        if (this.wheelState.commit !== undefined) audio?.radioSelect(this.wheelState.commit);
+      }
+      // while the wheel is open the mouse points at a station instead of turning the camera
+      if (!this.wheelState.open) this.follow.turn(mouse.dx, mouse.dy);
       if (input.consume('Space') && this.mode === 'walk') this.jumpPending = true;
       if (input.consume('KeyE')) {
         if (this.mode === 'walk') this.getIn();
         else this.getOut();
       }
-      if (input.consume('KeyR')) audio?.radioStep(1);
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
     const steer = this.flying ? { forward: 0, right: 0 } : input.axes();
@@ -177,6 +187,7 @@ export class Game {
   private toggleFly(): void {
     this.flying = !this.flying;
     this.ctx.input.clearPresses();
+    this.closeWheel();
     if (this.flying) this.fly.setHeading(this.follow.yaw, this.follow.pitch);
     else this.follow.snap();
   }
@@ -223,7 +234,13 @@ export class Game {
     this.mode = 'walk';
     this.airTime = 0;
     this.ignition.stop();
+    this.closeWheel();
     this.ctx.audio?.exitCar();
+  }
+
+  private closeWheel(): void {
+    this.wheel.cancel();
+    this.wheelState = { open: false, highlighted: null };
   }
 
   /**

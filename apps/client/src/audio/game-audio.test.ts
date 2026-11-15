@@ -121,6 +121,30 @@ test('R cycles and flashes', () => {
   expect(tunes.at(-1)).toBe('koellefornia');
 });
 
+test('radioSelect tunes and flashes', () => {
+  const { audio, tunes, flashes } = setup();
+  audio.enterCar();
+  audio.radioSelect('einslive'); // engine not running yet
+  expect(tunes).toEqual([]);
+  audio.engineRunning();
+  flashes.length = 0;
+  audio.radioSelect('einslive');
+  audio.radioSelect(null);
+  expect(tunes).toEqual(['koellefornia', 'einslive', null]);
+  expect(flashes).toEqual(['1LIVE', 'Radio aus']);
+  expect(audio.station).toBeNull();
+});
+
+test('radioSelect same station only flashes', () => {
+  const { audio, tunes, flashes } = setup();
+  audio.enterCar();
+  audio.engineRunning();
+  flashes.length = 0;
+  audio.radioSelect('koellefornia');
+  expect(tunes).toEqual(['koellefornia']);
+  expect(flashes).toEqual(['Radio Köllefornia']);
+});
+
 test('radio step on foot does nothing', () => {
   const { audio, tunes, flashes } = setup();
   audio.radioStep(1);
