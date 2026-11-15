@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { exitSpot, headingOf, nearestEnterableCar } from './car';
+import { canGetOut, exitSpot, headingOf, nearestEnterableCar } from './car';
 
 test('nearest free car within 3 m', () => {
   expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, occupied: true }, { id: 2, x: 2.5, z: 0, occupied: false }])).toBe(2);
@@ -29,4 +29,12 @@ test('headingOf inverts the yaw quaternion of a chassis', () => {
   for (const h of [0, 1, -2.5, 3]) {
     expect(headingOf({ qx: 0, qy: Math.sin(h / 2), qz: 0, qw: Math.cos(h / 2) })).toBeCloseTo(h);
   }
+});
+
+test('getting out only below 2 m/s, forwards or reversing', () => {
+  expect(canGetOut(0)).toBe(true);
+  expect(canGetOut(1.9)).toBe(true);
+  expect(canGetOut(-1.9)).toBe(true);
+  expect(canGetOut(2.5)).toBe(false);
+  expect(canGetOut(-3)).toBe(false);
 });

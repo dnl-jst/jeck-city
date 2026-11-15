@@ -20,6 +20,10 @@ export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z
   return best;
 }
 
+/** Getting out is only possible below this speed (m/s). */
+export const EXIT_MAX_SPEED = 2;
+export const canGetOut = (speed: number): boolean => Math.abs(speed) < EXIT_MAX_SPEED;
+
 /** Lateral distance of the exit spot from the car's centre line (m): 0.6 m clear of the 1.8 m wide body. */
 export const EXIT_SIDE = 1.5;
 /** Distance of the fallback exit spot behind the car's centre (m): 0.9 m clear of the 4.2 m long body. */

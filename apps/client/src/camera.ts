@@ -9,7 +9,7 @@ export const CAMERA_DRIVE = { back: 7, up: 2.5, pivot: 1.7 };
 const MOUSE = 0.0025;
 const PITCH_MIN = -1.1, PITCH_MAX = 0.55;
 /** Closest the camera may get to the pivot when a wall is in the way (m). */
-const MIN_DIST = 0.6;
+const MIN_DIST = 0.9;
 
 /**
  * Third-person follow camera. yaw uses the heading convention (looks along (sin yaw, cos yaw));

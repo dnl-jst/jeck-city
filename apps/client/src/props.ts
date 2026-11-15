@@ -125,7 +125,8 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
 /** Sign board centre height (m): the shopfront sign band of the facade shader spans 3.15–3.88 m. */
 export const SIGN_Y = 3.52;
 const SIGN_H = 0.6;
-const CELL_W = 512, CELL_H = 80, ATLAS_COLS = 4;
+/** Sign atlas: boards 64 px high, at most 416 px wide, shelf-packed into rows 2048 px wide with 4 px gaps (mipmaps). */
+const ATLAS_W = 2048, CELL_H = 64, CELL_MAX_W = 416, GAP = 4;
 
 /** Board colours (background, ink) of the sign styles. */
 const SIGN_STYLES: [string, string][] = [
@@ -141,7 +142,7 @@ function strHash(t: string): number {
 }
 
 /**
- * All shop signs as one mesh: every distinct label is drawn once into a canvas atlas (cells of 512 × 80 px),
+ * All shop signs as one mesh: every distinct label is drawn once into a shelf-packed canvas atlas,
  * every sign is a quad on its building's street-facing wall that maps its label's cell. The quad's front
  * (+z before rotation) faces outwards along the sign heading, so the text reads left to right from the street.
  */
@@ -149,35 +150,44 @@ export function buildShopSigns(shops: WorldManifest['shops'], material: MeshStan
   const signed = shops.filter((s) => s.sign);
   if (!signed.length) return null;
   const labels = [...new Set(signed.map((s) => s.label))];
-  const rows = Math.ceil(labels.length / ATLAS_COLS);
   const c = document.createElement('canvas');
-  c.width = CELL_W * ATLAS_COLS;
-  c.height = rows * CELL_H;
   const g = c.getContext('2d')!;
-  const used = new Map<string, { u0: number; u1: number; v0: number; v1: number; aspect: number }>();
-  labels.forEach((label, i) => {
-    const x0 = (i % ATLAS_COLS) * CELL_W, y0 = Math.floor(i / ATLAS_COLS) * CELL_H;
+  const style = (label: string) => {
     const h = strHash(label);
-    const [bg, ink] = SIGN_STYLES[h % SIGN_STYLES.length]!;
-    const serif = (h >>> 8) % 3 === 0;
-    g.font = `${serif ? 'italic bold 46px Georgia, serif' : 'bold 44px system-ui, sans-serif'}`;
-    const pad = 26;
-    const w = Math.min(CELL_W, Math.ceil(g.measureText(label).width) + pad * 2);
-    const left = x0 + (CELL_W - w) / 2;
+    return { colors: SIGN_STYLES[h % SIGN_STYLES.length]!, font: (h >>> 8) % 3 === 0 ? 'italic bold 37px Georgia, serif' : 'bold 35px system-ui, sans-serif' };
+  };
+  // measure, then shelf-pack the boards (each as wide as its text) into rows of the atlas
+  const pad = 20;
+  const boxes = labels.map((label) => {
+    g.font = style(label).font;
+    return { label, w: Math.min(CELL_MAX_W, Math.ceil(g.measureText(label).width) + pad * 2), x: 0, y: 0 };
+  });
+  let x = 0, y = 0;
+  for (const b of boxes) {
+    if (x + b.w > ATLAS_W) { x = 0; y += CELL_H + GAP; }
+    b.x = x; b.y = y;
+    x += b.w + GAP;
+  }
+  c.width = ATLAS_W;
+  c.height = y + CELL_H;
+  const used = new Map<string, { u0: number; u1: number; v0: number; v1: number; aspect: number }>();
+  for (const { label, w, x: left, y: y0 } of boxes) {
+    const { colors: [bg, ink], font } = style(label);
     g.fillStyle = bg;
     g.fillRect(left, y0, w, CELL_H);
     g.strokeStyle = ink;
     g.globalAlpha = 0.55;
-    g.lineWidth = 3;
-    g.strokeRect(left + 7, y0 + 7, w - 14, CELL_H - 14);
+    g.lineWidth = 2.5;
+    g.strokeRect(left + 5.5, y0 + 5.5, w - 11, CELL_H - 11);
     g.globalAlpha = 1;
+    g.font = font;
     g.fillStyle = ink;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.fillText(label, x0 + CELL_W / 2, y0 + CELL_H / 2 + 2, CELL_W - pad * 2);
-    // half-texel inset against bleeding from neighbouring cells
+    g.fillText(label, left + w / 2, y0 + CELL_H / 2 + 2, w - pad * 2);
+    // half-texel inset against bleeding from neighbouring boards
     used.set(label, { u0: (left + 0.5) / c.width, u1: (left + w - 0.5) / c.width, v0: 1 - (y0 + CELL_H - 0.5) / c.height, v1: 1 - (y0 + 0.5) / c.height, aspect: w / CELL_H });
-  });
+  }
   const tex = new CanvasTexture(c);
   tex.colorSpace = SRGBColorSpace;
   tex.anisotropy = 8;

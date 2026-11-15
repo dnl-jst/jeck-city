@@ -39,10 +39,14 @@ async function drive(page, time, shot) {
   await page.keyboard.down('Space');
   await until(() => window.__nnState().speed < 0.5, null, 'car did not stop');
   await page.keyboard.up('Space');
+  const stopped = await state();
   await page.keyboard.press('KeyE');
   await until(() => window.__nnState().mode === 'walk', null, 'E did not get out of the car');
   const out = await state();
-  console.log(`${time}: got out at (${out.x.toFixed(1)}, ${out.y.toFixed(2)}, ${out.z.toFixed(1)}), ${Math.hypot(out.x - s.x, out.z - s.z).toFixed(1)} m from the car`);
+  const gap = Math.hypot(out.x - stopped.x, out.z - stopped.z);
+  console.log(`${time}: got out at (${out.x.toFixed(1)}, ${out.y.toFixed(2)}, ${out.z.toFixed(1)}), ${gap.toFixed(2)} m from the stopped car`);
+  // left (or right) of the car: 1.5 m from its centre line; behind would be 3.0 m
+  if (Math.abs(gap - 1.5) > 0.25) throw new Error(`exit spot ${gap.toFixed(2)} m from the car, expected about 1.5 m`);
 }
 
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
