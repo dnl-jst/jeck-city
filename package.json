@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared && tsc --noEmit -p packages/pipeline",
     "pipeline": "tsx packages/pipeline/src/main.ts",
     "screenshot": "node scripts/screenshot.mjs",
-    "drive-check": "node scripts/drive-check.mjs"
+    "drive-check": "node scripts/drive-check.mjs",
+    "accept": "node scripts/accept.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

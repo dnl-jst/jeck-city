@@ -5,7 +5,7 @@ import {
   createPhysicsWorld, decodeCollision, localToWgs84, parseTimeOverride, sunState, type PhysicsWorld, type SunState,
 } from '@nn/shared';
 import { FetchError, NoWebGLError } from './errors';
-import { Hud } from './hud';
+import { bootErrorMessage, Hud } from './hud';
 import { WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
@@ -36,11 +36,21 @@ const devCam = parseCamParam(params.get('cam'));
 const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
+const hud = new Hud(document.body);
+/** Shows the boot error on the loading screen and stops the boot. */
+function bootFailed(err: unknown): never {
+  console.error(err);
+  hud.showError(bootErrorMessage(err));
+  window.__nnReady = 'error';
+  throw err;
+}
+// WebGL2 is checked before anything else is set up
+if (!document.createElement('canvas').getContext('webgl2')) bootFailed(new NoWebGLError());
 let renderer: WebGLRenderer;
 try {
   renderer = new WebGLRenderer({ canvas, antialias: true, reversedDepthBuffer: true });
 } catch (err) {
-  throw new NoWebGLError(String(err));
+  bootFailed(new NoWebGLError(String(err)));
 }
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = ACESFilmicToneMapping;
@@ -61,7 +71,6 @@ function resize(): void {
 window.addEventListener('resize', resize);
 resize();
 
-const hud = new Hud(document.body);
 const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
 attachInput(input, canvas, (locked) => hud.setHint(locked ? '' : LOOK_HINT));
@@ -136,7 +145,7 @@ async function loadPhysics(): Promise<PhysicsWorld> {
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start), loadPhysics()]).then(([m, pw]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => hud.setStatus(s)).then((m) => { hud.setStatus('Physik …'); return m; }), loadPhysics()]).then(([m, pw]) => {
   hud.setAttribution(m.attribution);
   props = new Props(scene, m);
   lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
@@ -157,6 +166,6 @@ Promise.all([world.init((p) => hud.setProgress(p), start), loadPhysics()]).then(
   window.__nnReady = true;
 }, (err: unknown) => {
   console.error(err);
-  hud.showError('Nippes konnte nicht geladen werden. Bitte lade die Seite neu.');
+  hud.showError(bootErrorMessage(err));
   window.__nnReady = 'error';
 });

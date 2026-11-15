@@ -8,6 +8,8 @@ import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
 
 export const LOAD_RADIUS = 600;
+/** Only chunks this close are awaited before the game is playable; the rest streams in afterwards. */
+export const READY_RADIUS = 250;
 export const UNLOAD_RADIUS = 800;
 export const MAX_CONCURRENT = 2;
 
@@ -17,11 +19,11 @@ const centreDistance = (c: WorldManifest['chunks'][number], p: XZ): number =>
   Math.hypot(c.x + CHUNK_SIZE / 2 - p.x, c.z + CHUNK_SIZE / 2 - p.z);
 
 /** Keys of chunks whose centre is ≤ LOAD_RADIUS from `pos` and not in `loaded`, nearest first. */
-export function chunksToLoad(manifest: WorldManifest, pos: XZ, loaded: ReadonlySet<string>): string[] {
+export function chunksToLoad(manifest: WorldManifest, pos: XZ, loaded: ReadonlySet<string>, radius = LOAD_RADIUS): string[] {
   return manifest.chunks
     .filter((c) => !loaded.has(c.key))
     .map((c) => ({ key: c.key, d: centreDistance(c, pos) }))
-    .filter((c) => c.d <= LOAD_RADIUS)
+    .filter((c) => c.d <= radius)
     .sort((a, b) => a.d - b.d)
     .map((c) => c.key);
 }
@@ -58,17 +60,19 @@ export class WorldLoader {
   constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
 
   /**
-   * Loads the manifest and every chunk within LOAD_RADIUS of `start` (default: the spawn);
+   * Loads the manifest and every chunk within READY_RADIUS of `start` (default: the spawn);
    * resolves when they are in the scene.
    */
-  async init(onProgress: (p: number) => void, start?: XZ): Promise<WorldManifest> {
+  async init(onProgress: (p: number) => void, start?: XZ, onStatus: (text: string) => void = () => {}): Promise<WorldManifest> {
+    onStatus('Karte …');
     const manifest = parseManifest(await (await fetchOk(`${this.baseUrl}manifest.json`)).json());
     this.manifest = manifest;
     this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;
     this.lastPos = { x: from.x, z: from.z };
-    const keys = chunksToLoad(manifest, from, new Set(this.loaded.keys()));
+    const keys = chunksToLoad(manifest, from, new Set(this.loaded.keys()), READY_RADIUS);
     let done = 0;
+    onStatus(`Straßen und Häuser 0/${keys.length}`);
     onProgress(0);
     // MAX_CONCURRENT workers drain the initial list; errors abort init
     const list = [...keys];
@@ -76,6 +80,7 @@ export class WorldLoader {
       for (let key = list.shift(); key !== undefined; key = list.shift()) {
         await this.load(key);
         onProgress(++done / keys.length);
+        onStatus(`Straßen und Häuser ${done}/${keys.length}`);
       }
     };
     await Promise.all(Array.from({ length: MAX_CONCURRENT }, worker));
