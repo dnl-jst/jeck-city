@@ -16,7 +16,7 @@ const SPEC: Record<Kind, { id: number; color: number; roughness: number; metalne
   green: { id: 4, color: 0x4f6e34, roughness: 0.95, metalness: 0, offset: 3 },
   squares: { id: 5, color: 0xa9a397, roughness: 0.85, metalness: 0, offset: 2 },
   road: { id: 0, color: 0x4a4c50, roughness: 0.9, metalness: 0, offset: 1 },
-  // track bed (client-built from the rails, see trackbed.ts): concrete with grooved rails
+  // track bed (built from the rails by the pipeline, see packages/pipeline/src/trackbed.ts): concrete with grooved rails
   trackbed: { id: 7, color: 0xffffff, roughness: 0.8, metalness: 0, offset: 0.5 },
   tram: { id: 3, color: 0xd4d8dd, roughness: 0.25, metalness: 0.15, offset: 0 },
   sidewalk: { id: 1, color: 0x9d9b95, roughness: 0.9, metalness: 0, offset: 0 },

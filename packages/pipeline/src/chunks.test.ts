@@ -1,6 +1,6 @@
 import { NodeIO } from '@gltf-transform/core';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
-import { chunkKey } from '@nn/shared';
+import { chunkKey, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
 import { expect, test } from 'vitest';
 import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
@@ -14,7 +14,7 @@ const twoTris = (y: number): Mesh => ({
   indices: new Uint32Array([0, 2, 1, 3, 5, 4]),
   uv: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
 });
-const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), tram: empty(), green: empty(), squares: empty() });
+const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), trackbed: empty(), tram: empty(), green: empty(), squares: empty() });
 const buildings = () => [boxBuilding('A', 10, 10, 30, 30, 10, 1), boxBuilding('B', 50, 50, 60, 70, 12), boxBuilding('C', -30, 10, -10, 30, 8, 2)];
 const boundary = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 300, z: 300 }, { x: 0, z: 300 }];
 
@@ -123,4 +123,48 @@ test('chunk GLB is meshopt-compressed and keeps custom attributes and building r
   expect(doc.getRoot().listScenes()[0]!.getExtras()).toEqual({ buildings: chunk.buildings!.ranges });
   const road = meshes.find((m) => m.getName() === 'road')!.listPrimitives()[0]!;
   expect(road.listSemantics().sort()).toEqual(['POSITION', 'TEXCOORD_0']);
+});
+
+/** Flat-ish grid over x/z ∈ [0, 400] (2×2 chunks). */
+const terrain = (): TerrainGrid => {
+  const n = 401;
+  const heights = new Float32Array(n * n);
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) heights[r * n + c] = 0.05 * c + 0.02 * r;
+  return { x0: 0, z0: 0, cols: n, rows: n, datum: 40, heights };
+};
+const noStreets = (): StreetMeshes => ({ road: empty(), sidewalk: empty(), curb: empty(), trackbed: empty(), tram: empty(), green: empty(), squares: empty() });
+
+test('terrain creates ground-only chunks', () => {
+  const chunks = buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain());
+  expect(chunks.map((c) => c.key)).toEqual(['0_0', '1_0', '0_1', '1_1']);
+  for (const c of chunks) {
+    expect(c.ground!.positions.length / 3).toBe(201 * 201);
+    expect(c.buildings).toBeUndefined();
+    expect(c.streets).toEqual({});
+  }
+  // existing chunks get ground too; no terrain → no ground
+  expect(buildChunks(buildings(), streets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain()).find((c) => c.key === '0_0')!.ground).toBeDefined();
+  expect(buildChunks(buildings(), streets()).every((c) => c.ground === undefined)).toBe(true);
+});
+
+test('glb carries ground with normals', async () => {
+  const chunk = buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 200, maxZ: 200 }, terrain())[0]!;
+  await MeshoptDecoder.ready;
+  const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
+  const doc = await io.readBinary(await encodeChunkGlb(chunk));
+  const meshes = doc.getRoot().listMeshes();
+  expect(meshes.map((m) => m.getName())).toEqual(['ground']);
+  const prim = meshes[0]!.listPrimitives()[0]!;
+  expect(prim.listSemantics().sort()).toEqual(['NORMAL', 'POSITION', 'TEXCOORD_0']);
+  expect(Array.from(prim.getAttribute('NORMAL')!.getArray()!)).toEqual(Array.from(chunk.ground!.normals));
+  expect(Array.from(prim.getAttribute('POSITION')!.getArray()!)).toEqual(Array.from(chunk.ground!.positions));
+  expect(Array.from(prim.getIndices()!.getArray()!)).toEqual(Array.from(chunk.ground!.indices));
+});
+
+test('collision without ground rectangle when terrain is given', () => {
+  const col = buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary, terrain: terrain() });
+  const all = Array.from({ length: col.vertices.length / 3 }, (_, i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!]);
+  expect(all).not.toContainEqual([-200, 0, -200]);
+  expect(all).not.toContainEqual([500, 0, 500]);
+  expect(col.indices.length).toBe((30 + 2) * 3); // 3 boxes × 10 + 2 kerb
 });
