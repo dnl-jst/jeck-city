@@ -1,3 +1,5 @@
+import { BIKE_TYPES } from '../physics/biketypes';
+
 /**
  * World manifest (apps/client/public/world/manifest.json), written by the pipeline.
  *
@@ -20,6 +22,7 @@
  * the world area has a chunk once terrain is present, also without buildings or streets.
  */
 export const CHUNK_SIZE = 200;
+const BIKE_TYPE_COUNT = BIKE_TYPES.length;
 
 /**
  * Height of a shop sign's board centre above its building's LoD2 base (m): the middle of the shopfront sign band of
@@ -55,6 +58,16 @@ export type WorldManifest = {
    * Several buildings may share one model; `id` is the first of them.
    */
   models: { id: string; chunk: string; file: string; bytes: number }[];
+  /**
+   * Bike rack hoops (one entry per hoop): kind 0 = stand (inverted U), 1 = wall loop / bollard; heading = the
+   * direction bikes stand in at the hoop (forward = (sin h, cos h)). Missing in older manifests → [].
+   */
+  bikeRacks: { x: number; z: number; heading: number; kind: 0 | 1 }[];
+  /**
+   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike), color = frame colour;
+   * bikes[0] is the cargo bike at the spawn. Missing in older manifests → [].
+   */
+  bikes: { x: number; z: number; heading: number; type: number; color: number }[];
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -132,6 +145,16 @@ export function parseManifest(json: unknown): WorldManifest {
     models: o.models === undefined ? [] : arr(o.models, 'models', (v, p) => {
       const x = obj(v, p);
       return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };
+    }),
+    bikeRacks: o.bikeRacks === undefined ? [] : arr(o.bikeRacks, 'bikeRacks', (v, p) => {
+      const r = nums(v, p, ['x', 'z', 'heading', 'kind']);
+      if (r.kind !== 0 && r.kind !== 1) fail(`${p}.kind`, 'must be 0 or 1');
+      return { ...r, kind: r.kind };
+    }),
+    bikes: o.bikes === undefined ? [] : arr(o.bikes, 'bikes', (v, p) => {
+      const b = nums(v, p, ['x', 'z', 'heading', 'type', 'color']);
+      if (!Number.isInteger(b.type) || b.type < 0 || b.type >= BIKE_TYPE_COUNT) fail(`${p}.type`, `must be an integer 0..${BIKE_TYPE_COUNT - 1}`);
+      return b;
     }),
     terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
     datum: num(o.datum, 'datum'),

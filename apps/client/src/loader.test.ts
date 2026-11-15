@@ -13,7 +13,7 @@ function gridManifest(): WorldManifest {
   return {
     version: 2, origin: { e: 0, n: 0 }, chunkSize: 200, chunks,
     spawn: { x: 0, y: 0, z: 0, heading: 0 }, boundary: [], lamps: [], trees: [], tramStops: [],
-    shops: [], parked: [], models: [], terrain: { file: 'terrain.bin', bytes: 1 }, datum: 0, farGroundY: -0.5, attribution: '',
+    shops: [], parked: [], models: [], bikeRacks: [], bikes: [], terrain: { file: 'terrain.bin', bytes: 1 }, datum: 0, farGroundY: -0.5, attribution: '',
   };
 }
 const centreDist = (key: string, px: number, pz: number): number => {

@@ -215,6 +215,8 @@ async function main() {
       ...(s.sign ? { sign: { x: r2(s.sign.x), y: r2(s.sign.y), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
     models,
+    bikeRacks: [],
+    bikes: [],
     parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,
