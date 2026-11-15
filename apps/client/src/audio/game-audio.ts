@@ -14,7 +14,7 @@ export type RadioLike = Pick<Radio, 'tune' | 'setMuted' | 'unlocked' | 'suspend'
 
 /** Door shut, then the engine starts, this long after the door opens. */
 const DOOR_DELAY = 0.35;
-/** Cue detectors never see a longer step (no step bursts after a hitch). */
+/** Step, landing, door and bell timing never see a longer step (no step bursts after a hitch); impacts use the real dt. */
 const MAX_DT = 0.1;
 const STEPS: SoundId[] = ['step1', 'step2', 'step3', 'step4'];
 
@@ -143,9 +143,9 @@ export class GameAudio {
 
   /** In a car, every frame: door/engine start sequence, impacts, engine and skid voices. Speeds in m/s. */
   drive(s: { forward: number; lateral: number; vx: number; vz: number; throttle: number; handbrake: boolean }, dt: number): void {
-    dt = Math.min(dt, MAX_DT);
+    const cueDt = Math.min(dt, MAX_DT);
     if (this.doorTimer !== null) {
-      this.doorTimer -= dt;
+      this.doorTimer -= cueDt;
       if (this.doorTimer <= 0) {
         this.doorTimer = null;
         this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
@@ -154,12 +154,13 @@ export class GameAudio {
         this.startLoops();
       }
     }
+    // real dt: dv is the change over the whole frame, a clamped dt would inflate the deceleration after a hitch
     const hit = this.impacts.update(s.vx, s.vz, dt);
     if (hit > 0) {
       const id: SoundId = hit >= 0.7 ? 'impact3' : hit >= 0.35 ? 'impact2' : 'impact1';
       this.d.mixer.oneShot(id, { gain: hit * MIX.impact });
     }
-    this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, dt);
+    this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, cueDt);
   }
 
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */

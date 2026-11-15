@@ -93,7 +93,7 @@ const radio = new Radio(() => new Audio(), {
   onUnreachable: () => gameAudio.radioEvents.onUnreachable(),
 });
 const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
-void gameAudio.load();
+gameAudio.load().catch(console.error);
 window.addEventListener('pointerdown', () => gameAudio.unlock(), { once: true });
 window.addEventListener('keydown', () => gameAudio.unlock(), { once: true });
 document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));

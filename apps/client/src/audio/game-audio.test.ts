@@ -171,3 +171,11 @@ test('a fresh impact detector per car entry (no false hit from 0 to speed)', () 
   audio.drive({ ...DRIVE, vx: 0 }, 0.05);
   expect(shots.some((s) => s.id.startsWith('impact'))).toBe(false);
 });
+
+test('braking through a frame hitch is no impact (detector sees the real dt)', () => {
+  const { audio, shots } = setup();
+  audio.enterCar();
+  audio.drive({ ...DRIVE, vx: 15 }, 1 / 60);
+  audio.drive({ ...DRIVE, vx: 11 }, 0.5); // 8 m/s^2: hard braking, not a crash
+  expect(shots.some((s) => s.id.startsWith('impact'))).toBe(false);
+});
