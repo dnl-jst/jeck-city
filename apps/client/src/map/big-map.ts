@@ -31,12 +31,18 @@ export class BigMap {
   open(x: number, z: number): void {
     this.isOpen = true;
     this.box.classList.remove('nn-hidden');
+    this.view = clampView({ cx: x, cz: z, scale: 1, rot: 0, w: 1, h: 1 }, this.data.bounds);
+    this.resize();
+  }
+
+  /** Sizes canvas and view to the window and forces a redraw. */
+  private resize(): void {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const w = window.innerWidth;
     const h = window.innerHeight;
     this.canvas.width = Math.round(w * dpr);
     this.canvas.height = Math.round(h * dpr);
-    this.view = clampView({ cx: x, cz: z, scale: 1, rot: 0, w, h }, this.data.bounds);
+    this.view = clampView({ ...this.view, w, h }, this.data.bounds);
     this.drawn = null;
   }
 
@@ -47,6 +53,7 @@ export class BigMap {
 
   update(input: { dx: number; dy: number; notches: number }, player: { x: number; z: number; yaw: number }): void {
     if (!this.isOpen) return;
+    if (window.innerWidth !== this.view.w || window.innerHeight !== this.view.h) this.resize();
     let v = this.view;
     if (input.dx !== 0 || input.dy !== 0) v = panBy(v, input.dx, input.dy);
     if (input.notches !== 0) v = zoomBy(v, input.notches);
