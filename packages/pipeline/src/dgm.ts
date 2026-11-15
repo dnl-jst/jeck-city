@@ -79,10 +79,10 @@ function sampleMosaic(m: Mosaic, e: number, n: number): number {
   return top * (1 - fy) + bot * fy;
 }
 
-/** Samples `m` bilinearly at integer local x/z from floor(min) to floor(max) of `rect` (edges beyond are clamped by heightAt); datum = height at (0,0) rounded to 0.1 m. */
+/** Samples `m` bilinearly at integer local x/z from floor(min) to ceil(max) of `rect`; datum = height at (0,0) rounded to 0.1 m. */
 export function terrainFromMosaic(m: Mosaic, rect: Rect): TerrainGrid {
   const x0 = Math.floor(rect.minX), z0 = Math.floor(rect.minZ);
-  const cols = Math.floor(rect.maxX) - x0 + 1, rows = Math.floor(rect.maxZ) - z0 + 1;
+  const cols = Math.ceil(rect.maxX) - x0 + 1, rows = Math.ceil(rect.maxZ) - z0 + 1;
   const at = (x: number, z: number) => sampleMosaic(m, ORIGIN_UTM.e + x, ORIGIN_UTM.n - z);
   const datum = Math.round(at(0, 0) * 10) / 10;
   const heights = new Float32Array(cols * rows);

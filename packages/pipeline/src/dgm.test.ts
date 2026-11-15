@@ -46,7 +46,7 @@ test('datum', () => {
 test('rect coverage', () => {
   const m = ramp(ORIGIN_UTM.e - 50, ORIGIN_UTM.n + 50, 100, 100, () => 47);
   const g = terrainFromMosaic(m, { minX: -10.5, maxX: 20.2, minZ: -3, maxZ: 4 });
-  expect([g.x0, g.cols, g.z0, g.rows]).toEqual([-11, 32, -3, 8]);
+  expect([g.x0, g.cols, g.z0, g.rows]).toEqual([-11, 33, -3, 8]);
 });
 
 test('mosaic and blur handle z orientation (row 0 = north)', () => {
