@@ -5,6 +5,7 @@ import {
 } from '@nn/shared';
 import { BikeRig } from './bikes/rig';
 import { BikeView } from './bikes/parked';
+import { pickVehicle } from './bikes/pick';
 import { RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
@@ -299,13 +300,10 @@ export class Game {
   private getIn(): void {
     const id = nearestEnterableCar(this.currPos, this.cars.candidates());
     const bike = this.bikes.nearestMountable(this.currPos);
-    if (bike !== null) {
-      const b = this.bikes.poses[bike]!, p = this.currPos;
-      const carDist = id === null ? Infinity : Math.hypot(this.cars.poses[id]!.x - p.x, this.cars.poses[id]!.z - p.z);
-      if (Math.hypot(b.x - p.x, b.z - p.z) <= carDist) {
-        this.mountBike(bike);
-        return;
-      }
+    const choice = pickVehicle(this.currPos, this.figure.heading, id === null ? null : this.cars.poses[id]!, bike === null ? null : this.bikes.poses[bike]!);
+    if (choice === 'bike') {
+      this.mountBike(bike!);
+      return;
     }
     if (id === null) return;
     this.vehicle = this.cars.enter(id);
