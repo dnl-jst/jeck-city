@@ -4,8 +4,11 @@ import { BufferAttribute, type BufferGeometry, Color, type IUniform, MeshStandar
  * Procedural Gründerzeit facades for the chunk `buildings` mesh, all in the fragment shader.
  * Attributes (GLTFLoader lowercases them): _facadeuv (wall: u = m along wall, v = m above ground;
  * roof: world x/z), _kind (0 wall, 1 roof), _seed ([0,1)), _flags (bit 0 Neusser shopfront,
- * bit 1 backdrop) and _eave (added on the client by addEaveAttribute).
+ * bit 1 backdrop, bit 2 set on the client: carries a real shop sign) and _eave (added on the client by addEaveAttribute).
  */
+
+/** _flags bit 2: the building has a shop sign board (props.ts), so its sign band stays plain. */
+export const FLAG_SIGNED = 4;
 
 /** Ten Cologne old-building plaster tones (sRGB). */
 const PALETTE = [
@@ -200,6 +203,7 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
   float fw = max(fwidth(u), fwidth(v));
   bool shop = mod(floor(vFlags + 0.5), 2.0) > 0.5;
   bool backdrop = mod(floor((vFlags + 0.5) * 0.5), 2.0) > 0.5;
+  bool hasSign = mod(floor((vFlags + 0.5) * 0.25), 2.0) > 0.5;
   vec3 plaster = nnPalette[int(min(floor(seed * 10.0), 9.0))];
   plaster *= 0.9 + 0.16 * nnHash(vec2(seed * 53.1, 1.7));
   plaster *= 0.95 + 0.07 * nnNoise(vec2(u, v) * 1.3) + 0.03 * nnNoise(vec2(u, v) * 6.0);
@@ -250,6 +254,7 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
           * nnLetters(vec2(su - 3.9 + len * 0.5, v - 3.3), seed);
         float bright = dot(signCol, vec3(0.33)) > 0.4 ? 1.0 : 0.0;
         vec3 ink = bright > 0.5 ? vec3(0.08, 0.08, 0.09) : vec3(0.92, 0.88, 0.75);
+        if (hasSign) lettering = 0.0; // the real sign board hangs here
         col = mix(col, ink, lettering);
         emit = (signCol * 0.35 + lettering * (1.0 - bright) * vec3(1.0, 0.9, 0.7)) * 1.2;
         rough = 0.5;

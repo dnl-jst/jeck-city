@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Scene } from 'three';
+import { afterEach, describe, expect, it, test, vi } from 'vitest';
+import { BufferAttribute, BufferGeometry, Scene } from 'three';
 import type { WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
-import { chunksToLoad, chunksToUnload, WorldLoader } from './loader';
+import { chunksToLoad, chunksToUnload, markSigned, WorldLoader } from './loader';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
 function gridManifest(): WorldManifest {
@@ -88,4 +88,13 @@ describe('WorldLoader', () => {
     stubFetch(404);
     await expect(new WorldLoader(new Scene(), '/world/').init(() => {})).rejects.toBeInstanceOf(FetchError);
   });
+});
+
+test('markSigned sets flag bit 2 on the vertex ranges of signed buildings only', () => {
+  const g = new BufferGeometry();
+  g.setAttribute('_flags', new BufferAttribute(new Float32Array([1, 1, 0, 0, 3, 2]), 1));
+  markSigned(g, [{ id: 'A', firstVertex: 0, vertexCount: 2 }, { id: 'B', firstVertex: 2, vertexCount: 2 }, { id: 'C', firstVertex: 4, vertexCount: 2 }], new Set(['A', 'C']));
+  expect(Array.from(g.getAttribute('_flags').array)).toEqual([5, 5, 0, 0, 7, 6]);
+  markSigned(g, [{ id: 'A', firstVertex: 0, vertexCount: 2 }], new Set(['A'])); // idempotent
+  expect(g.getAttribute('_flags').getX(0)).toBe(5);
 });

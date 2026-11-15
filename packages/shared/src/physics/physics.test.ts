@@ -142,6 +142,23 @@ describe('character', () => {
     expect(c.position().x).toBeGreaterThan(9);
   });
 
+  test('jump: rises about 0.75 m, lands again, no second jump in the air', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const c = new Character(pw, { x: 0, y: 0, z: -20 });
+    runChar(pw, c, idle, 0.5);
+    c.applyInput({ ...idle, jump: true }, DT);
+    pw.step();
+    let top = 0;
+    for (let i = 0; i < 90; i++) {
+      c.applyInput({ ...idle, jump: i === 20 }, DT); // pressing again mid-air does nothing
+      pw.step();
+      top = Math.max(top, c.position().y);
+    }
+    expect(top).toBeGreaterThan(0.6);
+    expect(top).toBeLessThan(0.95);
+    expect(c.position().y).toBeCloseTo(0, 1); // landed after 1.5 s
+  });
+
   test('setEnabled(false) removes it from collision queries', async () => {
     const pw = await createPhysicsWorld(miniScene());
     const a = new Character(pw, { x: 0, y: 0, z: -20 });
@@ -241,6 +258,17 @@ test('FixedStepper.advance(2.0) runs exactly 5 steps', () => {
   expect(s.advance(1 / 60, () => n++)).toBe(1); // backlog was dropped, not carried
 });
 
+test('FixedStepper.alpha is the leftover fraction of a step (render interpolation)', () => {
+  const s = new FixedStepper(1 / 60, 5);
+  expect(s.alpha).toBe(0);
+  s.advance(1 / 120, () => {});
+  expect(s.alpha).toBeCloseTo(0.5);
+  s.advance(1 / 60, () => {});
+  expect(s.alpha).toBeCloseTo(0.5);
+  s.advance(1, () => {}); // backlog dropped
+  expect(s.alpha).toBe(0);
+});
+
 test('FixedStepper accumulates partial frames', () => {
   const s = new FixedStepper(1 / 60, 5);
   let n = 0;
@@ -265,7 +293,7 @@ test('same inputs give bit-identical results in two worlds', async () => {
 });
 
 test('tuning holds the brief values', () => {
-  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20 });
+  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20, jumpSpeed: 5.5 });
   expect(TUNING.vehicle).toMatchObject({ mass: 1200, maxForwardKmh: 60, maxReverseKmh: 20 });
 });
 

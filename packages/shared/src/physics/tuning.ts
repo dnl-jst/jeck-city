@@ -23,6 +23,8 @@ export const TUNING = {
     runSpeed: 5.5,
     /** Vertical acceleration applied by the character itself (m/s²). */
     gravity: -20,
+    /** Take-off speed of a jump (m/s): apex jumpSpeed² / (2·|gravity|) ≈ 0.76 m. */
+    jumpSpeed: 5.5,
     /** Character controller skin width: gap kept between capsule and obstacles. */
     skin: 0.02,
     /** Autostep: highest step climbed without jumping, and minimum free width on top of it. */

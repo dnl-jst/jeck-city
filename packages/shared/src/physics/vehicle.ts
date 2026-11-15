@@ -8,7 +8,7 @@ export type VehicleInput = { throttle: number; steer: number; brake: boolean };
 const T = TUNING.vehicle;
 const KMH = 1 / 3.6;
 /** Chassis centre height at rest (approx.: mount height + loaded suspension + wheel radius). */
-const REST_Y = -T.wheelY + T.suspensionRest - 9.81 / (4 * T.suspensionStiffness) + T.wheelRadius;
+export const VEHICLE_REST_Y = -T.wheelY + T.suspensionRest - 9.81 / (4 * T.suspensionStiffness) + T.wheelRadius;
 
 /**
  * Car: a dynamic box on Rapier's DynamicRayCastVehicleController (4 ray-cast wheels).
@@ -28,7 +28,7 @@ export class Vehicle {
     const h = pose.heading;
     this.chassis = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
-        .setTranslation(pose.x, REST_Y, pose.z)
+        .setTranslation(pose.x, VEHICLE_REST_Y, pose.z)
         .setRotation({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) })
         .setLinearDamping(T.linearDamping)
         .setAngularDamping(T.angularDamping)

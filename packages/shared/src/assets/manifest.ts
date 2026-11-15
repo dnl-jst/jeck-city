@@ -31,7 +31,11 @@ export type WorldManifest = {
    * (forward = (sin h, cos h)), oriented so the track lies to the left of it.
    */
   tramStops: { name: string; x: number; z: number; heading: number }[];
-  shops: { x: number; z: number; label: string; type: string; buildingId?: string }[];
+  /**
+   * Shops: label = invented name shown on the sign; sign = board centre in front of the street-facing wall of
+   * the building, heading = outward wall normal (the side it is read from), width in m.
+   */
+  shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; z: number; heading: number; width: number } }[];
   parked: { x: number; z: number; heading: number; color: number }[];
   attribution: string;
 };
@@ -95,6 +99,7 @@ export function parseManifest(json: unknown): WorldManifest {
       const s = obj(v, p);
       const shop: WorldManifest['shops'][number] = { ...nums(s, p, ['x', 'z']), label: str(s.label, `${p}.label`), type: str(s.type, `${p}.type`) };
       if (s.buildingId !== undefined) shop.buildingId = str(s.buildingId, `${p}.buildingId`);
+      if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'z', 'heading', 'width']);
       return shop;
     }),
     parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),

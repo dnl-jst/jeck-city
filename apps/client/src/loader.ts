@@ -4,7 +4,7 @@ import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.j
 import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
 import { trackBed } from './trackbed';
-import { addEaveAttribute, createFacadeMaterial } from './materials/facade';
+import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
 
 export const LOAD_RADIUS = 600;
@@ -47,6 +47,8 @@ export class WorldLoader {
   private readonly pending = new Set<string>();
   private readonly failed = new Set<string>();
   private queue: string[] = [];
+  /** Buildings that carry a real shop sign: their facade sign band gets no pseudo lettering. */
+  private signed = new Set<string>();
   private lastPos: XZ = { x: 0, z: 0 };
   /** Incremented whenever a chunk is added to or removed from the scene. */
   revision = 0;
@@ -62,6 +64,7 @@ export class WorldLoader {
   async init(onProgress: (p: number) => void, start?: XZ): Promise<WorldManifest> {
     const manifest = parseManifest(await (await fetchOk(`${this.baseUrl}manifest.json`)).json());
     this.manifest = manifest;
+    this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;
     this.lastPos = { x: from.x, z: from.z };
     const keys = chunksToLoad(manifest, from, new Set(this.loaded.keys()));
@@ -122,6 +125,7 @@ export class WorldLoader {
         mesh.receiveShadow = true;
         if (mesh.name === 'buildings') {
           addEaveAttribute(mesh.geometry);
+          markSigned(mesh.geometry, root.userData.buildings, this.signed);
           mesh.castShadow = true;
         } else mesh.renderOrder = STREET_RENDER_ORDER[mesh.name] ?? 0;
       });
@@ -163,6 +167,17 @@ export class WorldLoader {
   loadedKeys(): ReadonlySet<string> {
     return new Set(this.loaded.keys());
   }
+}
+
+/** Sets _flags bit 2 (FLAG_SIGNED) on the vertices of buildings that carry a shop sign board. */
+export function markSigned(g: BufferGeometry, ranges: unknown, signed: ReadonlySet<string>): void {
+  const flags = g.getAttribute('_flags') as BufferAttribute | undefined;
+  if (!flags || !Array.isArray(ranges) || signed.size === 0) return;
+  for (const r of ranges as { id: string; firstVertex: number; vertexCount: number }[]) {
+    if (!signed.has(r.id)) continue;
+    for (let i = r.firstVertex; i < r.firstVertex + r.vertexCount; i++) flags.setX(i, (flags.getX(i) & 3) | FLAG_SIGNED);
+  }
+  flags.needsUpdate = true;
 }
 
 /** Frees geometries only; materials are shared across chunks. */

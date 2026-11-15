@@ -1,0 +1,872 @@
+[
+  {
+    "realName": "Merzenich",
+    "proposed": "Backes Mählich",
+    "type": "bakery",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "REWE Rahmati",
+    "proposed": "Markt Rahmbutter",
+    "type": "supermarket",
+    "address": "Neusser Straße 254"
+  },
+  {
+    "realName": "Sapori d’Italia",
+    "proposed": "Sapperlot d’Italia",
+    "type": "restaurant",
+    "address": "Neusser Straße 323"
+  },
+  {
+    "realName": "Eiscafe Capri",
+    "proposed": "Eiscafé Ischia",
+    "type": "ice_cream",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "LAMIA",
+    "proposed": "LAMALAMA",
+    "type": "restaurant",
+    "address": "Neusser Straße 182"
+  },
+  {
+    "realName": "Mangal Döner x LP10",
+    "proposed": "Mangold Döner",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Backwerk",
+    "proposed": "Selbstbäck",
+    "type": "bakery",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Em Golde Kappes",
+    "proposed": "Em Selvere Wirsing",
+    "type": "pub",
+    "address": "Neusser Straße 295"
+  },
+  {
+    "realName": "Aldi Süd",
+    "proposed": "Alles Billich Süd",
+    "type": "supermarket",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Netto Marken-Discount",
+    "proposed": "Nett & Knapp",
+    "type": "supermarket",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "REWE City",
+    "proposed": "Veedelsmarkt Ratzfatz",
+    "type": "supermarket",
+    "address": "Neusser Straße 292-294"
+  },
+  {
+    "realName": "Alt Neppes",
+    "proposed": "Jung Neppes",
+    "type": "pub",
+    "address": "Neusser Straße 301"
+  },
+  {
+    "realName": "Zum Kornbrenner",
+    "proposed": "Zum Weizenbrenner",
+    "type": "pub",
+    "address": "Neusser Straße 171"
+  },
+  {
+    "realName": "Cut & more",
+    "proposed": "Schnitt & Mieh",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Rossmann",
+    "proposed": "Pääds-Drogerie",
+    "type": "chemist",
+    "address": "Neusser Straße 216"
+  },
+  {
+    "realName": "Thai Gourmet",
+    "proposed": "Thai Feinschmecker",
+    "type": "restaurant",
+    "address": "Neusser Straße 311"
+  },
+  {
+    "realName": "Wasch Salon",
+    "proposed": "Waschbär Salon",
+    "type": "laundry",
+    "address": "Neusser Straße 350"
+  },
+  {
+    "realName": "REWE City",
+    "proposed": "Veedelsmarkt Ratzfatz",
+    "type": "supermarket",
+    "address": "Neusser Straße 206-208"
+  },
+  {
+    "realName": "Eigenheim",
+    "proposed": "Kneipe Mietheim",
+    "type": "pub",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Eiscafé Sommariva",
+    "proposed": "Eiscafé Winterriva",
+    "type": "cafe",
+    "address": "Neusser Straße 181"
+  },
+  {
+    "realName": "Buchladen Neusser Straße",
+    "proposed": "Bücherbud Neusser Sträßche",
+    "type": "books",
+    "address": "Neusser Straße 197"
+  },
+  {
+    "realName": "Neusser Eck Büdchen",
+    "proposed": "Büdche Eck Rund",
+    "type": "kiosk",
+    "address": "Neusser Straße 194"
+  },
+  {
+    "realName": "Urfa Tadim Kebap",
+    "proposed": "Urlecker Kebap",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Buchhandlung Blücherstraße",
+    "proposed": "Buchhandlung Blätterstraße",
+    "type": "books",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Raphas Eck",
+    "proposed": "Pitters Eck",
+    "type": "kiosk",
+    "address": "Neusser Straße 184"
+  },
+  {
+    "realName": "Bistro Sonne",
+    "proposed": "Bistro Mond",
+    "type": "cafe",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Ernsting's family",
+    "proposed": "Die janze Famillich",
+    "type": "clothes",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "GEERS",
+    "proposed": "Hör ens!",
+    "type": "hearing_aids",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Gold Mund",
+    "proposed": "Silber Schnüss",
+    "type": "jewelry",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "aesthetic company",
+    "proposed": "Schönheit & Söhne",
+    "type": "beauty",
+    "address": "Neusser Straße 200"
+  },
+  {
+    "realName": "Café Garden",
+    "proposed": "Café Gäätche",
+    "type": "cafe",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Easy Livin'",
+    "proposed": "Locker Levve",
+    "type": "cafe",
+    "address": "Neusser Straße 184"
+  },
+  {
+    "realName": "KODi",
+    "proposed": "Kramkiste",
+    "type": "houseware",
+    "address": "Neusser Straße 224"
+  },
+  {
+    "realName": "Kamps",
+    "proposed": "Bäckerei Ackerland",
+    "type": "bakery",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "EuroShop",
+    "proposed": "Groschenladen",
+    "type": "variety_store",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Lena Nagelstudio",
+    "proposed": "Nagelstudio Hammer & Lack",
+    "type": "beauty",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Mayersche",
+    "proposed": "Bücher-Müllersche",
+    "type": "books",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "McPaper",
+    "proposed": "Papierkram Kölle",
+    "type": "stationery",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Tchibo",
+    "proposed": "Bohnebud Tschö",
+    "type": "coffee",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "O2",
+    "proposed": "Sauerstoff Mobil",
+    "type": "mobile_phone",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Schill-Eck",
+    "proposed": "Goethe-Eck",
+    "type": "pub",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Épi",
+    "proposed": "Bäckerei Ähre",
+    "type": "bakery",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Foxy Nails",
+    "proposed": "Fuchs-Nägel",
+    "type": "beauty",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Active Print",
+    "proposed": "Fleißig Druck",
+    "type": "copyshop",
+    "address": "Neusser Straße 260"
+  },
+  {
+    "realName": "dm",
+    "proposed": "Drogerie Dat Mäht",
+    "type": "chemist",
+    "address": "Neusser Straße 256"
+  },
+  {
+    "realName": "Haarwerk",
+    "proposed": "Hoorhandwerk",
+    "type": "hairdresser",
+    "address": "Neusser Straße 324"
+  },
+  {
+    "realName": "Most Wanted Hair",
+    "proposed": "Meistgesuchte Mähne",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Hildegardis-Apotheke",
+    "proposed": "Apotheke Sankt Pillegard",
+    "type": "pharmacy",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Maris-Apotheke",
+    "proposed": "Ozean-Apotheke",
+    "type": "pharmacy",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Pfauen-Apotheke",
+    "proposed": "Fasanen-Apotheke",
+    "type": "pharmacy",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Viva Apotheke",
+    "proposed": "Levve-Apotheke",
+    "type": "pharmacy",
+    "address": "Neusser Straße 280"
+  },
+  {
+    "realName": "Radius",
+    "proposed": "Durchmesser Fahrräder",
+    "type": "bicycle",
+    "address": "Neusser Straße 192"
+  },
+  {
+    "realName": "Hornochse",
+    "proposed": "Bullenstall Grill",
+    "type": "fast_food",
+    "address": "Neusser Straße 304"
+  },
+  {
+    "realName": "Shibuya Sushi Bar",
+    "proposed": "Shinjuku Sushi Bar",
+    "type": "restaurant",
+    "address": "Neusser Straße 332"
+  },
+  {
+    "realName": "Reformhaus Dahmen",
+    "proposed": "Reformhaus Damenwahl",
+    "type": "supermarket",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Fielmann",
+    "proposed": "Brillestuvv Klor Sich",
+    "type": "optician",
+    "address": "Neusser Straße 215"
+  },
+  {
+    "realName": "California Sun",
+    "proposed": "Sonnenstudio Kalkifornien",
+    "type": "beauty",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Radius",
+    "proposed": "Durchmesser Fahrräder",
+    "type": "bicycle",
+    "address": "Neusser Straße 188"
+  },
+  {
+    "realName": "Café Wohnraum",
+    "proposed": "Café Stuvv",
+    "type": "cafe",
+    "address": "Neusser Straße 314"
+  },
+  {
+    "realName": "Schuhhaus Zimmermann",
+    "proposed": "Schuhhaus Tischler",
+    "type": "medical_supply",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Schlüssel Dorff",
+    "proposed": "Schlüssel Städtche",
+    "type": "locksmith",
+    "address": "Neusser Straße 171"
+  },
+  {
+    "realName": "Simitzade",
+    "proposed": "Simit-Paradies",
+    "type": "restaurant",
+    "address": "Neusser Straße 279"
+  },
+  {
+    "realName": "Pizza Lab Napoli",
+    "proposed": "Pizza Labor Salerno",
+    "type": "restaurant",
+    "address": "Neusser Straße 316"
+  },
+  {
+    "realName": "Steinbach",
+    "proposed": "Schlüsseldienst Felsenbach",
+    "type": "locksmith",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Culture",
+    "proposed": "Café Kulturbeutel",
+    "type": "cafe",
+    "address": "Neusser Straße 281"
+  },
+  {
+    "realName": "Jacques' Wein-Depot",
+    "proposed": "Jupps Wingert-Lager",
+    "type": "wine",
+    "address": "Neusser Straße 273"
+  },
+  {
+    "realName": "Romeo",
+    "proposed": "Kiosk Julia",
+    "type": "kiosk",
+    "address": "Neusser Straße 417"
+  },
+  {
+    "realName": "TEDi",
+    "proposed": "Kleinkram-Kumpel",
+    "type": "variety_store",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Karadag",
+    "proposed": "Schwarzberg Markt",
+    "type": "supermarket",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Takumi",
+    "proposed": "Meister-Sushi",
+    "type": "restaurant",
+    "address": "Neusser Straße 336-338"
+  },
+  {
+    "realName": "Marhaba",
+    "proposed": "Imbiss Tach zesamme",
+    "type": "fast_food",
+    "address": "Neusser Straße 278"
+  },
+  {
+    "realName": "Telekom Shop",
+    "proposed": "Tele-Klaaf",
+    "type": "mobile_phone",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Thai Gourmet",
+    "proposed": "Thai Feinschmecker",
+    "type": "fast_food",
+    "address": "Neusser Straße 311"
+  },
+  {
+    "realName": "Adler Kiosk",
+    "proposed": "Spatzen-Kiosk",
+    "type": "kiosk",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Vela",
+    "proposed": "Restaurant Seejel",
+    "type": "restaurant",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Cà Phê Sips",
+    "proposed": "Kaffee Schlöckche",
+    "type": "cafe",
+    "address": "Neusser Straße 415"
+  },
+  {
+    "realName": "Anny Nails",
+    "proposed": "Nagelstudio Tante Ännchen",
+    "type": "beauty",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Neppeser Gaffelstube",
+    "proposed": "Neppeser Löffelstube",
+    "type": "restaurant",
+    "address": "Neusser Straße 340"
+  },
+  {
+    "realName": "Goldjunge",
+    "proposed": "Silberjung",
+    "type": "cafe",
+    "address": "Neusser Straße 291"
+  },
+  {
+    "realName": "Pause",
+    "proposed": "Café Verschnauf",
+    "type": "cafe",
+    "address": "Neusser Straße 287"
+  },
+  {
+    "realName": "Viet Kitchen",
+    "proposed": "Viet Köch",
+    "type": "restaurant",
+    "address": "Neusser Straße 289"
+  },
+  {
+    "realName": "Happy’s",
+    "proposed": "Imbiss Jlöcklich",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Barber Shop Lord 344",
+    "proposed": "Barbier Graf 345",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Friseursalon Emrem",
+    "proposed": "Salon Schnippschnapp",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Kornkammer",
+    "proposed": "Zur Mehlkammer",
+    "type": "pub",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Thaewa Thaimassage",
+    "proposed": "Thai-Knetstuvv",
+    "type": "massage",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "La Pizza",
+    "proposed": "Dä Pizza",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Thai Garden",
+    "proposed": "Thai Jaade",
+    "type": "massage",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Paradies Kiosk",
+    "proposed": "Himmelreich-Büdche",
+    "type": "kiosk",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Diba Bazar",
+    "proposed": "Basar Kunterbunt",
+    "type": "convenience",
+    "address": "Neusser Straße 180"
+  },
+  {
+    "realName": "Köttgen",
+    "proposed": "Hörgeräte Lauschlappe",
+    "type": "hearing_aids",
+    "address": "Neusser Straße 263"
+  },
+  {
+    "realName": "freenet",
+    "proposed": "Funkbud Ohne Kabel",
+    "type": "telecommunication",
+    "address": "Neusser Straße 263"
+  },
+  {
+    "realName": "okTEC Mobile",
+    "proposed": "Allet Jot Mobil",
+    "type": "mobile_phone",
+    "address": "Neusser Straße 249"
+  },
+  {
+    "realName": "Perlenfischer Store Köln",
+    "proposed": "Perlentaucher Laden",
+    "type": "gift",
+    "address": "Neusser Straße 241"
+  },
+  {
+    "realName": "Deichmann",
+    "proposed": "Schuhe am Damm",
+    "type": "shoes",
+    "address": "Neusser Straße 257"
+  },
+  {
+    "realName": "Barbershop Cut & More",
+    "proposed": "Barbier Schnitt & Mieh",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Vodafone",
+    "proposed": "Quasselfon",
+    "type": "mobile_phone",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Ugur",
+    "proposed": "Juwelier Jlöck",
+    "type": "jewelry",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Trust Ink Us",
+    "proposed": "Tinte & Vertrauen",
+    "type": "tattoo",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Feather & Fern",
+    "proposed": "Fedder & Farn",
+    "type": "florist",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "New York Pizza",
+    "proposed": "New Nippes Pizza",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Gelati",
+    "proposed": "Eis-Bützje",
+    "type": "ice_cream",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Foto Star Agentur",
+    "proposed": "Foto Sternche",
+    "type": "photo",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Smile Optic",
+    "proposed": "Grins-Optik",
+    "type": "optician",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Hong Kong China Imbiss",
+    "proposed": "Kowloon Imbiss",
+    "type": "fast_food",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Clean Kadem",
+    "proposed": "Rein & Fein Reinigung",
+    "type": "dry_cleaning",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Hautnah",
+    "proposed": "Ganz Nah Mode",
+    "type": "clothes",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Hair Fantasy",
+    "proposed": "Hoor-Phantasie",
+    "type": "hairdresser",
+    "address": "Neusser Straße 193"
+  },
+  {
+    "realName": "Frappant",
+    "proposed": "Restaurant Verblüff",
+    "type": "restaurant",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Café Wernhers",
+    "proposed": "Café Wilhelms",
+    "type": "cafe",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Schmelzpunkt",
+    "proposed": "Gefrierpunkt",
+    "type": "ice_cream",
+    "address": "Neusser Straße 312"
+  },
+  {
+    "realName": "Rosinski",
+    "proposed": "Blumen Tulpinski",
+    "type": "florist",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Textilreiniger Martinizing",
+    "proposed": "Textilreinigung Mätes",
+    "type": "laundry",
+    "address": "Neusser Straße 298"
+  },
+  {
+    "realName": "Trattoria La Bruschetta",
+    "proposed": "Trattoria La Panzanella",
+    "type": "restaurant",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Sat Copy",
+    "proposed": "Samstag Kopie",
+    "type": "copyshop",
+    "address": "Neusser Straße 351"
+  },
+  {
+    "realName": "i-Mobiles",
+    "proposed": "Ich-Mobil",
+    "type": "mobile_phone",
+    "address": "Neusser Straße 349"
+  },
+  {
+    "realName": "Magic Hands",
+    "proposed": "Zauberhändche",
+    "type": "hairdresser",
+    "address": "Neusser Straße 351"
+  },
+  {
+    "realName": "Porz",
+    "proposed": "Bodenbeläge Zündorf",
+    "type": "flooring",
+    "address": "Neusser Straße 321"
+  },
+  {
+    "realName": "Heilandt",
+    "proposed": "Röstbud Halleluja",
+    "type": "cafe",
+    "address": "Neusser Straße 319"
+  },
+  {
+    "realName": "Rapunzel",
+    "proposed": "Dornröschen Mode",
+    "type": "clothes",
+    "address": "Neusser Straße 317"
+  },
+  {
+    "realName": "Jupp Schlömer Fleischwaren",
+    "proposed": "Tünnes Schlemmer Woosch",
+    "type": "butcher",
+    "address": "Neusser Straße 312"
+  },
+  {
+    "realName": "Tipico",
+    "proposed": "Tippbud",
+    "type": "bookmaker",
+    "address": "Neusser Straße 316"
+  },
+  {
+    "realName": "White Angel",
+    "proposed": "Schwatze Engel",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Goldzeit",
+    "proposed": "Silberzeit",
+    "type": "cafe",
+    "address": "Neusser Straße 285"
+  },
+  {
+    "realName": "Raumausstattung Sitzius",
+    "proposed": "Raumausstattung Sesselius",
+    "type": "interior_decoration",
+    "address": "Neusser Straße 178"
+  },
+  {
+    "realName": "Taqsim",
+    "proposed": "Galata Backstube",
+    "type": "bakery",
+    "address": "Neusser Straße 278"
+  },
+  {
+    "realName": "Tuana Druck",
+    "proposed": "Druckbud Tinte",
+    "type": "copyshop",
+    "address": "Neusser Straße 308"
+  },
+  {
+    "realName": "Sanitätshaus Rahm",
+    "proposed": "Sanitätshaus Sahne",
+    "type": "medical_supply",
+    "address": "Neusser Straße 300"
+  },
+  {
+    "realName": "Friends",
+    "proposed": "Fründe Mobil",
+    "type": "mobile_phone",
+    "address": "Neusser Straße 278"
+  },
+  {
+    "realName": "Égalité",
+    "proposed": "Liberté Coiffure",
+    "type": "hairdresser",
+    "address": "Neusser Straße 304"
+  },
+  {
+    "realName": "Assos Goldschmuck",
+    "proposed": "Trumpf Goldschmuck",
+    "type": "jewelry",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Juwelier Slowik",
+    "proposed": "Juwelier Nachtigall",
+    "type": "jewelry",
+    "address": "Neusser Straße 293"
+  },
+  {
+    "realName": "Trudi's Pharmacy",
+    "proposed": "Tante Gertruds Pülverche",
+    "type": "cosmetics",
+    "address": "Neusser Straße 293"
+  },
+  {
+    "realName": "Ais",
+    "proposed": "Ies",
+    "type": "ice_cream",
+    "address": "Neusser Straße 324"
+  },
+  {
+    "realName": "Pfandkredit Kemp",
+    "proposed": "Pfandhaus Kumm Widder",
+    "type": "pawnbroker",
+    "address": "Neusser Straße 199"
+  },
+  {
+    "realName": "Blumen Raab",
+    "proposed": "Blumen Krähe",
+    "type": "florist",
+    "address": "Neusser Straße 205"
+  },
+  {
+    "realName": "ETMANUS",
+    "proposed": "Händche-Imbiss",
+    "type": "fast_food",
+    "address": "Neusser Straße 356"
+  },
+  {
+    "realName": "Sedat",
+    "proposed": "Salon Schnittmeister",
+    "type": "hairdresser",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "Lavin",
+    "proposed": "Kiosk Lavendel",
+    "type": "kiosk",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  },
+  {
+    "realName": "McDonald's",
+    "proposed": "Burgerbud Bröötche",
+    "type": "fast_food",
+    "address": "Neusser Straße 204"
+  },
+  {
+    "realName": "Galeria Karstadt Kaufhof",
+    "proposed": "Warenhaus Allet do",
+    "type": "department_store",
+    "address": "Neusser Straße 242-246"
+  },
+  {
+    "realName": "Kiosk Wilden",
+    "proposed": "Kiosk Zahm",
+    "type": "ticket",
+    "address": "Neusser Straße 235"
+  },
+  {
+    "realName": "Auto Center Köln",
+    "proposed": "Auto-Bud Kölle",
+    "type": "car",
+    "address": "Neusser Straße 380"
+  },
+  {
+    "realName": "Kiosk Berghaus-Prang",
+    "proposed": "Kiosk Berg & Tal",
+    "type": "kiosk",
+    "address": "Neusser Straße 310"
+  },
+  {
+    "realName": "Alnatura Super Natur Markt",
+    "proposed": "Biomarkt Jrönzeug",
+    "type": "supermarket",
+    "address": "Neusser Str. (Gebäudeadresse)"
+  }
+]

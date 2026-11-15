@@ -2,8 +2,8 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
 import type { PhysicsWorld } from './world';
 
-/** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z. */
-export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number };
+/** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z; jump takes off if standing on ground. */
+export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number; jump?: boolean };
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -22,6 +22,7 @@ export class Character {
   private vy = 0;
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private enabled = true;
+  private grounded = false;
 
   constructor(private readonly pw: PhysicsWorld, spawn: Vec3) {
     const { rapier: R, world } = pw;
@@ -47,6 +48,10 @@ export class Character {
     // forward = (sin, cos), right = forward × up = (−cos, sin)
     const vx = (f * s - r * c) * speed;
     const vz = (f * c + r * s) * speed;
+    if (i.jump && this.grounded) {
+      this.vy = T.jumpSpeed;
+      this.grounded = false;
+    }
     this.vy += T.gravity * dt;
 
     this.kcc.computeColliderMovement(
@@ -55,7 +60,9 @@ export class Character {
       this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS,
     );
     const m = this.kcc.computedMovement();
-    if (this.kcc.computedGrounded()) this.vy = 0;
+    // grounded = standing (not while still rising from a take-off)
+    this.grounded = this.kcc.computedGrounded() && this.vy <= 0;
+    if (this.grounded) this.vy = 0;
     const p = this.body.translation();
     this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
     this.vel = { x: m.x / dt, y: m.y / dt, z: m.z / dt };

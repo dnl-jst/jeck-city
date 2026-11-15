@@ -12,11 +12,15 @@ import { parkedCarSpots } from './parking.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
+import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
 import { buildStreetGeometry } from './streets.js';
 
 const RAW_DIR = 'data/raw';
 const OVERRIDES = 'data/building-overrides.json';
+/** Curated shop names: OSM name → invented allusion (user-approved). */
+const SHOP_NAMES = 'data/shop-names.json';
+const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const BUDGET = 25 * 1024 * 1024;
 const PARKING_SEED = 2613766;
@@ -67,6 +71,13 @@ async function main() {
   if (Object.keys(overrides).length) console.log(`overrides: ${Object.keys(overrides).join(', ')}`);
   const active = buildings.filter((b) => !(b.id in overrides));
 
+  const placedShops = assignShops(f.shops, f.boundary, active);
+  if (args.includes('--list-shops')) return listNeusserShops(f, placedShops, active);
+  const curated: Record<string, string> = existsSync(SHOP_NAMES) ? JSON.parse(await readFile(SHOP_NAMES, 'utf8')) : {};
+  const labels = assignShopLabels(f.shops, curated, SHOP_SEED);
+  const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
+  console.log(`shops: ${shops.length} (${Object.keys(curated).length} curated names, ${shops.filter((s) => s.sign).length} with sign)`);
+
   const streets = buildStreetGeometry(f);
   const graph = buildRoadGraph(f);
   const spawn = findSpawn(f.roads, SPAWN_TARGET, active);
@@ -112,7 +123,10 @@ async function main() {
       const p = placeShelter(s.pos, f);
       return { name: s.name, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) };
     }),
-    shops: assignShops(f.shops, f.boundary, active).map((s) => ({ ...s, x: r2(s.x), z: r2(s.z) })),
+    shops: shops.map((s) => ({
+      ...s, x: r2(s.x), z: r2(s.z),
+      ...(s.sign ? { sign: { x: r2(s.sign.x), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
+    })),
     parked: parkedCars(parkedCarSpots(f, PARKING_SEED), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,
   };
@@ -131,6 +145,25 @@ async function main() {
   console.log(`  chunk_*.glb (${chunkBytes.length})       ${mb(chunkBytes.reduce((a, b) => a + b, 0))} (max ${mb(Math.max(...chunkBytes))})`);
   console.log(`world total: ${mb(total)} (budget ${mb(BUDGET)})`);
   if (total > BUDGET) throw new Error('world assets over budget');
+}
+
+/**
+ * `--list-shops`: every shop in the play area on Neusser Straße (OSM address, or placed in a building with an
+ * NRW Neusser Str. address), as JSON lines { realName, type, address } — input for data/shop-names.json.
+ */
+function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest['shops'], buildings: BuildingMesh[]): void {
+  const neusserBuilding = new Set(buildings.filter((b) => b.flags & 1).map((b) => b.id));
+  let n = 0;
+  for (const s of f.shops) {
+    const p = placed.find((q) => q.x === s.pos.x && q.z === s.pos.z);
+    if (!p) continue; // outside the play area
+    const onNeusser = isNeusserAddress(s.street) || (!s.street && p.buildingId !== undefined && neusserBuilding.has(p.buildingId));
+    if (!onNeusser) continue;
+    const address = s.street ? `${s.street} ${s.housenumber ?? ''}`.trim() : 'Neusser Str. (Gebäudeadresse)';
+    console.log(JSON.stringify({ realName: s.name ?? null, type: s.type, address }));
+    n++;
+  }
+  console.log(`${n} shops on Neusser Straße`);
 }
 
 main().catch((err) => {

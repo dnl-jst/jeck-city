@@ -10,9 +10,12 @@ export type OsmFeatures = {
   greens: Pt[][];
   trees: Pt[];
   lamps: Pt[];
-  shops: { pos: Pt; name?: string; type: string }[];
+  /** shop=* plus eateries/pubs/pharmacies (amenity=*); type = the tag value. */
+  shops: Shop[];
   squares: { name: string; outline: Pt[] }[];
 };
+
+export type Shop = { pos: Pt; name?: string; type: string; street?: string; housenumber?: string };
 
 type LL = { lat: number; lon: number };
 type Tags = Record<string, string>;
@@ -26,6 +29,20 @@ const KIND_WIDTH: Record<string, number> = {
 };
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
+
+/** amenity values that are shops for the game (they get a sign and a shop name). */
+const SHOP_AMENITIES = new Set(['cafe', 'restaurant', 'fast_food', 'pub', 'bar', 'biergarten', 'ice_cream', 'pharmacy']);
+
+/** Shop from tags, or undefined if the feature is no shop. */
+function shopOf(pos: Pt, t: Tags): Shop | undefined {
+  const type = t.shop ?? (SHOP_AMENITIES.has(t.amenity ?? '') ? t.amenity : undefined);
+  if (!type) return undefined;
+  const s: Shop = { pos, type };
+  if (t.name) s.name = t.name;
+  if (t['addr:street']) s.street = t['addr:street'];
+  if (t['addr:housenumber']) s.housenumber = t['addr:housenumber'];
+  return s;
+}
 
 const toPts = (g: LL[]): Pt[] => g.map((p) => wgs84ToLocal(p.lat, p.lon));
 const isClosed = (p: Pt[]) => p.length >= 4 && p[0]!.x === p[p.length - 1]!.x && p[0]!.z === p[p.length - 1]!.z;
@@ -91,7 +108,10 @@ export function parseOsm(json: unknown): OsmFeatures {
       if (t.natural === 'tree') f.trees.push(pos);
       else if (t.highway === 'street_lamp') f.lamps.push(pos);
       else if (isStopTags(t)) stops.push({ pos, name: t.name!, prio: t.public_transport === 'platform' ? 0 : 1 });
-      else if (t.shop) f.shops.push(t.name ? { pos, name: t.name, type: t.shop } : { pos, type: t.shop });
+      else {
+        const shop = shopOf(pos, t);
+        if (shop) f.shops.push(shop);
+      }
     } else if (el.type === 'way' && el.geometry) {
       const pts = toPts(el.geometry);
       const closed = isClosed(pts);
@@ -106,9 +126,9 @@ export function parseOsm(json: unknown): OsmFeatures {
           if (r) f.roads.push(r);
         }
       } else if (closed && GREEN(t)) f.greens.push(pts);
-      else if (t.shop) {
-        const pos = centroid(closed ? pts.slice(0, -1) : pts);
-        f.shops.push(t.name ? { pos, name: t.name, type: t.shop } : { pos, type: t.shop });
+      else {
+        const shop = shopOf(centroid(closed ? pts.slice(0, -1) : pts), t);
+        if (shop) f.shops.push(shop);
       }
     }
   }

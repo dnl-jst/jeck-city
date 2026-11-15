@@ -122,7 +122,101 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   return group;
 }
 
-/** Street furniture: instanced lamps and trees plus tram stops, limited to loaded chunks. */
+/** Sign board centre height (m): the shopfront sign band of the facade shader spans 3.15–3.88 m. */
+export const SIGN_Y = 3.52;
+const SIGN_H = 0.6;
+const CELL_W = 512, CELL_H = 80, ATLAS_COLS = 4;
+
+/** Board colours (background, ink) of the sign styles. */
+const SIGN_STYLES: [string, string][] = [
+  ['#1f3b2c', '#f1e7cc'], ['#5a1a22', '#f6e3b8'], ['#1c2a4a', '#f2f0e6'], ['#18181a', '#f2c46b'],
+  ['#ece4d0', '#2a2622'], ['#7a4a1c', '#fbeed2'], ['#f3f1ea', '#1d4f7a'], ['#2e5a5a', '#ffffff'],
+];
+
+/** Deterministic small hash of a string. */
+function strHash(t: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+/**
+ * All shop signs as one mesh: every distinct label is drawn once into a canvas atlas (cells of 512 × 80 px),
+ * every sign is a quad on its building's street-facing wall that maps its label's cell. The quad's front
+ * (+z before rotation) faces outwards along the sign heading, so the text reads left to right from the street.
+ */
+export function buildShopSigns(shops: WorldManifest['shops'], material: MeshStandardMaterial): Mesh | null {
+  const signed = shops.filter((s) => s.sign);
+  if (!signed.length) return null;
+  const labels = [...new Set(signed.map((s) => s.label))];
+  const rows = Math.ceil(labels.length / ATLAS_COLS);
+  const c = document.createElement('canvas');
+  c.width = CELL_W * ATLAS_COLS;
+  c.height = rows * CELL_H;
+  const g = c.getContext('2d')!;
+  const used = new Map<string, { u0: number; u1: number; v0: number; v1: number; aspect: number }>();
+  labels.forEach((label, i) => {
+    const x0 = (i % ATLAS_COLS) * CELL_W, y0 = Math.floor(i / ATLAS_COLS) * CELL_H;
+    const h = strHash(label);
+    const [bg, ink] = SIGN_STYLES[h % SIGN_STYLES.length]!;
+    const serif = (h >>> 8) % 3 === 0;
+    g.font = `${serif ? 'italic bold 46px Georgia, serif' : 'bold 44px system-ui, sans-serif'}`;
+    const pad = 26;
+    const w = Math.min(CELL_W, Math.ceil(g.measureText(label).width) + pad * 2);
+    const left = x0 + (CELL_W - w) / 2;
+    g.fillStyle = bg;
+    g.fillRect(left, y0, w, CELL_H);
+    g.strokeStyle = ink;
+    g.globalAlpha = 0.55;
+    g.lineWidth = 3;
+    g.strokeRect(left + 7, y0 + 7, w - 14, CELL_H - 14);
+    g.globalAlpha = 1;
+    g.fillStyle = ink;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText(label, x0 + CELL_W / 2, y0 + CELL_H / 2 + 2, CELL_W - pad * 2);
+    // half-texel inset against bleeding from neighbouring cells
+    used.set(label, { u0: (left + 0.5) / c.width, u1: (left + w - 0.5) / c.width, v0: 1 - (y0 + CELL_H - 0.5) / c.height, v1: 1 - (y0 + 0.5) / c.height, aspect: w / CELL_H });
+  });
+  const tex = new CanvasTexture(c);
+  tex.colorSpace = SRGBColorSpace;
+  tex.anisotropy = 8;
+  material.map = tex;
+  material.emissiveMap = tex;
+  material.needsUpdate = true;
+
+  const pos = new Float32Array(signed.length * 12), nor = new Float32Array(signed.length * 12), uv = new Float32Array(signed.length * 8);
+  const idx: number[] = [];
+  signed.forEach((s, i) => {
+    const sign = s.sign!;
+    const cell = used.get(s.label)!;
+    let w = SIGN_H * cell.aspect, h = SIGN_H;
+    if (w > sign.width) { h *= sign.width / w; w = sign.width; }
+    const nx = Math.sin(sign.heading), nz = Math.cos(sign.heading);
+    // local +x of a plane rotated by heading: (cos h, −sin h) — the reader's right when facing the wall
+    const rx = nz, rz = -nx;
+    const corners: [number, number, number, number][] = [[-1, -1, cell.u0, cell.v0], [1, -1, cell.u1, cell.v0], [1, 1, cell.u1, cell.v1], [-1, 1, cell.u0, cell.v1]];
+    corners.forEach(([a, b, u, v], k) => {
+      pos.set([sign.x + rx * a * w / 2, SIGN_Y + b * h / 2, sign.z + rz * a * w / 2], (i * 4 + k) * 3);
+      nor.set([nx, 0, nz], (i * 4 + k) * 3);
+      uv.set([u, v], (i * 4 + k) * 2);
+    });
+    const o = i * 4;
+    idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+  });
+  const geo = new BufferGeometry();
+  geo.setAttribute('position', new BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new BufferAttribute(nor, 3));
+  geo.setAttribute('uv', new BufferAttribute(uv, 2));
+  geo.setIndex(idx);
+  geo.computeBoundingSphere();
+  const mesh = new Mesh(geo, material);
+  mesh.name = 'shopSigns';
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** Street furniture: instanced lamps and trees plus tram stops, limited to loaded chunks; all shop signs. */
 export class Props {
   /** Lantern glass; Lighting drives its emissive intensity at night. */
   readonly lampGlass = new MeshStandardMaterial({ color: 0xdcd6c4, emissive: 0xffc98a, emissiveIntensity: 0, roughness: 0.2 });
@@ -137,8 +231,12 @@ export class Props {
   private readonly trees: [InstancedMesh, InstancedMesh];
   private readonly haloPoints: Points;
   private readonly stops = new Map<string, Group>();
+  /** Shop sign boards; their lettering glows at night (setNight). */
+  private readonly signMat = new MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.55 });
 
   constructor(private readonly scene: Scene, private readonly manifest: WorldManifest) {
+    const signs = buildShopSigns(manifest.shops, this.signMat);
+    if (signs) scene.add(signs);
     const lg = lampGeometries();
     const tg = treeGeometries();
     const n = manifest.lamps.length, t = manifest.trees.length;
@@ -156,6 +254,11 @@ export class Props {
     }
     this.trees[1].receiveShadow = true;
     scene.add(this.haloPoints);
+  }
+
+  /** night 0..1: lit shop signs after dark. */
+  setNight(night: number): void {
+    this.signMat.emissiveIntensity = 1.1 * night;
   }
 
   /** Rebuilds the instance sets for the loaded chunks; call when that set changes. */

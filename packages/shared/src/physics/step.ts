@@ -13,6 +13,11 @@ export class FixedStepper {
     readonly maxSteps = 5,
   ) {}
 
+  /** Fraction (0..1) of a step already accumulated: blend previous → current physics state by it when rendering. */
+  get alpha(): number {
+    return this.acc / this.step;
+  }
+
   /** Adds dt seconds of frame time and calls fn once per fixed step due. Returns the number of steps run. */
   advance(dt: number, fn: () => void): number {
     this.acc += dt;

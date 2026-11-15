@@ -41,3 +41,15 @@ test('boundary relation parts are joined (one reversed) into a closed ring', () 
   expect(b[0]).toEqual(b[4]);
   expect(new Set(b.map((p) => `${p.x.toFixed(0)},${p.z.toFixed(0)}`)).size).toBe(4);
 });
+
+test('cafés, restaurants, bars and pharmacies (amenity) count as shops; address kept', () => {
+  const node = (id: number, tags: Record<string, string>) => ({ type: 'node', id, lat: 50.96, lon: 6.95, tags });
+  const f = parseOsm({ elements: [
+    node(1, { amenity: 'cafe', name: 'Café X', 'addr:street': 'Neusser Straße', 'addr:housenumber': '12' }),
+    node(2, { amenity: 'pharmacy' }),
+    node(3, { amenity: 'bench' }),
+    node(4, { shop: 'kiosk', amenity: 'pub' }),
+  ] });
+  expect(f.shops.map((s) => s.type)).toEqual(['cafe', 'pharmacy', 'kiosk']);
+  expect(f.shops[0]).toMatchObject({ name: 'Café X', street: 'Neusser Straße', housenumber: '12' });
+});
