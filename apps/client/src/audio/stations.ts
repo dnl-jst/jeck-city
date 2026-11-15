@@ -1,4 +1,6 @@
-export type StationId = 'koellefornia' | 'radiokoeln' | 'einslive';
+import { STATION_IDS, type StationId } from '@nn/shared';
+
+export { STATION_IDS, type StationId };
 
 export const STATIONS: readonly { id: StationId; name: string; url: string }[] = [
   { id: 'koellefornia', name: 'Radio Köllefornia', url: 'https://stream.radio-koellefornia.de/listen/radio_koellefornia/radio.mp3' },
