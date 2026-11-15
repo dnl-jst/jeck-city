@@ -30,6 +30,22 @@ function fnv1a(s: string): number {
   return h >>> 0;
 }
 
+type Pt = { x: number; z: number };
+
+function inRing(r: Pt[], x: number, z: number): boolean {
+  let inside = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const a = r[i]!, b = r[j]!;
+    if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+/** Point in union of ground polygons (holes respected). */
+function insideFootprint(fp: { outer: Pt[]; holes: Pt[][] }[], x: number, z: number): boolean {
+  return fp.some((g) => inRing(g.outer, x, z) && !g.holes.some((h) => inRing(h, x, z)));
+}
+
 export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
   const ground = b.surfaces.filter((s) => s.kind === 'ground');
   const groundPts = ground.flatMap((s) => s.outer);
@@ -45,6 +61,11 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
   }
   cx /= refPts.length; cz /= refPts.length;
 
+  const footprint = ground.map((g) => ({
+    outer: g.outer.map(([e, n]) => utmToLocal(e, n)),
+    holes: g.holes.map((h) => h.map(([e, n]) => utmToLocal(e, n))),
+  }));
+
   const pos: number[] = [], nor: number[] = [], uv: number[] = [], kind: number[] = [];
   for (const s of b.surfaces) {
     if (s.kind !== 'wall' && s.kind !== 'roof') continue;
@@ -59,7 +80,6 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
     // Wall u origin: first point of the wall's outer ring.
     const { x: x0, z: z0 } = utmToLocal(s.outer[0]![0], s.outer[0]![1]);
 
-    // Surface orientation from the first non-degenerate triangle (planar polygon).
     const tri = (k: number) => [t.indices[k]! * 3, t.indices[k + 1]! * 3, t.indices[k + 2]! * 3] as const;
     const normalOf = (a: number, bb: number, c: number): [number, number, number] => {
       const e1 = [local[bb]! - local[a]!, local[bb + 1]! - local[a + 1]!, local[bb + 2]! - local[a + 2]!];
@@ -70,17 +90,37 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
       const l = Math.hypot(nx, ny, nz);
       return l > 1e-12 ? [nx / l, ny / l, nz / l] : [0, 0, 0];
     };
-    // Decide flip per triangle (brief: normal . (midpoint - centroid) > 0 for walls; y > 0 for roofs).
+    // Target normal per SURFACE (never per triangle). Walls: the Newell normal, flipped when a
+    // probe 0.3 m along it from the surface centre lies inside this building's footprint (no
+    // footprint: centroid test). Roofs: the Newell normal, flipped to point up.
+    const ring = s.outer.map(([e, n, z]) => {
+      const l = utmToLocal(e, n);
+      return [l.x, z - minZ, l.z] as const;
+    });
+    let nnx = 0, nny = 0, nnz = 0;
+    for (let i = 0; i < ring.length; i++) {
+      const p = ring[i]!, q = ring[(i + 1) % ring.length]!;
+      nnx += (p[1] - q[1]) * (p[2] + q[2]);
+      nny += (p[2] - q[2]) * (p[0] + q[0]);
+      nnz += (p[0] - q[0]) * (p[1] + q[1]);
+    }
+    const nl = Math.hypot(nnx, nny, nnz);
+    if (!(nl > 1e-9)) continue;
+    let tx = nnx / nl, ty = nny / nl, tz = nnz / nl;
+    const mcx = ring.reduce((m, p) => m + p[0], 0) / ring.length;
+    const mcz = ring.reduce((m, p) => m + p[2], 0) / ring.length;
+    const hl = Math.hypot(tx, tz);
+    let flipSurface: boolean;
+    if (!isWall && Math.abs(ty) > 1e-6) flipSurface = ty < 0;
+    else if (hl < 1e-6) flipSurface = false;
+    else if (footprint.length > 0) flipSurface = insideFootprint(footprint, mcx + (tx / hl) * 0.3, mcz + (tz / hl) * 0.3);
+    else flipSurface = tx * (mcx - cx) + tz * (mcz - cz) < 0;
+    if (flipSurface) { tx = -tx; ty = -ty; tz = -tz; }
     for (let k = 0; k < t.indices.length; k += 3) {
       let [a, bb, c] = tri(k);
       let n = normalOf(a, bb, c);
       if (n[0] === 0 && n[1] === 0 && n[2] === 0) continue; // sliver
-      let flip: boolean;
-      const mx = (local[a]! + local[bb]! + local[c]!) / 3 - cx;
-      const mz = (local[a + 2]! + local[bb + 2]! + local[c + 2]!) / 3 - cz;
-      if (!isWall && Math.abs(n[1]) > 1e-6) flip = n[1] < 0;
-      else flip = n[0] * mx + n[2] * mz < 0;
-      if (flip) {
+      if (n[0] * tx + n[1] * ty + n[2] * tz < 0) {
         [bb, c] = [c, bb];
         n = [-n[0], -n[1], -n[2]];
       }

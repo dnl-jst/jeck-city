@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
+import { utmToLocal } from '@nn/shared';
 
 const read = (f: string) => readFileSync(new URL(`../fixtures/${f}`, import.meta.url), 'utf8');
 const building = () => parseCityGml(read('gable-house.gml'))[0]!;
@@ -91,4 +92,34 @@ test('seed is stable, FNV-1a, differs per id', () => {
 
 test('returns null without usable surfaces', () => {
   expect(buildBuildingMesh({ ...building(), surfaces: [] })).toBeNull();
+});
+
+// Concave U-shaped house; its courtyard walls have inward (wrong) source winding.
+function insideRing(r: { x: number; z: number }[], x: number, z: number) {
+  let inside = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const a = r[i]!, b = r[j]!;
+    if (a.z > z !== b.z > z && x < ((b.x - a.x) * (z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
+test('concave U house: every wall normal points out of the footprint, windings agree', () => {
+  const b = parseCityGml(read('u-house.gml'))[0]!;
+  const fp = b.surfaces.find((s) => s.kind === 'ground')!.outer.map(([e, n]) => utmToLocal(e, n));
+  const m = buildBuildingMesh(b)!;
+  let walls = 0;
+  for (let t = 0; t < m.positions.length / 9; t++) {
+    if (m.kind[t * 3] !== 0) continue;
+    walls++;
+    const p = (k: number, c: number) => m.positions[(t * 3 + k) * 3 + c]!;
+    const mx = (p(0, 0) + p(1, 0) + p(2, 0)) / 3, mz = (p(0, 2) + p(1, 2) + p(2, 2)) / 3;
+    const nx = m.normals[t * 9]!, nz = m.normals[t * 9 + 2]!;
+    expect(insideRing(fp, mx + nx * 0.3, mz + nz * 0.3)).toBe(false);
+    const e1 = [p(1, 0) - p(0, 0), p(1, 1) - p(0, 1), p(1, 2) - p(0, 2)];
+    const e2 = [p(2, 0) - p(0, 0), p(2, 1) - p(0, 1), p(2, 2) - p(0, 2)];
+    const cx = e1[1]! * e2[2]! - e1[2]! * e2[1]!, cz = e1[0]! * e2[1]! - e1[1]! * e2[0]!;
+    expect(cx * nx + cz * nz).toBeGreaterThan(0);
+  }
+  expect(walls).toBe(16);
 });
