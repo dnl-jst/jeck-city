@@ -1,15 +1,18 @@
-import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
+import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
-  Character, FixedStepper, heightAt, staticWorldFilter, StreetProps, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type TerrainGrid,
-  type Vehicle, type WorldManifest,
+  BikeRacks, Character, dismountSpot, FixedStepper, heightAt, ParkedBikes, staticWorldFilter, StreetProps, TUNING, VEHICLE_REST_Y,
+  type BikeState, type BikeType, type PhysicsWorld, type RiddenBike, type TerrainGrid, type Vehicle, type WorldManifest,
 } from '@nn/shared';
+import { BikeRig } from './bikes/rig';
+import { BikeView } from './bikes/parked';
+import { RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
 import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedCars, type CarPose } from './car';
-import { PlayerFigure } from './player';
+import { angleDelta, PlayerFigure, type Posture } from './player';
 import { FollowCamera, FreeFly } from './camera';
 import { Ignition } from './ignition';
 import { MapMode, type DriveControls } from './map/map-mode';
@@ -25,7 +28,13 @@ const DT = TUNING.world.dt;
 export type GameContext = {
   scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null; terrain: TerrainGrid;
   audio?: GameAudio;
+  /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
+  bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
 };
+
+/** Upper-body posture per bike type. */
+const POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright' };
+const KMH = 1 / 3.6;
 
 const STATIC_ONLY = staticWorldFilter();
 
@@ -41,7 +50,7 @@ export function surfaceY(pw: PhysicsWorld, x: number, z: number, fromY: number):
 
 /** The playable game: walking figure, cars, follow camera; built once world and physics are ready. */
 export class Game {
-  mode: 'walk' | 'drive' = 'walk';
+  mode: 'walk' | 'drive' | 'ride' = 'walk';
   flying = false;
   readonly char: Character;
   readonly figure: PlayerFigure;
@@ -49,6 +58,19 @@ export class Game {
   readonly driven: DrivenCar;
   /** Tree and lamp colliders; lamps hit hard enough fall over (see takeFallen). */
   readonly props: StreetProps;
+  /** Rideable bikes (parked ones are dynamic bodies near the player) and the rack hoops. */
+  readonly bikes: ParkedBikes;
+  readonly racks: BikeRacks;
+  private readonly bikeView: BikeView | null = null;
+  private readonly rigs = new Map<BikeType, BikeRig>();
+  private ridden: RiddenBike | null = null;
+  private riddenId: number | null = null;
+  private rig: BikeRig | null = null;
+  private prevBike: BikeState | null = null;
+  private currBike: BikeState | null = null;
+  /** Space pressed on the bike: hop in the next fixed step; a crash in the last steps. */
+  private hopPending = false;
+  private crashed = false;
   readonly follow: FollowCamera;
   readonly fly: FreeFly;
   /** Door, starter, engine: throttle, radio and lights wait for it. */
@@ -96,6 +118,10 @@ export class Game {
     this.figure.heading = spawn.heading;
     this.props = new StreetProps(pw, m.lamps, m.trees, terrain);
     this.cars = new ParkedCars(scene, pw, m.parked, terrain);
+    this.racks = new BikeRacks(pw, m.bikeRacks, terrain);
+    this.bikes = new ParkedBikes(pw, m.bikes, terrain);
+    if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, this.bikes, m.bikeRacks, this.racks.ys);
+    this.bikes.updatePhysics(spawn.x, spawn.z);
     this.follow = new FollowCamera(camera, pw);
     this.follow.yaw = spawn.heading;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
@@ -103,12 +129,19 @@ export class Game {
 
   /** Where the player is: feet while walking, chassis centre while driving. */
   focus(): Vec3 {
+    if (this.mode === 'ride' && this.currBike) return this.currBike;
     return this.mode === 'drive' && this.currPose ? this.currPose : this.currPos;
+  }
+
+  /** Type of the bike being ridden, else null. */
+  bikeType(): BikeType | null {
+    return this.ridden ? this.ridden.type : null;
   }
 
   /** Ground speed (m/s) of the player or the car. */
   speed(): number {
     if (this.vehicle) return Math.abs(this.vehicle.speed());
+    if (this.currBike) return Math.abs(this.currBike.speed);
     const v = this.char.velocity();
     return Math.hypot(v.x, v.z);
   }
@@ -140,14 +173,21 @@ export class Game {
       }
       // while the wheel is open the mouse points at a station instead of turning the camera
       if (!this.wheelState.open) this.follow.turn(mouse.dx, mouse.dy);
-      if (input.consume('Space') && this.mode === 'walk') this.jumpPending = true;
-      if (input.consume('KeyE')) {
+      const busy = this.figure.busy; // fallen off: no control until up again
+      if (input.consume('Space') && !busy) {
+        if (this.mode === 'walk') this.jumpPending = true;
+        else if (this.mode === 'ride') this.hopPending = true;
+      }
+      if (input.consume('KeyH') && this.mode === 'ride') audio?.bell();
+      if (input.consume('KeyE') && !busy) {
         if (this.mode === 'walk') this.getIn();
+        else if (this.mode === 'ride') this.getOffBike();
         else this.getOut();
       }
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
-    const raw = this.flying ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
+    const still = this.flying || this.figure.busy;
+    const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
     for (const e of this.ignition.update(dt)) {
       if (e === 'doorClose') audio?.doorClosed();
@@ -159,6 +199,9 @@ export class Game {
       if (this.mode === 'walk') {
         this.char.applyInput({ forward: ctl.forward, right: ctl.right, run: ctl.run, yaw: this.follow.yaw, jump: this.jumpPending });
         this.jumpPending = false;
+      } else if (this.mode === 'ride') {
+        if (!this.crashed && this.ridden!.applyInput({ pedal: ctl.forward, steer: ctl.right, sprint: ctl.run, hop: this.hopPending }).crashed) this.crashed = true;
+        this.hopPending = false;
       } else {
         this.vehicle!.applyInput({ throttle, steer: ctl.right, brake: ctl.brake });
       }
@@ -170,7 +213,14 @@ export class Game {
         this.prevPose = this.currPose;
         this.currPose = this.vehicle.pose();
       }
+      if (this.ridden) {
+        this.prevBike = this.currBike;
+        this.currBike = this.ridden.state();
+      }
     });
+    if (this.crashed) this.crash();
+    this.bikes.sync();
+    this.bikeView?.update(this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.cars.sync();
     this.cars.updateVisibility(this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.proximityAge += dt;
@@ -178,6 +228,7 @@ export class Game {
       this.proximityAge = 0;
       const f = this.focus();
       this.cars.updateProximity(f.x, f.z);
+      this.bikes.updatePhysics(f.x, f.z);
     }
     this.render(dt, night);
   }
@@ -194,6 +245,16 @@ export class Game {
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
       if (grounded) this.airTime = 0;
+    } else if (this.mode === 'ride' && this.currBike && this.rig) {
+      const prev = this.prevBike ?? this.currBike, cur = this.currBike;
+      const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
+      const rig = this.rig;
+      rig.update(s, this.ridden!.lean(), dt);
+      rig.setLights(night);
+      this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
+        [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], POSTURE[rig.type]);
+      if (!this.flying) this.follow.update(s, s.heading, dt);
+      audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
     } else if (this.currPose) {
       const prev = this.prevPose ?? this.currPose;
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
@@ -237,6 +298,15 @@ export class Game {
 
   private getIn(): void {
     const id = nearestEnterableCar(this.currPos, this.cars.candidates());
+    const bike = this.bikes.nearestMountable(this.currPos);
+    if (bike !== null) {
+      const b = this.bikes.poses[bike]!, p = this.currPos;
+      const carDist = id === null ? Infinity : Math.hypot(this.cars.poses[id]!.x - p.x, this.cars.poses[id]!.z - p.z);
+      if (Math.hypot(b.x - p.x, b.z - p.z) <= carDist) {
+        this.mountBike(bike);
+        return;
+      }
+    }
     if (id === null) return;
     this.vehicle = this.cars.enter(id);
     this.jumpPending = false;
@@ -279,6 +349,82 @@ export class Game {
     this.ignition.stop();
     this.closeWheel();
     this.ctx.audio?.exitCar();
+  }
+
+  private mountBike(id: number): void {
+    this.ridden = this.bikes.mount(id);
+    this.riddenId = id;
+    this.currBike = this.prevBike = this.ridden.state();
+    this.crashed = false;
+    this.hopPending = this.jumpPending = false;
+    this.char.setEnabled(false);
+    const type = this.ridden.type;
+    this.rig = this.rigFor(type);
+    if (this.rig) {
+      this.rig.setColor(this.bikes.colors[id]!);
+      this.ctx.scene.add(this.rig.root);
+      this.rig.leanGroup.add(this.figure.group);
+    }
+    this.follow.setDriving(true, this.currBike.heading, 'bike');
+    this.mode = 'ride';
+    this.ctx.hud.setHint(RIDE_HINT);
+    this.ctx.audio?.mountBike();
+  }
+
+  /** E on the bike: step off to the side (slow) or jump off and let the bike roll on (fast). */
+  private getOffBike(): void {
+    const s = this.ridden!.state();
+    const spot = dismountSpot(s, (x, z) => this.bikes.standFree(x, z, s.y));
+    if (!spot) {
+      this.ctx.hud.flash('Hier kannst du nicht absteigen');
+      return;
+    }
+    if (Math.abs(s.speed) < TUNING.bike.dismountJumpKmh * KMH) this.ridden!.restore({ ...s, speed: 0 });
+    this.leaveBike(spot, s);
+  }
+
+  /** Crashed into something: fall off next to the bike, which stays where it is. */
+  private crash(): void {
+    this.crashed = false;
+    const s = this.ridden!.state();
+    this.ridden!.restore({ ...s, speed: 0 });
+    const spot = dismountSpot(s, (x, z) => this.bikes.standFree(x, z, s.y)) ?? { x: s.x - Math.sin(s.heading) * 1.2, z: s.z - Math.cos(s.heading) * 1.2 };
+    this.leaveBike(spot, s);
+    this.figure.fall(s.heading);
+    this.ctx.audio?.crashBike();
+  }
+
+  private leaveBike(spot: { x: number; z: number }, s: BikeState): void {
+    this.bikes.dismount(this.riddenId!, this.ridden!);
+    this.ridden = null;
+    this.riddenId = null;
+    this.currBike = this.prevBike = null;
+    if (this.rig) {
+      this.ctx.scene.remove(this.rig.root);
+      this.rig.setLights(0);
+    }
+    this.rig = null;
+    this.ctx.scene.add(this.figure.group);
+    this.char.setEnabled(true);
+    this.char.teleport({ x: spot.x, y: (surfaceY(this.pw, spot.x, spot.z, s.y + 1) ?? heightAt(this.ctx.terrain, spot.x, spot.z)) + 0.02, z: spot.z });
+    this.prevPos = this.currPos = this.char.position();
+    this.figure.heading = s.heading;
+    this.follow.setDriving(false);
+    this.mode = 'walk';
+    this.airTime = 0;
+    this.ctx.hud.setHint('');
+    this.ctx.audio?.dismountBike();
+  }
+
+  /** One rig (a clone of the model) per bike type, made on first use. */
+  private rigFor(type: BikeType): BikeRig | null {
+    let rig = this.rigs.get(type);
+    const model = this.ctx.bikeModels?.bikes.get(type);
+    if (!rig && model) {
+      rig = new BikeRig(model.clone(true), type);
+      this.rigs.set(type, rig);
+    }
+    return rig ?? null;
   }
 
   private closeWheel(): void {

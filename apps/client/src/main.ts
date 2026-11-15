@@ -35,7 +35,7 @@ declare global {
      * height of the first static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      mode: 'walk' | 'drive' | 'ride'; bikeType: string | null; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
@@ -226,7 +226,12 @@ async function loadMap(): Promise<MapData | null> {
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics(), loadMap()]).then(([m, { pw, terrain }, mapData]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics(), loadMap()]).then(async ([m, { pw, terrain }, mapData]) => {
+  // bikes still ride without their models (unseen), so a failed model download is not fatal
+  const bikeModels = await world.loadBikeModels(m).catch((err: unknown) => {
+    console.error(err);
+    return undefined;
+  });
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -235,7 +240,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio });
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio, bikeModels });
   if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -255,7 +260,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnState = () => {
     const f = game!.focus();
     return {
-      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
       radio: gameAudio.station,
       engine: game!.ignition.state, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
     };

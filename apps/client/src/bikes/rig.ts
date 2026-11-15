@@ -115,6 +115,12 @@ export class BikeRig {
     }
   }
 
+  /** Position of node `name` in the lean group's frame (where the rider figure hangs while riding). */
+  localPoint(name: string): Vector3 {
+    this.root.updateMatrixWorld(true);
+    return this.leanGroup.worldToLocal(this.world(name));
+  }
+
   /** World position of the saddle point. */
   seat(): Vector3 {
     return this.world('seat');

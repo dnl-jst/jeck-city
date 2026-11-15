@@ -8,6 +8,8 @@ export const CAMERA_WALK = { back: 5, up: 2.3, pivot: 1.5 };
 /** Vertical field of view (degrees). */
 export const CAMERA_FOV = 60;
 export const CAMERA_DRIVE = { back: 7, up: 2.5, pivot: 1.7 };
+/** On a bike: closer and lower than on foot; target y is the ground under the wheels. */
+export const CAMERA_RIDE = { back: 4.2, up: 1.9, pivot: 1.3 };
 const MOUSE = 0.0025;
 const PITCH_MIN = -1.1, PITCH_MAX = 0.55;
 /** Closest the camera may get to the pivot when a wall is in the way (m). */
@@ -31,6 +33,8 @@ export class FollowCamera {
   private lookOffset = 0;
   private idle = 0;
   private driving = false;
+  /** While driving: a car (target = chassis centre) or a bike (target = ground under the wheels). */
+  private vehicle: 'car' | 'bike' = 'car';
   private readonly look = new Vector3();
 
   constructor(private readonly cam: PerspectiveCamera, private readonly pw: PhysicsWorld) {}
@@ -45,8 +49,9 @@ export class FollowCamera {
     this.pitch = Math.min(PITCH_MAX, Math.max(PITCH_MIN, this.pitch - dy * MOUSE));
   }
 
-  /** Switches between walk and drive framing; entering a car starts behind it. */
-  setDriving(on: boolean, carHeading = 0): void {
+  /** Switches between walk and drive framing (car or bike); getting in starts behind the vehicle. */
+  setDriving(on: boolean, carHeading = 0, vehicle: 'car' | 'bike' = 'car'): void {
+    this.vehicle = vehicle;
     if (on && !this.driving) {
       this.carYaw = carHeading;
       this.lookOffset = angleDelta(carHeading, this.yaw);
@@ -59,10 +64,11 @@ export class FollowCamera {
     this.placed = false;
   }
 
-  /** target = feet (walking) or chassis centre with heading (driving). */
+  /** target = feet (walking), chassis centre (car) or ground under the wheels (bike), with the vehicle heading. */
   update(target: { x: number; y: number; z: number }, carHeading: number, dt: number): void {
-    const o = this.driving ? CAMERA_DRIVE : CAMERA_WALK;
-    const groundY = this.driving ? target.y - VEHICLE_REST_Y : target.y;
+    const bike = this.driving && this.vehicle === 'bike';
+    const o = bike ? CAMERA_RIDE : this.driving ? CAMERA_DRIVE : CAMERA_WALK;
+    const groundY = this.driving && !bike ? target.y - VEHICLE_REST_Y : target.y;
     if (this.driving) {
       this.carYaw += angleDelta(this.carYaw, carHeading) * Math.min(1, dt * 3);
       this.idle += dt;
