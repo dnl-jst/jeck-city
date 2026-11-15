@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import { BufferAttribute, BufferGeometry, Scene } from 'three';
 import type { WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
-import { chunksToLoad, chunksToUnload, markSigned, WorldLoader } from './loader';
+import { chunksToLoad, chunksToUnload, fetchOk, markSigned, WorldLoader } from './loader';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
 function gridManifest(): WorldManifest {
@@ -97,4 +97,12 @@ test('markSigned sets flag bit 2 on the vertex ranges of signed buildings only',
   expect(Array.from(g.getAttribute('_flags').array)).toEqual([5, 5, 0, 0, 7, 6]);
   markSigned(g, [{ id: 'A', firstVertex: 0, vertexCount: 2 }], new Set(['A'])); // idempotent
   expect(g.getAttribute('_flags').getX(0)).toBe(5);
+});
+
+describe('fetchOk', () => {
+  it('wraps a rejected fetch as FetchError status 0', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(fetchOk('/x')).rejects.toMatchObject({ name: 'FetchError', status: 0 });
+    vi.unstubAllGlobals();
+  });
 });

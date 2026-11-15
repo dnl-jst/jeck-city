@@ -25,3 +25,9 @@ test('decode reads arrays from an unaligned slice of a larger buffer', () => {
   big.set(buf, 3);
   expect(decodeCollision(big.slice(3).buffer)).toEqual(sample());
 });
+
+test('vertices are quantised to 1 cm', () => {
+  const a = { ...sample(), vertices: new Float32Array([0.004, 1.236, -2.5, 3, 4, 5]), indices: new Uint32Array([0, 1, 0]) };
+  const d = decodeCollision(encodeCollision(a));
+  expect(Array.from(d.vertices)).toEqual([0, 1.24, -2.5, 3, 4, 5].map((v) => Math.fround(v)));
+});

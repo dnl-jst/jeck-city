@@ -33,8 +33,14 @@ export function chunksToUnload(manifest: WorldManifest, pos: XZ, loaded: Readonl
   return manifest.chunks.filter((c) => loaded.has(c.key) && centreDistance(c, pos) > UNLOAD_RADIUS).map((c) => c.key);
 }
 
-async function fetchOk(url: string): Promise<Response> {
-  const res = await fetch(url);
+/** fetch that turns network failures (offline, DNS) and non-ok statuses into FetchError (status 0 for the former). */
+export async function fetchOk(url: string): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch {
+    throw new FetchError(url, 0);
+  }
   if (!res.ok) throw new FetchError(url, res.status);
   return res;
 }

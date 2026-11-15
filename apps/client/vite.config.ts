@@ -11,6 +11,9 @@ export default defineConfig({
     configurePreviewServer(server) {
       server.middlewares.use((req, res, next) => {
         if (!/\.(js|json|glb|bin|css|html)$/.test((req.url ?? "").split("?")[0]!) || !String(req.headers["accept-encoding"]).includes("gzip")) return next();
+        res.setHeader("Vary", "Accept-Encoding");
+        // 304 and HEAD responses carry no body: leave them alone
+        if (req.method === "HEAD" || req.headers["if-none-match"] || req.headers["if-modified-since"]) return next();
         const end = res.end.bind(res);
         const parts: Buffer[] = [];
         res.setHeader("Content-Encoding", "gzip");

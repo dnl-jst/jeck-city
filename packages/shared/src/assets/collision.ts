@@ -4,10 +4,15 @@
  */
 export type CollisionAsset = { vertices: Float32Array; indices: Uint32Array; boundary: Float32Array };
 
-const MAGIC = 'NNC1';
+const MAGIC = 'NNC2';
 const HEADER = 16; // magic + three uint32 element counts
 
-/** Layout: 'NNC1', uint32 vertices.length, indices.length, boundary.length (element counts), then the arrays, all little-endian. */
+/**
+ * Layout: 'NNC2', uint32 vertices.length, indices.length, boundary.length (element counts), then little-endian:
+ * vertices as int32 centimetres, each stored as the difference to the same axis of the previous vertex (so they
+ * gzip well); indices as int32 differences to the previous index; boundary as float32.
+ * Vertices are quantised to 1 cm.
+ */
 export function encodeCollision(a: CollisionAsset): ArrayBuffer {
   const total = HEADER + 4 * (a.vertices.length + a.indices.length + a.boundary.length);
   const buf = new ArrayBuffer(total);
@@ -17,8 +22,15 @@ export function encodeCollision(a: CollisionAsset): ArrayBuffer {
   view.setUint32(8, a.indices.length, true);
   view.setUint32(12, a.boundary.length, true);
   let o = HEADER;
-  for (const v of a.vertices) { view.setFloat32(o, v, true); o += 4; }
-  for (const v of a.indices) { view.setUint32(o, v, true); o += 4; }
+  const prev = [0, 0, 0];
+  a.vertices.forEach((v, i) => {
+    const cm = Math.round(v * 100);
+    view.setInt32(o, cm - prev[i % 3]!, true);
+    prev[i % 3] = cm;
+    o += 4;
+  });
+  let p = 0;
+  for (const v of a.indices) { view.setInt32(o, v - p, true); p = v; o += 4; }
   for (const v of a.boundary) { view.setFloat32(o, v, true); o += 4; }
   return buf;
 }
@@ -34,9 +46,14 @@ export function decodeCollision(buf: ArrayBuffer): CollisionAsset {
   if (buf.byteLength !== HEADER + 4 * (nv + ni + nb)) throw new Error('collision: length mismatch');
   let o = HEADER;
   const vertices = new Float32Array(nv);
-  for (let i = 0; i < nv; i++, o += 4) vertices[i] = view.getFloat32(o, true);
+  const prev = [0, 0, 0];
+  for (let i = 0; i < nv; i++, o += 4) {
+    prev[i % 3]! += view.getInt32(o, true);
+    vertices[i] = prev[i % 3]! / 100;
+  }
   const indices = new Uint32Array(ni);
-  for (let i = 0; i < ni; i++, o += 4) indices[i] = view.getUint32(o, true);
+  let p = 0;
+  for (let i = 0; i < ni; i++, o += 4) { p += view.getInt32(o, true); indices[i] = p; }
   const boundary = new Float32Array(nb);
   for (let i = 0; i < nb; i++, o += 4) boundary[i] = view.getFloat32(o, true);
   for (const i of indices) if (i >= nv / 3) throw new Error('collision: index out of range');

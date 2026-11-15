@@ -7,8 +7,10 @@ import { chromium } from 'playwright';
 const PORT = 4173;
 const base = `http://localhost:${PORT}/`;
 execSync('npm run build', { stdio: 'inherit' });
-const preview = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], { cwd: 'apps/client', stdio: 'ignore' });
+// spawn vite's own bin (not npx) so kill() frees the port
+const preview = spawn(process.execPath, ['../../node_modules/vite/bin/vite.js', 'preview', '--port', String(PORT), '--strictPort'], { cwd: 'apps/client', stdio: 'ignore' });
 const rows = [];
+let failed = false;
 try {
   for (let i = 0; i < 50; i++) {
     if (await fetch(base).then((r) => r.ok, () => false)) break;
@@ -38,7 +40,11 @@ try {
   await run('night, unthrottled', '?time=23:00', false);
   await browser.close();
   console.table(rows);
+  for (const r of rows) if (r.ready !== true) { console.error(`FAIL: ${r.case} did not become ready (${r.ready})`); failed = true; }
+  const f4g = rows.find((r) => r.case.includes('Fast 4G'));
+  if (f4g && Number(f4g['time s']) >= 10) { console.error(`FAIL: Fast 4G time to ready ${f4g['time s']} s >= 10 s`); failed = true; }
   console.log('Goal: ready < 10 s on Fast 4G. fps from headless SwiftShader is not meaningful; measure on a real machine with ?debug=1.');
 } finally {
   preview.kill();
 }
+if (failed) process.exit(1);

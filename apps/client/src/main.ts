@@ -4,9 +4,9 @@ import {
 import {
   createPhysicsWorld, decodeCollision, localToWgs84, parseTimeOverride, sunState, type PhysicsWorld, type SunState,
 } from '@nn/shared';
-import { FetchError, NoWebGLError } from './errors';
+import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
-import { WorldLoader } from './loader';
+import { fetchOk, WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
@@ -137,15 +137,19 @@ renderer.setAnimationLoop((t: number) => {
 });
 
 /** collision.bin → physics world (runs while the spawn chunks stream in). */
+let physicsLoading = true;
+let worldStatus = '';
+const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
 async function loadPhysics(): Promise<PhysicsWorld> {
   const url = '/world/collision.bin';
-  const res = await fetch(url);
-  if (!res.ok) throw new FetchError(url, res.status);
-  return createPhysicsWorld(decodeCollision(await res.arrayBuffer()));
+  const res = await fetchOk(url);
+  const pw = createPhysicsWorld(decodeCollision(await res.arrayBuffer()));
+  physicsLoading = false;
+  return pw;
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => hud.setStatus(s)).then((m) => { hud.setStatus('Physik …'); return m; }), loadPhysics()]).then(([m, pw]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics()]).then(([m, pw]) => {
   hud.setAttribution(m.attribution);
   props = new Props(scene, m);
   lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
