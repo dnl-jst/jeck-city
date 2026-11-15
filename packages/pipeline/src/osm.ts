@@ -79,6 +79,7 @@ export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
   const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [] };
 
+  const stops: { pos: Pt; name: string; prio: number }[] = [];
   for (const el of elements) {
     const t = el.tags ?? {};
     if (el.type === 'relation') {
@@ -89,13 +90,15 @@ export function parseOsm(json: unknown): OsmFeatures {
       const pos = wgs84ToLocal(el.lat, el.lon);
       if (t.natural === 'tree') f.trees.push(pos);
       else if (t.highway === 'street_lamp') f.lamps.push(pos);
-      else if (t.railway === 'tram_stop' && t.name) f.tramStops.push({ pos, name: t.name });
+      else if (isStopTags(t)) stops.push({ pos, name: t.name!, prio: t.public_transport === 'platform' ? 0 : 1 });
       else if (t.shop) f.shops.push(t.name ? { pos, name: t.name, type: t.shop } : { pos, type: t.shop });
     } else if (el.type === 'way' && el.geometry) {
       const pts = toPts(el.geometry);
       const closed = isClosed(pts);
-      if (t.railway === 'tram') {
+      if (t.railway === 'tram' || t.railway === 'light_rail') {
         if (t.tunnel !== 'yes' && pts.length >= 2) f.tramTracks.push(pts);
+      } else if (t.public_transport === 'platform' && isStopTags(t)) {
+        stops.push({ pos: centroid(closed ? pts.slice(0, -1) : pts), name: t.name!, prio: 0 });
       } else if (t.highway) {
         if (closed && (t.area === 'yes' || t.place === 'square' || t.highway === 'pedestrian')) f.squares.push({ name: t.name ?? '', outline: pts });
         else {
@@ -109,5 +112,24 @@ export function parseOsm(json: unknown): OsmFeatures {
       }
     }
   }
+  f.tramStops = dedupeStops(stops);
   return f;
+}
+
+/** Stadtbahn/tram stop: tram_stop node, stop_position for light rail/tram, or a named platform that is not bus-only. */
+function isStopTags(t: Tags): boolean {
+  if (!t.name) return false;
+  if (t.railway === 'tram_stop') return true;
+  const rail = t.light_rail === 'yes' || t.tram === 'yes';
+  if (t.public_transport === 'stop_position') return rail;
+  return t.public_transport === 'platform' && (rail || t.bus !== 'yes');
+}
+
+/** Same-named stops within 60 m collapse to one; stop positions beat platform centres. */
+function dedupeStops(stops: { pos: Pt; name: string; prio: number }[]): { pos: Pt; name: string }[] {
+  const kept: { pos: Pt; name: string; prio: number }[] = [];
+  for (const s of [...stops].sort((a, b) => b.prio - a.prio)) {
+    if (!kept.some((k) => k.name === s.name && Math.hypot(k.pos.x - s.pos.x, k.pos.z - s.pos.z) < 60)) kept.push(s);
+  }
+  return kept.map(({ pos, name }) => ({ pos, name }));
 }

@@ -70,6 +70,7 @@ out geom;
 (
   nwr["highway"](${OSM_BBOX});
   nwr["railway"="tram"](${OSM_BBOX});
+  nwr["railway"="light_rail"](${OSM_BBOX});
   nwr["railway"="tram_stop"](${OSM_BBOX});
   nwr["public_transport"](${OSM_BBOX});
   nwr["leisure"](${OSM_BBOX});

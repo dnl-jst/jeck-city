@@ -80,7 +80,7 @@
    ],
    "tags": {
     "highway": "residential",
-    "name": "Teststraße"
+    "name": "Teststra\u00dfe"
    }
   },
   {
@@ -107,7 +107,7 @@
    ],
    "tags": {
     "highway": "residential",
-    "name": "Querstraße"
+    "name": "Querstra\u00dfe"
    }
   },
   {
@@ -297,6 +297,82 @@
    "tags": {
     "shop": "bakery",
     "name": "Backstube Nippes"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1007,
+   "nodes": [
+    10070,
+    10071
+   ],
+   "geometry": [
+    {
+     "lat": 50.9626,
+     "lon": 6.9505
+    },
+    {
+     "lat": 50.9626,
+     "lon": 6.9535
+    }
+   ],
+   "tags": {
+    "railway": "light_rail"
+   }
+  },
+  {
+   "type": "node",
+   "id": 2002,
+   "lat": 50.96362,
+   "lon": 6.95207,
+   "tags": {
+    "public_transport": "stop_position",
+    "light_rail": "yes",
+    "name": "Florastr."
+   }
+  },
+  {
+   "type": "way",
+   "id": 1008,
+   "nodes": [
+    1,
+    2
+   ],
+   "geometry": [
+    {
+     "lat": 50.96365,
+     "lon": 6.9519
+    },
+    {
+     "lat": 50.96365,
+     "lon": 6.9522
+    }
+   ],
+   "tags": {
+    "public_transport": "platform",
+    "name": "Florastr.",
+    "railway": "platform"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1009,
+   "nodes": [
+    1,
+    2
+   ],
+   "geometry": [
+    {
+     "lat": 50.961,
+     "lon": 6.95
+    },
+    {
+     "lat": 50.961,
+     "lon": 6.9501
+    }
+   ],
+   "tags": {
+    "railway": "rail"
    }
   }
  ]

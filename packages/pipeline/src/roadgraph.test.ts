@@ -19,8 +19,8 @@ test('crossing is a node of degree 4', () => {
 
 test('footways are not in the graph, tram is', () => {
   const g = buildRoadGraph(f);
-  expect(g.edges.filter((e) => e.tram)).toHaveLength(1);
-  expect(g.edges).toHaveLength(5);
+  expect(g.edges.filter((e) => e.tram)).toHaveLength(2);
+  expect(g.edges).toHaveLength(6);
 });
 
 test('tram stop is assigned to the tram edge', () => {

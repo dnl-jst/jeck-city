@@ -9,8 +9,8 @@ test('fixture feature counts', () => {
   expect(f.trees).toHaveLength(3);
   expect(f.lamps).toHaveLength(2);
   expect(f.shops).toEqual([expect.objectContaining({ name: 'Backstube Nippes', type: 'bakery' })]);
-  expect(f.tramTracks).toHaveLength(1);
-  expect(f.tramStops.map((s) => s.name)).toEqual(['Florastr.']);
+  expect(f.tramTracks).toHaveLength(2); // tram + light_rail; mainline rail ignored
+  expect(f.tramStops.map((s) => s.name)).toEqual(['Florastr.']); // tram_stop, stop_position and platform collapse to one;
   expect(f.greens).toHaveLength(1);
 });
 
