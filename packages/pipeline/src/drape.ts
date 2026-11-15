@@ -12,23 +12,32 @@ const SLIVER = 1e-12;
  */
 type CV = { x: number; z: number; off: number; u: number; v: number; mask: number };
 
-/** A clip line: `f(x, z) = 0`; `snap` gives exact coordinates where it meets an axis-aligned segment. */
-type Line = {
-  kind: 'x' | 'z' | 'd';
-  f: (x: number, z: number) => number;
-  /** For 'x'/'z': the exact coordinate. For 'd': the diagonal's endpoints (lattice corners). */
-  k: number;
-  ends?: [number, number, number, number];
-};
+/** A clip line `f(x, z) = 0`: grid line x = k, grid line z = k, or a cell diagonal ('d', k unused). */
+type Line = { kind: 'x' | 'z' | 'd'; f: (x: number, z: number) => number; k: number };
+
+/** Draped vertex source: position in xz, offset above terrain, uv. */
+type Src = { x: number; z: number; off: number; u: number; v: number };
 
 class Out {
   pos: number[] = [];
   uv: number[] = [];
   idx: number[] = [];
-  vert(x: number, y: number, z: number, u: number, v: number): number {
-    this.pos.push(x, y, z);
-    this.uv.push(u, v);
-    return this.pos.length / 3 - 1;
+  /** Welds bit-identical vertices within one source triangle (cleared per triangle by `begin`). */
+  private weld = new Map<string, number>();
+  constructor(private t: TerrainGrid) {}
+  begin(): void {
+    this.weld.clear();
+  }
+  vert(p: Src): number {
+    const key = `${p.x},${p.z},${p.off},${p.u},${p.v}`;
+    let id = this.weld.get(key);
+    if (id === undefined) {
+      id = this.pos.length / 3;
+      this.pos.push(p.x, p.off + heightAt(this.t, p.x, p.z), p.z);
+      this.uv.push(p.u, p.v);
+      this.weld.set(key, id);
+    }
+    return id;
   }
   build(): Mesh {
     return { positions: Float32Array.from(this.pos), indices: Uint32Array.from(this.idx), uv: Float32Array.from(this.uv) };
@@ -45,7 +54,7 @@ const before = (a: { x: number; z: number }, b: { x: number; z: number }) => a.x
  * are cut into slabs wherever their xz trace crosses a grid line or diagonal.
  */
 export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
-  const out = new Out();
+  const out = new Out(t);
   const P = m.positions;
   for (let i = 0; i < m.indices.length; i += 3) {
     const tri: CV[] = [0, 1, 2].map((k) => {
@@ -53,6 +62,7 @@ export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
       return { x: P[n * 3]!, off: P[n * 3 + 1]!, z: P[n * 3 + 2]!, u: m.uv[n * 2]!, v: m.uv[n * 2 + 1]!, mask: k === 0 ? 0b101 : k === 1 ? 0b011 : 0b110 };
     });
     const [a, b, c] = tri as [CV, CV, CV];
+    out.begin();
     const area2 = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
     if (Math.abs(area2) / 2 >= FLAT_MIN_AREA) drapeFlat(tri, area2, t, out);
     else drapeVertical(tri, t, out);
@@ -84,7 +94,15 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
       if (before(E1, E0)) [E0, E1] = [E1, E0];
       const f0 = L.f(E0.x, E0.z);
       const f1 = L.f(E1.x, E1.z);
-      const s = f0 / (f0 - f1);
+      // Guard: an edge (numerically) along the line has no proper crossing; keep p.
+      if (f0 === f1) return p;
+      // Keep the crossing within p→q even if rounding put it slightly outside (only matters in degenerate cases).
+      const alongX = Math.abs(E1.x - E0.x) >= Math.abs(E1.z - E0.z);
+      const param = (r: CV) => (alongX ? (r.x - E0.x) / (E1.x - E0.x) : (r.z - E0.z) / (E1.z - E0.z));
+      const sp = param(p);
+      const sq = param(q);
+      const s = Math.min(Math.max(f0 / (f0 - f1), Math.min(sp, sq)), Math.max(sp, sq));
+      if (!Number.isFinite(s)) return p;
       const x = L.kind === 'x' ? L.k : E0.x + s * (E1.x - E0.x);
       const z = L.kind === 'z' ? L.k : E0.z + s * (E1.z - E0.z);
       return lerp(E0, E1, s, x, z, 1 << e);
@@ -99,15 +117,12 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
       z = L.k;
       x = p.x + ((z - p.z) / (q.z - p.z)) * (q.x - p.x);
     } else {
-      const [ex0, ez0, ex1, ez1] = L.ends!;
-      if (p.x === q.x && (p.x === ex0 || p.x === ex1)) [x, z] = p.x === ex0 ? [ex0, ez0] : [ex1, ez1];
-      else if (p.z === q.z && (p.z === ez0 || p.z === ez1)) [x, z] = p.z === ez0 ? [ex0, ez0] : [ex1, ez1];
-      else {
-        const fp = L.f(p.x, p.z);
-        const s = fp / (fp - L.f(q.x, q.z));
-        x = p.x + s * (q.x - p.x);
-        z = p.z + s * (q.z - p.z);
-      }
+      // Diagonals are clipped after the cell bounds, and the diagonal meets the cell boundary only at corners (where f
+      // is 0, never a strict sign change), so p→q is never a boundary segment here.
+      const fp = L.f(p.x, p.z);
+      const s = fp / (fp - L.f(q.x, q.z));
+      x = p.x + s * (q.x - p.x);
+      z = p.z + s * (q.z - p.z);
     }
     return bary(x, z, 0);
   };
@@ -128,21 +143,13 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
 
   const emit = (poly: CV[]) => {
     if (poly.length < 3) return;
-    const ids: number[] = [];
-    const ensure = (k: number) => {
-      if (ids[k] === undefined) {
-        const p = poly[k]!;
-        ids[k] = out.vert(p.x, p.off + heightAt(t, p.x, p.z), p.z, p.u, p.v);
-      }
-      return ids[k]!;
-    };
     const p0 = poly[0]!;
     for (let k = 1; k + 1 < poly.length; k++) {
       const p1 = poly[k]!;
       const p2 = poly[k + 1]!;
       const ar = (p1.z - p0.z) * (p2.x - p0.x) - (p1.x - p0.x) * (p2.z - p0.z);
       if (ar * Math.sign(area2) <= SLIVER) continue;
-      out.idx.push(ensure(0), ensure(k), ensure(k + 1));
+      out.idx.push(out.vert(p0), out.vert(p1), out.vert(p2));
     }
   };
 
@@ -172,8 +179,8 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
       if (cell.length < 3) continue;
       const diag: Line =
         TERRAIN_DIAGONAL === 'x1z0-x0z1'
-          ? { kind: 'd', k: 0, f: (x, z) => x - X + (z - Z) - 1, ends: [X1, Z, X, Z1] }
-          : { kind: 'd', k: 0, f: (x, z) => z - Z - (x - X), ends: [X, Z, X1, Z1] };
+          ? { kind: 'd', k: 0, f: (x, z) => x - X + (z - Z) - 1 }
+          : { kind: 'd', k: 0, f: (x, z) => z - Z - (x - X) };
       emit(clip(cell, diag, 1));
       emit(clip(cell, diag, -1));
     }
@@ -199,8 +206,7 @@ function drapeVertical(tri: CV[], t: TerrainGrid, out: Out): void {
   const dz = B.z - A.z;
   const len2 = dx * dx + dz * dz;
   if (len2 < 1e-12) {
-    const base = tri.map((p) => out.vert(p.x, p.off + heightAt(t, p.x, p.z), p.z, p.u, p.v));
-    out.idx.push(...base);
+    out.idx.push(...tri.map((p) => out.vert(p)));
     return;
   }
   const poly: SV[] = tri.map((p) => ({ s: ((p.x - A.x) * dx + (p.z - A.z) * dz) / len2, x: p.x, z: p.z, off: p.off, u: p.u, v: p.v }));
@@ -245,21 +251,13 @@ function drapeVertical(tri: CV[], t: TerrainGrid, out: Out): void {
   for (let k = 0; k + 1 < bounds.length; k++) {
     const slab = clip(clip(poly, bounds[k]!, -1), bounds[k + 1]!, 1);
     if (slab.length < 3) continue;
-    const ids: number[] = [];
-    const ensure = (j: number) => {
-      if (ids[j] === undefined) {
-        const p = slab[j]!;
-        ids[j] = out.vert(p.x, p.off + heightAt(t, p.x, p.z), p.z, p.u, p.v);
-      }
-      return ids[j]!;
-    };
     const p0 = slab[0]!;
     for (let j = 1; j + 1 < slab.length; j++) {
       const p1 = slab[j]!;
       const p2 = slab[j + 1]!;
       const ar = (p1.s - p0.s) * (p2.off - p0.off) - (p1.off - p0.off) * (p2.s - p0.s);
       if (Math.abs(ar) * Math.sqrt(len2) <= SLIVER) continue;
-      out.idx.push(ensure(0), ensure(j), ensure(j + 1));
+      out.idx.push(out.vert(p0), out.vert(p1), out.vert(p2));
     }
   }
 }

@@ -130,7 +130,7 @@ test('shared edge splits identically', () => {
       const [x, y, z] = vert(m, i);
       const t = ((x - p[0]) * (q[0] - p[0]) + (z - p[2]) * (q[2] - p[2])) / ((q[0] - p[0]) ** 2 + (q[2] - p[2]) ** 2);
       const dist = Math.hypot(p[0] + t * (q[0] - p[0]) - x, p[2] + t * (q[2] - p[2]) - z);
-      if (dist < 1e-5) keys.add([x, y, z].map((n) => n.toFixed(6)).join(','));
+      if (dist < 1e-5) keys.add(`${x},${y},${z}`); // exact float32 values
     }
     return [...keys].sort();
   };
@@ -159,7 +159,7 @@ test('vertical kerb face follows terrain', () => {
     expect(off).toBeGreaterThan(0.01 - 1e-5);
     expect(off).toBeLessThan(0.12 + 1e-5);
     expect(Math.abs(out.uv[i * 2]! - x)).toBeLessThan(1e-5);
-    expect(Math.abs(out.uv[i * 2 + 1]! - (off - 0.01) / 0.11)).toBeLessThan(1e-3);
+    expect(Math.abs(out.uv[i * 2 + 1]! - (off - 0.01) / 0.11)).toBeLessThan(1e-5);
     if (Math.abs(off - 0.01) < 1e-5) bottom.add(Math.round(x * 1e5) / 1e5);
     if (Math.abs(off - 0.12) < 1e-5) top.add(Math.round(x * 1e5) / 1e5);
   }
@@ -177,4 +177,29 @@ test('vertical kerb face follows terrain', () => {
     const hi = Math.max(...xs);
     for (const e of expected) expect(e <= lo + 1e-6 || e >= hi - 1e-6).toBe(true);
   }
+});
+
+test('edge along a cell diagonal through lattice corners stays finite', () => {
+  // Lattice corners (integer coordinates, origin is integer too) on one diagonal line of the active TERRAIN_DIAGONAL.
+  const p: V = [1, 0.01, 4];
+  const q: V = TERRAIN_DIAGONAL === 'x1z0-x0z1' ? [4, 0.01, 1] : [4, 0.01, 7];
+  let tri: V[] = [p, q, [5.3, 0.01, 5.6]];
+  if (xzArea(tri as [V, V, V]) < 0) tri = [p, tri[2]!, q];
+  const input = mesh([tri]);
+  const out = drapeMesh(input, hilly);
+  expectValid(out);
+  for (const n of out.positions) expect(Number.isFinite(n)).toBe(true);
+  for (const n of out.uv) expect(Number.isFinite(n)).toBe(true);
+  expect(Math.abs(totalArea(out) - totalArea(input))).toBeLessThan(1e-6);
+  for (let i = 0; i < out.positions.length / 3; i++) {
+    const [x, y, z] = vert(out, i);
+    expect(Math.abs(y - 0.01 - heightAt(hilly, x, z))).toBeLessThan(1e-5);
+  }
+});
+
+test('vertices are welded within each source triangle', () => {
+  const out = drapeMesh(mesh([BIG]), hilly);
+  const keys = new Set<string>();
+  for (let i = 0; i < out.positions.length / 3; i++) keys.add(`${vert(out, i).join(',')},${out.uv[i * 2]},${out.uv[i * 2 + 1]}`);
+  expect(keys.size).toBe(out.positions.length / 3);
 });
