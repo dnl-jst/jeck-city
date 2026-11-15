@@ -1,4 +1,4 @@
-"""Long John (two-wheeled cargo bike, wooden box between the rider and a small front wheel): procedural bike model.
+"""Long John (two-wheeled cargo bike, flat wooden deck between the rider and a small front wheel): procedural bike model.
 
 Run inside Blender (e.g. via the Blender MCP add-on):
     exec(open(PATH).read(), {'__file__': PATH})
@@ -28,7 +28,7 @@ SEAT = V((0, 0.70, 0.93))    # saddle clamp
 HT_TOP = V((0, -0.76, 0.56))  # head tube top = fork pivot
 HT_BOT = V((0, -0.72, 0.37))
 BAR = V((0, 0.33, 0.88))     # handlebar column top = bar pivot
-BOX = dict(y0=-0.66, y1=0.22, x=0.31, floor=0.34, top=0.80)
+DECK = dict(y0=-0.66, y1=0.2, x=0.29, z=0.35, rail=0.12)
 
 
 def build():
@@ -58,30 +58,25 @@ def build():
     st_dir = (ST - BB).normalized()
     rot = Matrix.Rotation(math.atan2(st_dir.y, st_dir.z), 3, 'X')
     f.box(BB + st_dir * 0.28 + V((0, -0.05, 0)), (0.08, 0.06, 0.32), M['dark'], rot=rot)
-    # cargo box: floor, walls, bench, dark edge trim
-    b = BOX
-    yc, ly = (b['y0'] + b['y1']) / 2, b['y1'] - b['y0']
-    f.box((0, yc, b['floor']), (2 * b['x'], ly, 0.02), M['wood'])
-    h = b['top'] - b['floor']
-    zc = b['floor'] + h / 2
-    for s in (-1, 1):
-        f.box((s * (b['x'] - 0.009), yc, zc), (0.018, ly, h), M['wood'])
-    f.box((0, b['y0'] + 0.009, zc), (2 * b['x'], 0.018, h), M['wood'])
-    f.box((0, b['y1'] - 0.009, zc), (2 * b['x'], 0.018, h), M['wood'])
-    f.box((0, b['y1'] - 0.16, b['floor'] + 0.22), (2 * b['x'] - 0.04, 0.26, 0.025), M['wood_dark'])   # bench
-    f.box((0, b['y1'] - 0.035, b['floor'] + 0.4), (2 * b['x'] - 0.04, 0.02, 0.2), M['wood_dark'])     # backrest
-    for s in (-1, 1):
-        f.box((s * b['x'], yc, b['top']), (0.03, ly + 0.02, 0.02), M['dark'])
-    for yy in (b['y0'], b['y1']):
-        f.box((0, yy, b['top']), (2 * b['x'] + 0.02, 0.03, 0.02), M['dark'])
-    f.box((0, b['y0'] - 0.012, zc - 0.1), (0.12, 0.004, 0.03), M['reflector'])
-    for k in (1, 2, 3):  # plank joints on the outside of the walls
-        z = b['floor'] + h * k / 4
-        for s in (-1, 1):
-            f.box((s * (b['x'] + 0.001), yc, z), (0.002, ly - 0.01, 0.006), M['wood_dark'])
-        f.box((0, b['y0'] - 0.001, z), (2 * b['x'] - 0.01, 0.002, 0.006), M['wood_dark'])
+    # flat cargo deck: wooden slats on cross members, a low tube rail around it
+    d = DECK
+    yc, ly = (d['y0'] + d['y1']) / 2, d['y1'] - d['y0']
+    for k in range(-2, 3):  # cross members under the deck
+        f.cyl(V((-d['x'] + 0.02, yc + k * ly / 5, d['z'] - 0.03)), V((d['x'] - 0.02, yc + k * ly / 5, d['z'] - 0.03)), 0.012, M['paint'], seg=8)
+    n = 7
+    for k in range(n):  # slats along the bike with small gaps
+        x = -d['x'] + (2 * d['x']) * (k + 0.5) / n
+        f.box((x, yc, d['z']), (2 * d['x'] / n - 0.012, ly, 0.022), M['wood'])
+    rail = [V((-d['x'], d['y1'], d['z'] + 0.01)), V((-d['x'], d['y0'] + 0.04, d['z'] + 0.01)),
+            V((-d['x'] + 0.04, d['y0'], d['z'] + 0.01)), V((d['x'] - 0.04, d['y0'], d['z'] + 0.01)),
+            V((d['x'], d['y0'] + 0.04, d['z'] + 0.01)), V((d['x'], d['y1'], d['z'] + 0.01))]
+    raised = [p + V((0, 0, d['rail'])) for p in rail]
+    f.tube(raised, 0.011, M['paint'], seg=8)
+    for p, q in zip(rail[::2] + [rail[-1]], raised[::2] + [raised[-1]]):
+        f.cyl(p, q, 0.01, M['paint'], seg=8)
+    f.box((0, d['y0'] - 0.012, d['z'] + 0.02), (0.12, 0.004, 0.03), M['reflector'])
     # steering rod from the column to the fork, chain
-    f.cyl(V((0.06, 0.28, 0.33)), V((0.06, -0.70, 0.40)), 0.006, M['metal'], seg=6)
+    f.tube([V((0.06, 0.28, 0.30)), V((0.06, -0.62, 0.30)), V((0.05, -0.70, 0.38))], 0.006, M['metal'], seg=6)  # under the deck
     for z0, z1 in ((0.38, 0.37), (0.18, 0.29)):
         f.cyl(V((-0.05, BB.y, z0)), V((-0.05, RA.y, z1)), 0.004, M['dark'], seg=4, caps=False)
     fender(f, M, 0.36, 1.25, 3.0, 0.055, c=RA)   # rear mudguard (on the frame: the wheel spins)
@@ -123,7 +118,7 @@ def build():
     # ---- lights
     lf = Part('light_front')
     lamp(lf, M, 'front')
-    lf.to_object(coll, frame, V((0, b['y0'] - 0.035, b['top'] - 0.12)))
+    lf.to_object(coll, fork, HT_TOP + V((0, -0.05, 0.02)))  # on the head tube, turns with the fork
     lr = Part('light_rear')
     lamp(lr, M, 'rear')
     lr.to_object(coll, frame, V((0, 1.175, 0.71)))
