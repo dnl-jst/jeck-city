@@ -5,14 +5,17 @@ import {
 import { NoWebGLError } from './errors';
 import { Hud } from './hud';
 import { WorldLoader } from './loader';
+import { parseCamParam } from './devparams';
 
 declare global {
-  interface Window { __nnReady?: boolean }
+  interface Window { __nnReady?: boolean | 'error' }
 }
 
 const params = new URLSearchParams(location.search);
 // TEMPORARY dev hook until Task 9 drives nightFactor from the real clock
 const night = params.get('night') === '1';
+// dev hook: ?cam=x,y,z,yawDeg,pitchDeg places the fly camera (yaw: manifest heading convention)
+const devCam = parseCamParam(params.get('cam'));
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 let renderer: WebGLRenderer;
@@ -67,10 +70,10 @@ class FreeFly {
   }
 
   /** Points the camera along a manifest heading h (forward = (sin h, cos h) in x/z). */
-  setHeading(h: number): void {
+  setHeading(h: number, pitch = 0): void {
     // camera looks along -Z at yaw 0; rotating by yaw gives forward (-sin yaw, -cos yaw)
     this.yaw = h + Math.PI;
-    this.pitch = 0;
+    this.pitch = pitch;
   }
 
   update(dt: number): void {
@@ -96,20 +99,30 @@ ground.renderOrder = -1;
 scene.add(ground);
 world.facade.userData.nightFactor.value = night ? 1 : 0;
 
+let worldReady = false;
 const timer = new Timer();
 renderer.setAnimationLoop((t: number) => {
   timer.update(t);
   fly.update(Math.min(timer.getDelta(), 0.1));
-  world.update(camera.position);
+  if (worldReady) world.update(camera.position);
   renderer.render(scene, camera);
 });
 
-world.init((p) => hud.setProgress(p)).then((m) => {
+const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
+world.init((p) => hud.setProgress(p), start).then((m) => {
   hud.setAttribution(m.attribution);
-  camera.position.set(m.spawn.x, m.spawn.y + 1.7, m.spawn.z);
-  fly.setHeading(m.spawn.heading);
+  if (devCam) {
+    camera.position.set(devCam.x, devCam.y, devCam.z);
+    fly.setHeading((devCam.yawDeg * Math.PI) / 180, (devCam.pitchDeg * Math.PI) / 180);
+  } else {
+    camera.position.set(m.spawn.x, m.spawn.y + 1.7, m.spawn.z);
+    fly.setHeading(m.spawn.heading);
+  }
+  worldReady = true;
   hud.hideLoading();
   window.__nnReady = true;
 }, (err: unknown) => {
   console.error(err);
+  hud.showError('Nippes konnte nicht geladen werden. Bitte lade die Seite neu.');
+  window.__nnReady = 'error';
 });

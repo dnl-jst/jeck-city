@@ -15,6 +15,7 @@ export class Hud {
         color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; letter-spacing: 0.05em; text-align: center; transition: opacity 0.6s; }
       .nn-loading-track { margin-top: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); overflow: hidden; }
       .nn-loading-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.15s; }
+      .nn-error { color: #ffb4a8; }
       .nn-attribution { position: fixed; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
         font: 11px/1.3 system-ui, sans-serif; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
     `;
@@ -28,6 +29,12 @@ export class Hud {
 
   hideLoading(): void {
     this.loading.style.opacity = '0';
+  }
+
+  /** Replaces the loading bar with a visible error line. */
+  showError(text: string): void {
+    this.loading.replaceChildren(text);
+    this.loading.classList.add('nn-error');
   }
 
   setAttribution(text: string): void {

@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Scene } from 'three';
 import type { WorldManifest } from '@nn/shared';
-import { chunksToLoad, chunksToUnload } from './loader';
+import { FetchError } from './errors';
+import { chunksToLoad, chunksToUnload, WorldLoader } from './loader';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
 function gridManifest(): WorldManifest {
@@ -46,5 +48,44 @@ describe('chunksToUnload', () => {
     const m = gridManifest();
     // '4_0' centre (900, 100) is 905 m away, '3_0' centre (700, 100) 707 m (hysteresis band).
     expect(chunksToUnload(m, { x: 0, z: 0 }, new Set(['0_0', '3_0', '4_0']))).toEqual(['4_0']);
+  });
+});
+
+describe('WorldLoader', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Spawn far from the origin; chunk downloads never finish. */
+  function stubFetch(manifestStatus = 200): string[] {
+    const urls: string[] = [];
+    const m = gridManifest();
+    m.spawn = { x: 700, y: 0, z: 700, heading: 0 };
+    vi.stubGlobal('fetch', (url: string) => {
+      urls.push(url);
+      if (url.endsWith('manifest.json')) return Promise.resolve({ ok: manifestStatus === 200, status: manifestStatus, json: () => Promise.resolve(m) });
+      return new Promise(() => {});
+    });
+    return urls;
+  }
+
+  it('starts at the spawn and ignores update() until init has finished', async () => {
+    const urls = stubFetch();
+    const loader = new WorldLoader(new Scene(), '/world/');
+    void loader.init(() => {});
+    await new Promise((r) => setTimeout(r, 0));
+    loader.update({ x: 0, z: 0 });
+    expect(urls[0]).toBe('/world/manifest.json');
+    expect(urls.slice(1)).toEqual(['/world/chunk_3_3.glb', expect.stringMatching(/chunk_(2_3|4_3|3_2|3_4)\.glb/)]); // nearest to (700, 700), 2 at a time
+  });
+
+  it('loads around an explicit start position', async () => {
+    const urls = stubFetch();
+    void new WorldLoader(new Scene(), '/world/').init(() => {}, { x: -900, z: -900 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(urls.slice(1)).toEqual(['/world/chunk_-5_-5.glb', expect.stringMatching(/chunk_(-4_-5|-5_-4)\.glb/)]);
+  });
+
+  it('rejects with FetchError when the manifest request fails', async () => {
+    stubFetch(404);
+    await expect(new WorldLoader(new Scene(), '/world/').init(() => {})).rejects.toBeInstanceOf(FetchError);
   });
 });

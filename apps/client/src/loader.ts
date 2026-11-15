@@ -1,8 +1,9 @@
-import { type Mesh, type Material, type Object3D, type Scene } from 'three';
+import { BufferAttribute, BufferGeometry, Mesh, type Material, type Object3D, type Scene } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
+import { trackBed } from './trackbed';
 import { addEaveAttribute, createFacadeMaterial } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
 
@@ -39,6 +40,8 @@ async function fetchOk(url: string): Promise<Response> {
 /** Streams world chunks around the player into `scene`. */
 export class WorldLoader {
   private manifest: WorldManifest | null = null;
+  /** update() is a no-op until init() has finished. */
+  private ready = false;
   private readonly gltf = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
   private readonly loaded = new Map<string, Object3D>();
   private readonly pending = new Set<string>();
@@ -50,14 +53,18 @@ export class WorldLoader {
 
   constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
 
-  /** Loads the manifest and every chunk within LOAD_RADIUS of the spawn; resolves when they are in the scene. */
-  async init(onProgress: (p: number) => void): Promise<WorldManifest> {
+  /**
+   * Loads the manifest and every chunk within LOAD_RADIUS of `start` (default: the spawn);
+   * resolves when they are in the scene.
+   */
+  async init(onProgress: (p: number) => void, start?: XZ): Promise<WorldManifest> {
     const manifest = parseManifest(await (await fetchOk(`${this.baseUrl}manifest.json`)).json());
     this.manifest = manifest;
-    const keys = chunksToLoad(manifest, manifest.spawn, new Set(this.loaded.keys()));
+    const from = start ?? manifest.spawn;
+    this.lastPos = { x: from.x, z: from.z };
+    const keys = chunksToLoad(manifest, from, new Set(this.loaded.keys()));
     let done = 0;
     onProgress(0);
-    this.lastPos = manifest.spawn;
     // MAX_CONCURRENT workers drain the initial list; errors abort init
     const list = [...keys];
     const worker = async (): Promise<void> => {
@@ -67,13 +74,14 @@ export class WorldLoader {
       }
     };
     await Promise.all(Array.from({ length: MAX_CONCURRENT }, worker));
+    this.ready = true;
     return manifest;
   }
 
   /** Unloads far chunks and starts downloads of near ones (at most MAX_CONCURRENT in flight). */
   update(cameraPos: { x: number; z: number }): void {
     const m = this.manifest;
-    if (!m) return;
+    if (!m || !this.ready) return;
     this.lastPos = { x: cameraPos.x, z: cameraPos.z };
     for (const key of chunksToUnload(m, cameraPos, new Set(this.loaded.keys()))) this.unload(key);
     const busy = new Set([...this.loaded.keys(), ...this.pending, ...this.failed]);
@@ -100,9 +108,11 @@ export class WorldLoader {
         disposeTree(root);
         return;
       }
+      const tram = root.getObjectByName('tram') as Mesh | undefined;
+      if (tram?.isMesh) root.add(this.trackBedMesh(tram));
       root.traverse((o) => {
         const mesh = o as Mesh;
-        if (!mesh.isMesh) return;
+        if (!mesh.isMesh || mesh.name === 'trackbed') return;
         const mat = mesh.name === 'buildings' ? this.facade : this.street[mesh.name];
         if (!mat) return;
         (mesh.material as Material).dispose();
@@ -117,6 +127,20 @@ export class WorldLoader {
     } finally {
       this.pending.delete(key);
     }
+  }
+
+  private trackBedMesh(tram: Mesh): Mesh {
+    const g = tram.geometry;
+    const index = g.index?.array ?? Uint32Array.from({ length: g.getAttribute('position').count }, (_, i) => i);
+    const bed = trackBed(g.getAttribute('position').array, g.getAttribute('uv').array, index);
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(bed.positions, 3));
+    geo.setAttribute('uv', new BufferAttribute(bed.uv, 2));
+    geo.setIndex(Array.from(bed.index));
+    const mesh = new Mesh(geo, this.street.trackbed);
+    mesh.name = 'trackbed';
+    mesh.renderOrder = STREET_RENDER_ORDER.trackbed ?? 0;
+    return mesh;
   }
 
   private unload(key: string): void {
