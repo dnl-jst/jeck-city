@@ -27,13 +27,23 @@ export function initRapier(): Promise<void> {
 }
 
 /**
- * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars)
- * if `withDynamic`; never sensors, kinematic bodies (characters) or `skip`. A predicate instead of
- * QueryFilterFlags, whose meaning changed between Rapier versions.
+ * Interaction groups (membership << 16 | filter). The city keeps the default (all bits). Street furniture (trees,
+ * lamps; see StreetProps) is bit 1, car chassis bit 2. A knocked-down lamp no longer collides with car bodies (the
+ * chassis would bulldoze it along); the wheel rays still roll over it.
  */
-export function staticWorldFilter(withDynamic = false, skip?: RAPIER.RigidBody): (c: RAPIER.Collider) => boolean {
+export const PROP_GROUPS = 0x0002_ffff;
+export const LYING_PROP_GROUPS = 0x0002_0003;
+export const CAR_GROUPS = 0x0004_ffff;
+
+/**
+ * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars,
+ * fallen lamps) if `withDynamic`, plus street furniture (trees, lamp posts) if `withProps`; never sensors, kinematic
+ * bodies (characters) or `skip`. A predicate instead of QueryFilterFlags, whose meaning changed between Rapier versions.
+ */
+export function staticWorldFilter(withDynamic = false, skip?: RAPIER.RigidBody, withProps = false): (c: RAPIER.Collider) => boolean {
   return (c) => {
     if (c.isSensor()) return false;
+    if (!withProps && c.collisionGroups() >>> 16 === PROP_GROUPS >>> 16) return false;
     const b = c.parent();
     if (!b) return true; // a collider without a body is static
     if (skip && b.handle === skip.handle) return false;

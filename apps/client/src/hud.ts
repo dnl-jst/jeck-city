@@ -7,7 +7,7 @@ export function bootErrorMessage(e: unknown): string {
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
-export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · Maus umsehen (klicken)';
+export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · M Karte · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
 export const HUD_CSS = `
@@ -19,7 +19,7 @@ export const HUD_CSS = `
   .nn-loading-status { margin-top: 8px; font-size: 12px; opacity: 0.8; }
   .nn-loading-controls { margin-top: 18px; font-size: 12px; opacity: 0.65; }
   .nn-error { color: #ffb4a8; }
-  .nn-attribution { position: fixed; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
+  .nn-attribution { position: fixed; z-index: 2; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
     font: 11px/1.3 system-ui, sans-serif; text-shadow: 0 1px 3px rgba(0,0,0,0.8); pointer-events: none; }
   .nn-hint, .nn-note { position: fixed; left: 50%; transform: translateX(-50%); color: #fff; pointer-events: none;
     font: 13px/1.3 system-ui, sans-serif; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
@@ -54,6 +54,20 @@ export const HUD_CSS = `
     background: rgba(10,12,20,0.75); border: 1px solid rgba(242,196,107,0.3); text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
   .nn-wheel-title { font-size: 0.72em; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.6; }
   .nn-wheel-hub-name { margin-top: 2px; padding: 0 6px; color: #f2c46b; font-size: 0.92em; }
+  .nn-minimap { position: fixed; right: 16px; top: 16px; width: 180px; pointer-events: none; font: 12px/1.3 system-ui, sans-serif; }
+  .nn-minimap.nn-hidden { display: none; }
+  .nn-minimap-disc { position: relative; width: 180px; height: 180px; border-radius: 50%; overflow: hidden;
+    border: 2px solid rgba(242,196,107,0.55); box-shadow: 0 4px 18px rgba(0,0,0,0.6); background: #141a2b; }
+  .nn-minimap-canvas { display: block; width: 180px; height: 180px; }
+  .nn-minimap-north { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; text-align: center; font-weight: 700;
+    font-size: 11px; line-height: 16px; color: #f2c46b; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .nn-minimap-street { margin-top: 6px; text-align: center; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .nn-minimap-street:empty { display: none; }
+  .nn-bigmap { position: fixed; z-index: 1; inset: 0; pointer-events: none; background: rgba(10,12,20,0.88); color: #fff; font: 13px/1.3 system-ui, sans-serif; }
+  .nn-bigmap.nn-hidden { display: none; }
+  .nn-bigmap-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .nn-bigmap-hint { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); padding: 4px 10px; border-radius: 12px;
+    background: rgba(10,12,20,0.6); text-shadow: 0 1px 3px rgba(0,0,0,0.9); pointer-events: none; }
 `;
 
 /** Minimal HUD: loading bar while the world streams in, permanent data attribution, control hints. */

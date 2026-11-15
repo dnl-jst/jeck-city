@@ -1,7 +1,14 @@
 import { wgs84ToLocal } from '@nn/shared';
+import { withProfiles, type Profile } from './roadprofile.js';
+import { crossSectionFromTags, reversed, type CrossSection, type SeparateSides } from './crosssection.js';
+import { separateParkingSides, type ParkingArea } from './separateparking.js';
 
 export type Pt = { x: number; z: number };
-export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number };
+/**
+ * width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order;
+ * profile (withProfiles): side edges per vertex incl. ramps between ways.
+ */
+export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile };
 export type OsmFeatures = {
   boundary: Pt[];
   roads: Road[];
@@ -22,11 +29,7 @@ type Tags = Record<string, string>;
 type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[]; tags?: Tags; members?: { type: string; role: string; geometry?: LL[] }[] };
 
 const BOUNDARY_ID = 2613766;
-const LANE_WIDTH = 3.25;
-const KIND_WIDTH: Record<string, number> = {
-  primary: 10, secondary: 9, tertiary: 8, residential: 6.5, unclassified: 6.5, living_street: 6,
-  service: 4, footway: 2.5, path: 2.5, cycleway: 2.5, pedestrian: 6,
-};
+const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
 
@@ -78,16 +81,20 @@ export function joinRings(ways: Pt[][]): Pt[][] {
 
 const centroid = (p: Pt[]): Pt => ({ x: p.reduce((s, q) => s + q.x, 0) / p.length, z: p.reduce((s, q) => s + q.z, 0) / p.length });
 
-function parseRoad(el: El, pts: Pt[], t: Tags): Road | undefined {
+/** Ways tagged parking:*=separate wait for the parking areas (post-pass in parseOsm). */
+const hasSeparateParking = (t: Tags) => ['left', 'right', 'both'].some((s) => t[`parking:${s}`] === 'separate');
+const STREET_PARKING = new Set(['street_side', 'lane', 'layby']);
+
+function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Road | undefined {
   const base = (t.highway ?? '').replace(/_link$/, '');
   const kind = base === 'trunk' ? 'primary' : base;
-  if (!(kind in KIND_WIDTH) || t.tunnel === 'yes' || pts.length < 2) return undefined;
-  const lanes = Math.max(1, Math.round(Number(t.lanes)) || 1);
-  const w = Number.parseFloat(t.width ?? '');
-  const width = w > 0 ? w : Number(t.lanes) > 0 ? lanes * LANE_WIDTH : KIND_WIDTH[kind]!;
+  if (!ROAD_KINDS.has(kind) || t.tunnel === 'yes' || pts.length < 2) return undefined;
   const reverse = t.oneway === '-1';
   const oneway = t.oneway === 'yes' || t.oneway === '1' || reverse || t.junction === 'roundabout';
-  const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width, oneway, lanes };
+  const tagged = crossSectionFromTags(t, kind, separate); // separate: relative to the way as drawn
+  const cross = reverse ? reversed(tagged) : tagged;
+  const lanes = cross.lanesForward + cross.lanesBackward;
+  const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width: cross.carriageway, oneway, lanes, cross };
   if (t.name) road.name = t.name;
   return road;
 }
@@ -97,6 +104,8 @@ export function parseOsm(json: unknown): OsmFeatures {
   const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
+  const parkingAreas: ParkingArea[] = [];
+  const pending: { index: number; el: El; pts: Pt[]; t: Tags }[] = [];
   for (const el of elements) {
     const t = el.tags ?? {};
     if (el.type === 'relation') {
@@ -123,16 +132,26 @@ export function parseOsm(json: unknown): OsmFeatures {
         if (closed && (t.area === 'yes' || t.place === 'square' || t.highway === 'pedestrian')) f.squares.push({ name: t.name ?? '', outline: pts });
         else {
           const r = parseRoad(el, pts, t);
+          if (r && hasSeparateParking(t)) pending.push({ index: f.roads.length, el, pts, t });
           if (r) f.roads.push(r);
         }
       } else if (closed && GREEN(t)) f.greens.push(pts);
-      else {
+      else if (closed && t.amenity === 'parking' && STREET_PARKING.has(t.parking ?? '')) {
+        const area: ParkingArea = { ring: pts };
+        const o = t.orientation ?? t['parking:orientation'];
+        if (o) area.orientation = o;
+        parkingAreas.push(area);
+      } else {
         const shop = shopOf(centroid(closed ? pts.slice(0, -1) : pts), t);
         if (shop) f.shops.push(shop);
       }
     }
   }
   f.tramStops = dedupeStops(stops);
+  // parking:*=separate becomes a strip where a street-side parking area runs alongside
+  for (const p of pending) f.roads[p.index] = parseRoad(p.el, p.pts, p.t, separateParkingSides(p.pts, parkingAreas))!;
+  // kerbs, strips and cycle lanes run on across way splits (ramps instead of steps)
+  f.roads = withProfiles(f.roads);
   return f;
 }
 

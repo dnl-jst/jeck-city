@@ -5,7 +5,7 @@ import { parseOsm } from './osm.js';
 test('fixture feature counts', () => {
   const f = loadFixture();
   expect(f.roads.filter((r) => r.kind === 'residential')).toHaveLength(2);
-  expect(f.roads).toHaveLength(3); // + footway
+  expect(f.roads).toHaveLength(5); // + footway + two Doppelstraße carriageways
   expect(f.trees).toHaveLength(3);
   expect(f.lamps).toHaveLength(2);
   expect(f.shops).toEqual([expect.objectContaining({ name: 'Backstube Nippes', type: 'bakery' })]);
@@ -14,16 +14,16 @@ test('fixture feature counts', () => {
   expect(f.greens).toHaveLength(1);
 });
 
-test('residential road without tags is 6.5 m wide, two-way, one lane', () => {
+test('residential road without tags is 2 × 3.0 m wide, two-way, two lanes', () => {
   const r = loadFixture().roads.find((x) => x.name === 'Teststraße')!;
-  expect(r).toMatchObject({ kind: 'residential', width: 6.5, oneway: false, lanes: 1 });
+  expect(r).toMatchObject({ kind: 'residential', width: 6.0, oneway: false, lanes: 2 });
 });
 
-test('width tag beats lanes beats kind; oneway parsed', () => {
+test('width tag beats lanes; oneway parsed', () => {
   const mk = (tags: Record<string, string>) =>
     parseOsm({ elements: [{ type: 'way', id: 1, tags: { highway: 'tertiary', ...tags }, geometry: [{ lat: 50.96, lon: 6.95 }, { lat: 50.961, lon: 6.95 }] }] }).roads[0]!;
-  expect(mk({}).width).toBe(8);
-  expect(mk({ lanes: '2' }).width).toBe(6.5);
+  expect(mk({}).width).toBe(6.5);
+  expect(mk({ lanes: '3' }).width).toBe(9.75);
   expect(mk({ lanes: '2', width: '7.2' }).width).toBe(7.2);
   expect(mk({ oneway: 'yes' }).oneway).toBe(true);
 });

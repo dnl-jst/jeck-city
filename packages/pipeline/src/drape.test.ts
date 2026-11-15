@@ -203,3 +203,18 @@ test('vertices are welded within each source triangle', () => {
   for (let i = 0; i < out.positions.length / 3; i++) keys.add(`${vert(out, i).join(',')},${out.uv[i * 2]},${out.uv[i * 2 + 1]}`);
   expect(keys.size).toBe(out.positions.length / 3);
 });
+
+test('per-vertex mark is carried through (constant per triangle)', () => {
+  const m = mesh([BIG, [[7.3, 0.01, 7.2], [8.2, 0.01, 12.7], [12.4, 0.01, 8.1]]]);
+  m.mark = Float32Array.from([0, 0, 0, 1, 1, 1]);
+  const d = drapeMesh(m, hilly);
+  expect(d.mark).toBeDefined();
+  expect(d.mark!.length).toBe(d.positions.length / 3);
+  expect(Math.abs(totalArea(d) - totalArea(m))).toBeLessThan(1e-3);
+  for (let i = 0; i < d.indices.length; i += 3) {
+    const [a, b, c] = [d.indices[i]!, d.indices[i + 1]!, d.indices[i + 2]!];
+    expect(d.mark![a]).toBe(d.mark![b]);
+    expect(d.mark![a]).toBe(d.mark![c]);
+    expect(d.mark![a]).toBe(d.positions[a * 3]! < 7 ? 0 : 1);
+  }
+});

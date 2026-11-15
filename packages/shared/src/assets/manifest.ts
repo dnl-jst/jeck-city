@@ -8,12 +8,13 @@
  * WORLD space (no per-chunk offset, node transform is identity): coordinates stay below ~3 km, where
  * float32 is still sub-millimetre, and client and collision share one frame without bookkeeping.
  *
- * chunk_{ix}_{iz}.glb layout: up to 9 meshes named ground, buildings, road, sidewalk, curb, trackbed,
- * tram, green, squares (empty ones omitted), EXT_meshopt_compression. `buildings` carries POSITION, NORMAL,
- * _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0 Neusser Str.,
- * bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
+ * chunk_{ix}_{iz}.glb layout: up to 11 meshes named ground, buildings, road, sidewalk, curb, trackbed,
+ * tram, green, squares, markings, parking (empty ones omitted), EXT_meshopt_compression. `buildings` carries
+ * POSITION, NORMAL, _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0
+ * Neusser Str., bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
  * per building (contiguous vertex ranges of the buildings mesh). Street meshes (trackbed = track bed
- * built from the tram rails) carry POSITION and TEXCOORD_0 (metres). `ground` is the terrain surface of
+ * built from the tram rails) carry POSITION and TEXCOORD_0 (metres); `markings` also _MARK (float, 0 white /
+ * 1 red cycle crossing), `parking` has uv.y = metres from the kerb. `ground` is the terrain surface of
  * the chunk square (grid points on [x, x+200] × [z, z+200], edges shared with the neighbours, cells split
  * along TERRAIN_DIAGONAL) with POSITION, NORMAL and TEXCOORD_0 (world x/z in metres); every chunk square of
  * the world area has a chunk once terrain is present, also without buildings or streets.
@@ -21,10 +22,10 @@
 export const CHUNK_SIZE = 200;
 
 /**
- * Height of a shop sign's board centre above its building's LoD2 base (m): the shopfront sign band of the facade
- * shader spans 3.15–3.88 m. Manifest sign.y = base + SIGN_Y.
+ * Height of a shop sign's board centre above its building's LoD2 base (m): the middle of the shopfront sign band of
+ * the facade shader (client materials/storeys.ts SHOP: 3.6–4.35 m). Manifest sign.y = base + SIGN_Y.
  */
-export const SIGN_Y = 3.52;
+export const SIGN_Y = 3.975;
 
 export type WorldManifest = {
   version: 2;

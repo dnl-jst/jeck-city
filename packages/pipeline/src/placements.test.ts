@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { SIGN_Y } from '@nn/shared';
-import { boxBuilding } from './fixture.js';
+import { boxBuilding, crossOf } from './fixture.js';
 import type { Road } from './osm.js';
 import { assignShops, classifyBuildings, PARKED_PALETTE, parkedCars, shopSign } from './placements.js';
 
@@ -40,7 +40,7 @@ test('parked car colours are deterministic palette picks', () => {
   expect(parkedCars(spots, 43).map((c) => c.color)).not.toEqual(a.map((c) => c.color));
 });
 
-const road = (points: [number, number][]): Road => ({ id: 1, kind: 'residential', points: points.map(([x, z]) => ({ x, z })), width: 6.5, oneway: false, lanes: 1 });
+const road = (points: [number, number][]): Road => ({ id: 1, kind: 'residential', points: points.map(([x, z]) => ({ x, z })), width: 6.5, oneway: false, lanes: 1, cross: crossOf('residential', 6.5) });
 
 test('shop sign goes on the wall facing the street, centred on the shop, reading outwards', () => {
   const b = boxBuilding('A', 10, 10, 30, 30, 10);

@@ -1,4 +1,5 @@
 import { BufferAttribute, type BufferGeometry, Color, type IUniform, MeshStandardMaterial } from 'three';
+import { GROUND_SILL, SHOP, STOREY } from './storeys';
 
 /**
  * Procedural Gründerzeit facades for the chunk `buildings` mesh, all in the fragment shader.
@@ -27,13 +28,27 @@ const PALETTE = [
 /** Signage band colours of shopfronts (sRGB). */
 const SIGNS = [0x1f3b2c, 0x5a1a22, 0x1c2a4a, 0x1d1d1f, 0xe9e1cc, 0x7a4a1c];
 
+/** A wall surface whose upper vertices span less than this share of its base is a gable (triangle, half-hip). */
+const GABLE_TOP_SHARE = 0.6;
+
+/** Horizontal extent of vertical-wall vertices (collinear in x/z): farthest pair found from an arbitrary start. */
+function horizontalSpan(verts: number[], position: ArrayLike<number>): number {
+  if (verts.length < 2) return 0;
+  const d = (a: number, b: number) => Math.hypot(position[a * 3]! - position[b * 3]!, position[a * 3 + 2]! - position[b * 3 + 2]!);
+  const far = (from: number) => verts.reduce((best, v) => (d(from, v) > d(from, best) ? v : best), from);
+  const a = far(verts[0]!);
+  return d(a, far(a));
+}
+
 /**
  * Per-vertex eave height of each wall surface: wall triangles are grouped into surfaces by shared
  * vertices; a surface's eave is its lowest vertex height that lies more than 1 m above its bottom
- * (rectangle: the top edge; gable wall: the corners, not the apex). Plinth vertices (v < 0) are ignored
- * for bottom and eave but get their surface's eave. Roof vertices get 0.
+ * (rectangle: the top edge; pentagon gable wall: the corners, not the apex). A gable on a surface of its own
+ * (its vertices more than 1 m above the bottom span < 60 % of its base, measured horizontally from `position`)
+ * gets its bottom as eave, so it stays plain plaster above the main cornice. Plinth vertices (v < 0) are ignored
+ * for bottom, eave and gable test but get their surface's eave. Roof vertices get 0.
  */
-export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number): Float32Array {
+export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, facadeUv: ArrayLike<number>, vertexCount: number, position: ArrayLike<number>): Float32Array {
   const parent = Int32Array.from({ length: vertexCount }, (_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) {
@@ -60,10 +75,18 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
     if (kind[i] === 0 && !bottom.has(find(i))) bottom.set(find(i), 0); // plinth-only surface
   }
   const eave = new Map<number, number>();
+  const base = new Map<number, number[]>(), upper = new Map<number, number[]>();
   for (let i = 0; i < vertexCount; i++) {
     if (kind[i] !== 0) continue;
     const r = find(i), v = facadeUv[i * 2 + 1]!;
-    if (v >= 0 && v > bottom.get(r)! + 1) eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
+    if (v < 0) continue;
+    if (v > bottom.get(r)! + 1) {
+      eave.set(r, Math.min(eave.get(r) ?? Infinity, v));
+      (upper.get(r) ?? upper.set(r, []).get(r)!).push(i);
+    } else if (v < bottom.get(r)! + 0.5) (base.get(r) ?? base.set(r, []).get(r)!).push(i);
+  }
+  for (const [r, up] of upper) {
+    if (horizontalSpan(up, position) < GABLE_TOP_SHARE * horizontalSpan(base.get(r) ?? [], position)) eave.set(r, bottom.get(r)!);
   }
   const out = new Float32Array(vertexCount);
   for (let i = 0; i < vertexCount; i++) {
@@ -78,7 +101,7 @@ export function wallEaves(index: ArrayLike<number>, kind: ArrayLike<number>, fac
 export function addEaveAttribute(g: BufferGeometry): void {
   const n = g.getAttribute('position').count;
   const index = g.index?.array ?? Uint32Array.from({ length: n }, (_, i) => i);
-  const eaves = wallEaves(index, g.getAttribute('_kind').array, g.getAttribute('_facadeuv').array, n);
+  const eaves = wallEaves(index, g.getAttribute('_kind').array, g.getAttribute('_facadeuv').array, n, g.getAttribute('position').array);
   g.setAttribute('_eave', new BufferAttribute(eaves, 1));
 }
 
@@ -105,7 +128,30 @@ vEave = _eave;
 vNnNormal = normal;
 `;
 
+/** GLSL float literal. */
+const f = (v: number): string => v.toFixed(4);
+
+/** The storey layout of storeys.ts as GLSL constants. */
+const STOREY_DECL = /* glsl */ `
+const float NN_GROUND = ${f(STOREY.ground)};
+const float NN_STOREY_MIN = ${f(STOREY.min)};
+const float NN_STOREY_MAX = ${f(STOREY.max)};
+const float NN_WINDOW = ${f(STOREY.window)};
+const float NN_PARAPET = ${f(STOREY.parapet)};
+const float NN_LINTEL = ${f(STOREY.lintel)};
+const float NN_CORNICE = ${f(STOREY.cornice)};
+const float NN_MIN_WINDOW = ${f(STOREY.minWindow)};
+const float NN_PLINTH = ${f(STOREY.groundFloorLevel)};
+const float NN_GROUND_SILL = ${f(GROUND_SILL)};
+const float NN_SHOP_GROUND = ${f(SHOP.ground)};
+const float NN_SHOP_GLASS_TOP = ${f(SHOP.glassTop)};
+const float NN_SHOP_TRANSOM = ${f(SHOP.transom)};
+const float NN_SIGN_BOTTOM = ${f(SHOP.signBottom)};
+const float NN_SIGN_TOP = ${f(SHOP.signTop)};
+`;
+
 const FRAGMENT_DECL = /* glsl */ `
+${STOREY_DECL}
 varying vec2 vFacadeUv;
 varying float vKind;
 varying float vSeed;
@@ -223,11 +269,14 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
   }
   if (backdrop) return;
 
-  float h1 = nnHash(vec2(seed * 11.0, 1.3)), h2 = nnHash(vec2(seed * 13.0, 2.7)), h3 = nnHash(vec2(seed * 17.0, 4.1));
-  float gf = shop ? 4.2 : 3.2 + (h1 - 0.5) * 0.3;
-  float ww = 1.2 + (h2 - 0.5) * 0.24;
-  float wh = 1.6 + (h3 - 0.5) * 0.3;
+  float h1 = nnHash(vec2(seed * 11.0, 1.3)), h2 = nnHash(vec2(seed * 13.0, 2.7));
+  // storey layout (storeys.ts storeyLayout): ground floor, n upper storeys of sh m, attic, cornice band [cb, eave]
   float eave = vEave;
+  float gf = shop ? NN_SHOP_GROUND : NN_GROUND;
+  float sh = NN_STOREY_MIN + (NN_STOREY_MAX - NN_STOREY_MIN) * h1;
+  float n = max(0.0, floor((eave - gf) / sh));
+  float cb = max(eave - NN_CORNICE, n > 0.5 ? gf + (n - 1.0) * sh + NN_PARAPET + NN_WINDOW + NN_LINTEL : 0.0);
+  float ww = 1.2 + (h2 - 0.5) * 0.24;
   float cell = floor(u / 2.6);
   float ax = u - (cell + 0.5) * 2.6;
   vec3 farCol = mix(plaster, vec3(0.05), 0.22);
@@ -237,33 +286,34 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
 
   if (v > eave + 0.02) {
     // gable / attic: plain plaster
-  } else if (v > eave - 0.6) {
-    // main cornice under the eaves: projecting band, dentil row, shadow line
-    float cv = v - (eave - 0.6);
+  } else if (v > cb) {
+    // main cornice under the eaves: projecting band, dentil row, shadow line (scaled to the band's height)
+    float cv = (v - cb) / max(eave - cb, 0.01) * 0.6;
     vec3 stucco = mix(plaster, vec3(0.93, 0.91, 0.86), 0.5);
     if (cv > 0.4) col = stucco * 1.06;
     else if (cv > 0.3) col = stucco * 0.8;
     else if (cv > 0.14) col = fract(u / 0.3) < 0.5 ? stucco : stucco * 0.6;
     else if (cv > 0.06) col = stucco * 0.92;
     else col = plaster * 0.5;
-  } else if (v < (shop ? 0.35 : 0.6)) {
+  } else if (v < (shop ? 0.35 : NN_PLINTH)) {
     // plinth (Sockel)
     col = mix(plaster, vec3(0.2, 0.2, 0.19), 0.6) * (0.9 + 0.15 * nnNoise(vec2(u * 3.0, v * 9.0)));
     if (!shop && fract(u / 0.5) < 0.04) col *= 0.7;
   } else if (v < gf) {
     if (shop) {
       // shopfront: big glass, dark frames, door every few axes, sign band above
-      float sh = nnHash(vec2(cell, seed * 31.0));
+      float shw = nnHash(vec2(cell, seed * 31.0));
       vec3 frame = vec3(0.045, 0.048, 0.052);
       vec3 signCol = nnSigns[int(min(floor(nnHash(vec2(seed * 3.3, 9.1)) * 6.0), 5.0))];
-      if (v > 3.95) col = mix(plaster, vec3(0.93, 0.91, 0.86), 0.4); // ledge
-      else if (v > 3.88) col = plaster * 0.5;
-      else if (v > 3.15) { // sign band
+      if (v > NN_SIGN_TOP + 0.07) col = mix(plaster, vec3(0.93, 0.91, 0.86), 0.4); // ledge
+      else if (v > NN_SIGN_TOP) col = plaster * 0.5;
+      else if (v > NN_SIGN_BOTTOM) { // sign band
         col = signCol;
         float seg = floor(u / 7.8), su = u - seg * 7.8;
         float len = 2.4 + 3.0 * nnHash(vec2(seg, seed * 9.0));
-        float lettering = nnBox(vec2(su, v), vec2(3.9 - len * 0.5, 3.3), vec2(3.9 + len * 0.5, 3.72))
-          * nnLetters(vec2(su - 3.9 + len * 0.5, v - 3.3), seed);
+        float l0 = NN_SIGN_BOTTOM + 0.15;
+        float lettering = nnBox(vec2(su, v), vec2(3.9 - len * 0.5, l0), vec2(3.9 + len * 0.5, l0 + 0.42))
+          * nnLetters(vec2(su - 3.9 + len * 0.5, v - l0), seed);
         float bright = dot(signCol, vec3(0.33)) > 0.4 ? 1.0 : 0.0;
         vec3 ink = bright > 0.5 ? vec3(0.08, 0.08, 0.09) : vec3(0.92, 0.88, 0.75);
         if (hasSign) lettering = 0.0; // the real sign board hangs here
@@ -273,43 +323,35 @@ void nnWall(out vec3 col, out float rough, out vec3 emit, out float glass) {
       } else if (abs(ax) > 1.12) {
         col = plaster * 0.85; // pier between shop windows
       } else {
-        bool door = sh < 0.22;
+        bool door = shw < 0.22;
         float bottom = door ? 0.0 : 0.35;
-        float topG = 3.0;
+        float topG = NN_SHOP_GLASS_TOP;
         vec2 p = vec2(abs(ax), v);
-        if (p.y > topG || p.x > 1.04 || p.y < bottom + 0.06 || abs(p.y - 2.45) < 0.035 || door && p.x < 0.04) col = frame;
+        if (p.y > topG || p.x > 1.04 || p.y < bottom + 0.06 || abs(p.y - NN_SHOP_TRANSOM) < 0.035 || door && p.x < 0.04) col = frame;
         else {
           // shop interior: shelves and goods, dim by day
           float shelf = step(0.82, fract(p.y / 0.55));
           float item = nnHash(floor(vec2(u * 5.0, p.y / 0.55)));
           vec3 goods = mix(vec3(0.07, 0.06, 0.05), vec3(0.11, 0.1, 0.09), item);
           col = mix(vec3(0.04, 0.042, 0.046), goods, step(p.y, 2.2) * (1.0 - shelf) * step(0.3, item));
-          col *= 0.8 + 0.4 * smoothstep(3.0, 0.4, p.y);
-          glass = 1.0; lit = step(sh, 0.9) * (p.y < 2.45 ? 1.0 : 0.55) * (0.45 + 4.0 * dot(col, vec3(0.33))); warm = vec3(1.0, 0.68, 0.4) * 0.45; }
+          col *= 0.8 + 0.4 * smoothstep(topG, 0.4, p.y);
+          glass = 1.0; lit = step(shw, 0.9) * (p.y < NN_SHOP_TRANSOM ? 1.0 : 0.55) * (0.45 + 4.0 * dot(col, vec3(0.33))); warm = vec3(1.0, 0.68, 0.4) * 0.45; }
         rough = 0.3;
       }
     } else {
-      // ground floor windows (raised: Hochparterre)
-      float sill = 1.05;
-      glass = nnWindow(vec2(ax, v - sill), ww, min(wh, gf - sill - 0.5), nnHash(vec2(cell + seed * 61.0, 0.5)), plaster, col);
+      // ground floor windows (raised: Hochparterre); on low walls shorter, or none
+      float gh = min(NN_WINDOW, min(gf, cb) - NN_GROUND_SILL - NN_LINTEL);
+      if (gh >= NN_MIN_WINDOW) glass = nnWindow(vec2(ax, v - NN_GROUND_SILL), ww, gh, nnHash(vec2(cell + seed * 61.0, 0.5)), plaster, col);
       lit = step(0.01, glass) * step(nnHash(vec2(cell * 1.7 + seed * 101.0, 0.5)), 0.35);
       if (glass < 0.5 && abs(v - (gf - 0.12)) < 0.12) col = mix(plaster, vec3(0.93, 0.91, 0.86), 0.35);
     }
   } else {
-    // upper storeys: as many 3.2 m storeys as fit under the cornice, stretched to fit
-    float avail = eave - 0.6 - gf;
-    float sh0 = 3.2 + (h1 - 0.5) * 0.3;
-    float n = floor(avail / sh0 + 0.3);
-    if (n >= 1.0) {
-      float sh = avail / n;
-      float s = floor((v - gf) / sh);
-      float sv = v - gf - s * sh;
-      float sill = 0.85 + (sh - 3.2) * 0.35;
-      float h = wh * clamp(sh / 3.2, 0.85, 1.2) - (s == n - 1.0 ? 0.15 : 0.0);
-      if (sv < 0.16) col = mix(plaster, vec3(0.93, 0.91, 0.86), 0.3) * (sv < 0.04 ? 0.7 : 1.0); // string course
-      else glass = nnWindow(vec2(ax, sv - sill), ww, h, nnHash(vec2(cell + seed * 61.0, s + 1.5)), plaster, col);
-      lit = step(0.01, glass) * step(nnHash(vec2(cell * 1.7 + seed * 101.0, s + 1.5)), 0.35);
-    }
+    // upper storeys of sh m (window 1.9 m on a 0.9 m parapet), then the attic up to the cornice
+    float s = min(floor((v - gf) / sh), n);
+    float sv = v - gf - s * sh;
+    if (sv < 0.16) col = mix(plaster, vec3(0.93, 0.91, 0.86), 0.3) * (sv < 0.04 ? 0.7 : 1.0); // string course
+    else if (s < n) glass = nnWindow(vec2(ax, sv - NN_PARAPET), ww, NN_WINDOW, nnHash(vec2(cell + seed * 61.0, s + 1.5)), plaster, col);
+    lit = step(0.01, glass) * step(nnHash(vec2(cell * 1.7 + seed * 101.0, s + 1.5)), 0.35);
   }
   if (glass > 0.5) rough = 0.15;
   // rooms: brighter towards the ceiling lamp, curtains glow
@@ -359,6 +401,6 @@ export function createFacadeMaterial(): FacadeMaterial {
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = nnRough;`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${EMISSIVE_MAIN}`);
   };
-  mat.customProgramCacheKey = () => 'nn-facade-1';
+  mat.customProgramCacheKey = () => 'nn-facade-2';
   return mat;
 }

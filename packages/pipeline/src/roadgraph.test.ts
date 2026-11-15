@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { boxBuilding, loadFixture } from './fixture.js';
+import { boxBuilding, loadFixture, crossOf } from './fixture.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { parkedCarSpots } from './parking.js';
 import { wgs84ToLocal } from '@nn/shared';
@@ -20,7 +20,7 @@ test('crossing is a node of degree 4', () => {
 test('footways are not in the graph, tram is', () => {
   const g = buildRoadGraph(f);
   expect(g.edges.filter((e) => e.tram)).toHaveLength(2);
-  expect(g.edges).toHaveLength(6);
+  expect(g.edges).toHaveLength(8); // 4 street halves + 2 Doppelstraße + 2 tram
 });
 
 test('tram stop is assigned to the tram edge', () => {
@@ -31,7 +31,7 @@ test('tram stop is assigned to the tram edge', () => {
 });
 
 test('oneway roads have no backward lanes', () => {
-  const road: Road = { id: 7, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 50, z: 0 }], width: 6.5, oneway: true, lanes: 1 };
+  const road: Road = { id: 7, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 50, z: 0 }], width: 6.5, oneway: true, lanes: 1, cross: crossOf('residential', 6.5) };
   const g = buildRoadGraph({ ...f, roads: [road], tramTracks: [], tramStops: [] });
   expect(g.edges).toEqual([expect.objectContaining({ lanesForward: 1, lanesBackward: 0, roadId: 7 })]);
 });
@@ -60,7 +60,7 @@ test('same seed gives same spots, other seed differs', () => {
 const huge: Pt[] = [{ x: -25000, z: -25000 }, { x: 25000, z: -25000 }, { x: 25000, z: 25000 }, { x: -25000, z: 25000 }];
 
 test('oneway: right side only; heading follows travel direction', () => {
-  const east: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 600, z: 0 }], width: 6.5, oneway: true, lanes: 1 };
+  const east: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 600, z: 0 }], width: 6.5, oneway: true, lanes: 1, cross: crossOf('residential', 6.5) };
   const feat: OsmFeatures = { ...f, boundary: huge, roads: [east], tramTracks: [], tramStops: [] };
   const s = parkedCarSpots(feat, 1, []);
   expect(s.length).toBeGreaterThan(10);
@@ -72,14 +72,14 @@ test('oneway: right side only; heading follows travel direction', () => {
   expect(two.some((p) => p.pos.z < 0 && Math.abs(Math.abs(p.heading) - Math.PI / 2) < 1e-6 && p.heading < 0)).toBe(true);
 });
 
-test('at most 300 spots', () => {
-  const long: Road = { id: 1, kind: 'tertiary', points: [{ x: 0, z: 0 }, { x: 20000, z: 0 }], width: 8, oneway: false, lanes: 1 };
-  expect(parkedCarSpots({ ...f, boundary: huge, roads: [long], tramTracks: [], tramStops: [] }, 3, [])).toHaveLength(300);
+test('at most 2600 spots', () => {
+  const long: Road = { id: 1, kind: 'tertiary', points: [{ x: 0, z: 0 }, { x: 40000, z: 0 }], width: 8, oneway: false, lanes: 1, cross: crossOf('tertiary', 8) };
+  expect(parkedCarSpots({ ...f, boundary: huge, roads: [long], tramTracks: [], tramStops: [] }, 3, [])).toHaveLength(2600);
 });
 
 test('T-junction with a primary road blocks parking within 10 m', () => {
-  const main: Road = { id: 1, kind: 'primary', points: [{ x: -300, z: 0 }, { x: 0, z: 0 }, { x: 300, z: 0 }], width: 10, oneway: false, lanes: 1 };
-  const side: Road = { id: 2, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 0, z: 200 }], width: 6.5, oneway: false, lanes: 1 };
+  const main: Road = { id: 1, kind: 'primary', points: [{ x: -300, z: 0 }, { x: 0, z: 0 }, { x: 300, z: 0 }], width: 10, oneway: false, lanes: 1, cross: crossOf('primary', 10) };
+  const side: Road = { id: 2, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 0, z: 200 }], width: 6.5, oneway: false, lanes: 1, cross: crossOf('residential', 6.5) };
   const s = parkedCarSpots({ ...f, boundary: huge, roads: [main, side], tramTracks: [], tramStops: [] }, 5, []);
   expect(s.length).toBeGreaterThan(0);
   expect(s.every((p) => Math.hypot(p.pos.x, p.pos.z) >= 10)).toBe(true);
@@ -87,7 +87,7 @@ test('T-junction with a primary road blocks parking within 10 m', () => {
 
 describe('parking stays where cars can stand', () => {
   // East-west road from x = −100 to 100 (spots at z = ±2.25); boundary square x, z ∈ [−50, 50].
-  const road: Road = { id: 1, kind: 'residential', points: [{ x: -100, z: 0 }, { x: 100, z: 0 }], width: 6.5, oneway: false, lanes: 1 };
+  const road: Road = { id: 1, kind: 'residential', points: [{ x: -100, z: 0 }, { x: 100, z: 0 }], width: 6.5, oneway: false, lanes: 1, cross: crossOf('residential', 6.5) };
   const boundary: Pt[] = [{ x: -50, z: -50 }, { x: 50, z: -50 }, { x: 50, z: 50 }, { x: -50, z: 50 }];
   const feat: OsmFeatures = { ...f, boundary, roads: [road], tramTracks: [], tramStops: [] };
 

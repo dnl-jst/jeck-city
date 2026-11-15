@@ -62,6 +62,6 @@ test('manifest parse v2: terrain, datum and farGroundY are required and validate
   expect(() => parseManifest({ ...valid(), terrain: { file: 'other.bin', bytes: 1 } })).toThrow();
 });
 
-test('SIGN_Y is the sign board centre above the building base', () => expect(SIGN_Y).toBe(3.52));
+test('SIGN_Y is the sign board centre above the building base', () => expect(SIGN_Y).toBe(3.975));
 
 test('chunk key for point', () => expect(chunkKey(-1, 399)).toBe('-1_1'));

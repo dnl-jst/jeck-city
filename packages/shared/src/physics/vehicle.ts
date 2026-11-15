@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
-import { onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
+import { CAR_GROUPS, onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
 export type VehicleInput = { throttle: number; steer: number; brake: boolean };
@@ -44,7 +44,7 @@ export class Vehicle {
         { x: 0, y: -T.comDrop, z: 0 },
         { x: (m / 3) * (hy * hy + hz * hz), y: (m / 3) * (hx * hx + hz * hz), z: (m / 3) * (hx * hx + hy * hy) },
         { x: 0, y: 0, z: 0, w: 1 },
-      ),
+      ).setCollisionGroups(CAR_GROUPS),
       this.chassis,
     );
 
@@ -65,8 +65,8 @@ export class Vehicle {
     }
     this.ctrl = c;
 
-    // Wheel rays hit the city and other cars; never this chassis, characters (kinematic) or sensors.
-    const wheelFilter = staticWorldFilter(true, this.chassis);
+    // Wheel rays hit the city, other cars and street furniture (fallen lamps); never this chassis, characters (kinematic) or sensors.
+    const wheelFilter = staticWorldFilter(true, this.chassis, true);
     this.unsubscribe = onBeforeStep(pw, () => {
       if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
     });

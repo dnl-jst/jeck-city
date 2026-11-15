@@ -396,6 +396,54 @@
     "public_transport": "platform",
     "name": "Nur Name"
    }
+  },
+  {
+   "type": "way",
+   "id": 1010,
+   "nodes": [
+    10100,
+    10101
+   ],
+   "geometry": [
+    {
+     "lat": 50.96165,
+     "lon": 6.951
+    },
+    {
+     "lat": 50.96165,
+     "lon": 6.9535
+    }
+   ],
+   "tags": {
+    "highway": "secondary",
+    "name": "Doppelstra\u00dfe",
+    "oneway": "yes",
+    "lanes": "2"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1011,
+   "nodes": [
+    10110,
+    10111
+   ],
+   "geometry": [
+    {
+     "lat": 50.96175,
+     "lon": 6.9535
+    },
+    {
+     "lat": 50.96175,
+     "lon": 6.951
+    }
+   ],
+   "tags": {
+    "highway": "secondary",
+    "name": "Doppelstra\u00dfe",
+    "oneway": "yes",
+    "lanes": "2"
+   }
   }
  ]
 }

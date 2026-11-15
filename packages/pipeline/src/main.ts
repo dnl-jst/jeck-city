@@ -11,6 +11,7 @@ import { prepareModel } from './models.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
+import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
 import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
@@ -18,7 +19,10 @@ import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
+import { sidewalkFit } from './sidewalkmetric.js';
+import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
+import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
 
 const RAW_DIR = 'data/raw';
@@ -28,6 +32,7 @@ const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
+const TREE_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 /**
  * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
@@ -105,7 +110,13 @@ async function main() {
   const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
   console.log(`shops: ${shops.length} (${Object.keys(curated).length} curated names, ${shops.filter((s) => s.sign).length} with sign)`);
 
-  const flat = buildStreetGeometry(f);
+  // the building line comes from every LoD2 footprint, overridden ones too (their footprint is where the model stands);
+  // streets, trees, lamps, parking and the spawn all use this one set
+  const sidewalks = allSidewalkWidths(f.roads, buildings);
+  const flat = buildStreetGeometry(f, sidewalks);
+  const fit = sidewalkFit(flat.sidewalk, [flat.road, flat.curb, flat.parking, flat.green, flat.squares], buildings);
+  const pc = (v: number) => `${((100 * v) / fit.area).toFixed(2)} %`;
+  console.log(`sidewalk: ${(fit.area / 1e3).toFixed(1)}k m², overshoot: ${fit.overshoot.toFixed(0)} m² (${pc(fit.overshoot)}), undershoot: ${fit.undershoot.toFixed(0)} m² (${pc(fit.undershoot)})`);
   const bed = trackBed(flat.tram.positions, flat.tram.uv, flat.tram.indices);
   const flatStreets: StreetMeshes = { ...flat, trackbed: { positions: bed.positions, uv: bed.uv, indices: Uint32Array.from(bed.index) } };
   const streets = {} as StreetMeshes;
@@ -114,7 +125,7 @@ async function main() {
     console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${streets[name].indices.length / 3} triangles`);
   }
   const graph = buildRoadGraph(f);
-  const flatSpawn = findSpawn(f.roads, SPAWN_TARGET, active);
+  const flatSpawn = findSpawn(f.roads, SPAWN_TARGET, buildings);
   const spawn = { ...flatSpawn, y: heightAt(terrain, flatSpawn.x, flatSpawn.z) + flatSpawn.y }; // flat y = sidewalk height
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
 
@@ -173,10 +184,18 @@ async function main() {
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
 
+  const map = buildMapData(f, buildings);
+  await writeFile(join(OUT_DIR, 'map.json'), JSON.stringify(map));
+  console.log(`map: ${map.roads.length} roads (${map.roads.filter((r) => r.name).length} named), ${map.buildings.length} buildings, ${map.greens.length} greens`);
+
   const extraLamps = generatedLamps(f, buildings); // overridden footprints keep lamps out too
   const lamps = [...f.lamps, ...extraLamps];
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
+  const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps, sidewalks);
+  const trees = [...f.trees, ...extraTrees];
+  const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
+  console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 
   const manifest: WorldManifest = {
     version: 2,
@@ -186,7 +205,7 @@ async function main() {
     spawn: { x: r2(spawn.x), y: r2(spawn.y), z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
     lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
-    trees: f.trees.map((p) => [r2(p.x), r2(p.z)]),
+    trees: trees.map((p) => [r2(p.x), r2(p.z)]),
     tramStops: graph.stops.map((s) => {
       const p = placeShelter(s.pos, f);
       return { name: s.name, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) };
@@ -203,6 +222,8 @@ async function main() {
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
+  const car0 = manifest.parked[0]!;
+  console.log(`spawn car: ${Math.hypot(car0.x - spawn.x, car0.z - spawn.z).toFixed(2)} m from the spawn`);
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;
@@ -246,7 +267,7 @@ function cropMesh(m: Mesh, r: Rect): Mesh {
     const x = (P[a * 3]! + P[b * 3]! + P[c * 3]!) / 3, z = (P[a * 3 + 2]! + P[b * 3 + 2]! + P[c * 3 + 2]!) / 3;
     if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) idx.push(a, b, c);
   }
-  return { positions: m.positions, uv: m.uv, indices: Uint32Array.from(idx) };
+  return { positions: m.positions, uv: m.uv, indices: Uint32Array.from(idx), ...(m.mark ? { mark: m.mark } : {}) };
 }
 
 /** Lowest height (local y) along the outer rows and columns of the grid. */

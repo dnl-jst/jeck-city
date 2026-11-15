@@ -54,6 +54,7 @@ const before = (a: { x: number; z: number }, b: { x: number; z: number }) => a.x
  * are cut into slabs wherever their xz trace crosses a grid line or diagonal.
  */
 export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
+  if (m.mark) return drapeMarked(m, m.mark, t);
   const out = new Out(t);
   const P = m.positions;
   for (let i = 0; i < m.indices.length; i += 3) {
@@ -68,6 +69,35 @@ export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
     else drapeVertical(tri, t, out);
   }
   return out.build();
+}
+
+/**
+ * `mark` is constant per triangle (markings: per strip or quad), so each mark value is draped on its own and the
+ * pieces are concatenated with that value on every output vertex.
+ */
+function drapeMarked(m: Mesh, mark: Float32Array, t: TerrainGrid): Mesh {
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < m.indices.length; i += 3) {
+    const v = mark[m.indices[i]!]!;
+    let g = groups.get(v);
+    if (!g) groups.set(v, (g = []));
+    g.push(m.indices[i]!, m.indices[i + 1]!, m.indices[i + 2]!);
+  }
+  const parts: { v: number; d: Mesh }[] = [];
+  for (const [v, idx] of groups) parts.push({ v, d: drapeMesh({ positions: m.positions, uv: m.uv, indices: Uint32Array.from(idx) }, t) });
+  const nv = parts.reduce((s, p) => s + p.d.positions.length / 3, 0);
+  const ni = parts.reduce((s, p) => s + p.d.indices.length, 0);
+  const out: Mesh = { positions: new Float32Array(nv * 3), uv: new Float32Array(nv * 2), indices: new Uint32Array(ni), mark: new Float32Array(nv) };
+  let vo = 0, io = 0;
+  for (const { v, d } of parts) {
+    out.positions.set(d.positions, vo * 3);
+    out.uv.set(d.uv, vo * 2);
+    out.mark!.fill(v, vo, vo + d.positions.length / 3);
+    for (let k = 0; k < d.indices.length; k++) out.indices[io + k] = d.indices[k]! + vo;
+    vo += d.positions.length / 3;
+    io += d.indices.length;
+  }
+  return out;
 }
 
 function lerp(p: CV, q: CV, s: number, x: number, z: number, mask: number): CV {

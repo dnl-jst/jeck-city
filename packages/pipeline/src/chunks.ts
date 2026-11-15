@@ -7,7 +7,7 @@ import { groundMesh, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
-export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares'] as const;
+export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
 export type StreetMeshes = Record<StreetName, Mesh>;
 /**
@@ -84,7 +84,7 @@ const inRect = (r: Rect | undefined, x: number, z: number) => !r || (x >= r.minX
 
 /** Copies the triangles of `m` whose centroid lies in each chunk (and in `area`) into per-chunk meshes (vertices remapped). */
 function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
-  const parts = new Map<string, { remap: Map<number, number>; pos: number[]; uv: number[]; idx: number[] }>();
+  const parts = new Map<string, { remap: Map<number, number>; pos: number[]; uv: number[]; mark: number[]; idx: number[] }>();
   const p = m.positions;
   for (let t = 0; t < m.indices.length; t += 3) {
     const [a, b, c] = [m.indices[t]!, m.indices[t + 1]!, m.indices[t + 2]!];
@@ -92,7 +92,7 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
     if (!inRect(area, cx, cz)) continue;
     const key = chunkKey(cx, cz);
     let part = parts.get(key);
-    if (!part) parts.set(key, (part = { remap: new Map(), pos: [], uv: [], idx: [] }));
+    if (!part) parts.set(key, (part = { remap: new Map(), pos: [], uv: [], mark: [], idx: [] }));
     for (const v of [a, b, c]) {
       let i = part.remap.get(v);
       if (i === undefined) {
@@ -100,12 +100,17 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
         part.remap.set(v, i);
         part.pos.push(p[v * 3]!, p[v * 3 + 1]!, p[v * 3 + 2]!);
         part.uv.push(m.uv[v * 2]!, m.uv[v * 2 + 1]!);
+        if (m.mark) part.mark.push(m.mark[v]!);
       }
       part.idx.push(i);
     }
   }
   const out = new Map<string, Mesh>();
-  for (const [k, q] of parts) out.set(k, { positions: Float32Array.from(q.pos), indices: Uint32Array.from(q.idx), uv: Float32Array.from(q.uv) });
+  for (const [k, q] of parts) {
+    const mesh: Mesh = { positions: Float32Array.from(q.pos), indices: Uint32Array.from(q.idx), uv: Float32Array.from(q.uv) };
+    if (m.mark) mesh.mark = Float32Array.from(q.mark);
+    out.set(k, mesh);
+  }
   return out;
 }
 
@@ -178,7 +183,10 @@ export async function encodeChunkGlb(c: ChunkGeometry): Promise<Uint8Array> {
   if (g) addMesh('ground', [['POSITION', 'VEC3', g.positions], ['NORMAL', 'VEC3', g.normals], ['TEXCOORD_0', 'VEC2', g.uv]], g.indices);
   for (const name of STREET_MESHES) {
     const m = c.streets[name];
-    if (m && m.indices.length > 0) addMesh(name, [['POSITION', 'VEC3', m.positions], ['TEXCOORD_0', 'VEC2', m.uv]], m.indices);
+    if (!m || m.indices.length === 0) continue;
+    const attrs: [string, 'SCALAR' | 'VEC2' | 'VEC3', Float32Array][] = [['POSITION', 'VEC3', m.positions], ['TEXCOORD_0', 'VEC2', m.uv]];
+    if (m.mark) attrs.push(['_MARK', 'SCALAR', m.mark]);
+    addMesh(name, attrs, m.indices);
   }
   const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
   return io.writeBinary(doc);
