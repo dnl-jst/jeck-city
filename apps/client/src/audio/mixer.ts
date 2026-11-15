@@ -61,7 +61,17 @@ export class AudioMixer {
       this.ambience = ctx.createGain();
       this.ambience.gain.value = this.inCar ? 0.35 : 1;
       this.ambience.connect(this.lowpass);
+      const l = ctx.listener;
+      if (l.upX) {
+        l.upX.value = 0;
+        l.upY.value = 1;
+        l.upZ.value = 0;
+      }
+      // resume inside the gesture's call stack (Safari/iOS), before any await
+      const resumed = ctx.resume().catch(() => undefined);
       await this.decodePending();
+      await resumed;
+      return;
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume().catch(() => undefined);
   }
@@ -186,16 +196,26 @@ export class AudioMixer {
   setListener(x: number, z: number, yaw: number): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const l = ctx.listener;
-    const t = ctx.currentTime;
+    placeListener(ctx.listener, x, z, yaw, ctx.currentTime);
+  }
+}
+
+/**
+ * Places the listener at (x, 0, z) facing forward = (sin yaw, 0, cos yaw).
+ * Firefox lacks the AudioParam attributes on AudioListener; fall back to setPosition/setOrientation there.
+ */
+export function placeListener(l: AudioListener, x: number, z: number, yaw: number, t: number): void {
+  const fx = Math.sin(yaw);
+  const fz = Math.cos(yaw);
+  if (l.positionX) {
     l.positionX.setTargetAtTime(x, t, RAMP);
     l.positionY.setTargetAtTime(0, t, RAMP);
     l.positionZ.setTargetAtTime(z, t, RAMP);
-    l.forwardX.setTargetAtTime(Math.sin(yaw), t, RAMP);
+    l.forwardX.setTargetAtTime(fx, t, RAMP);
     l.forwardY.setTargetAtTime(0, t, RAMP);
-    l.forwardZ.setTargetAtTime(Math.cos(yaw), t, RAMP);
-    l.upX.value = 0;
-    l.upY.value = 1;
-    l.upZ.value = 0;
+    l.forwardZ.setTargetAtTime(fz, t, RAMP);
+  } else {
+    l.setPosition(x, 0, z);
+    l.setOrientation(fx, 0, fz, 0, 1, 0);
   }
 }
