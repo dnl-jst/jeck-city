@@ -1,0 +1,303 @@
+{
+ "version": 0.6,
+ "elements": [
+  {
+   "type": "relation",
+   "id": 2613766,
+   "tags": {
+    "admin_level": "10",
+    "boundary": "administrative",
+    "name": "Nippes",
+    "type": "boundary"
+   },
+   "members": [
+    {
+     "type": "node",
+     "ref": 1,
+     "role": "admin_centre"
+    },
+    {
+     "type": "way",
+     "ref": 101,
+     "role": "outer",
+     "geometry": [
+      {
+       "lat": 50.9615,
+       "lon": 6.9495
+      },
+      {
+       "lat": 50.9645,
+       "lon": 6.9495
+      },
+      {
+       "lat": 50.9645,
+       "lon": 6.9545
+      }
+     ]
+    },
+    {
+     "type": "way",
+     "ref": 102,
+     "role": "outer",
+     "geometry": [
+      {
+       "lat": 50.9615,
+       "lon": 6.9495
+      },
+      {
+       "lat": 50.9615,
+       "lon": 6.9545
+      },
+      {
+       "lat": 50.9645,
+       "lon": 6.9545
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "type": "way",
+   "id": 1001,
+   "nodes": [
+    10010,
+    10011,
+    10012
+   ],
+   "geometry": [
+    {
+     "lat": 50.9631,
+     "lon": 6.951
+    },
+    {
+     "lat": 50.9631,
+     "lon": 6.952
+    },
+    {
+     "lat": 50.9631,
+     "lon": 6.953
+    }
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Teststraße"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1002,
+   "nodes": [
+    10020,
+    10021,
+    10022
+   ],
+   "geometry": [
+    {
+     "lat": 50.964,
+     "lon": 6.952
+    },
+    {
+     "lat": 50.9631,
+     "lon": 6.952
+    },
+    {
+     "lat": 50.9622,
+     "lon": 6.952
+    }
+   ],
+   "tags": {
+    "highway": "residential",
+    "name": "Querstraße"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1003,
+   "nodes": [
+    10030,
+    10031
+   ],
+   "geometry": [
+    {
+     "lat": 50.9628,
+     "lon": 6.9512
+    },
+    {
+     "lat": 50.9628,
+     "lon": 6.9518
+    }
+   ],
+   "tags": {
+    "highway": "footway"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1004,
+   "nodes": [
+    10040,
+    10041,
+    10042
+   ],
+   "geometry": [
+    {
+     "lat": 50.9636,
+     "lon": 6.9505
+    },
+    {
+     "lat": 50.9636,
+     "lon": 6.952
+    },
+    {
+     "lat": 50.9636,
+     "lon": 6.9535
+    }
+   ],
+   "tags": {
+    "railway": "tram"
+   }
+  },
+  {
+   "type": "node",
+   "id": 2001,
+   "lat": 50.96362,
+   "lon": 6.95205,
+   "tags": {
+    "railway": "tram_stop",
+    "name": "Florastr.",
+    "tram": "yes"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1005,
+   "nodes": [
+    10050,
+    10051,
+    10052,
+    10053,
+    10054
+   ],
+   "geometry": [
+    {
+     "lat": 50.9622,
+     "lon": 6.9525
+    },
+    {
+     "lat": 50.9622,
+     "lon": 6.9535
+    },
+    {
+     "lat": 50.9627,
+     "lon": 6.9535
+    },
+    {
+     "lat": 50.9627,
+     "lon": 6.9525
+    },
+    {
+     "lat": 50.9622,
+     "lon": 6.9525
+    }
+   ],
+   "tags": {
+    "leisure": "park",
+    "name": "Testpark"
+   }
+  },
+  {
+   "type": "way",
+   "id": 1006,
+   "nodes": [
+    10060,
+    10061,
+    10062,
+    10063,
+    10064
+   ],
+   "geometry": [
+    {
+     "lat": 50.9638,
+     "lon": 6.9525
+    },
+    {
+     "lat": 50.9638,
+     "lon": 6.953
+    },
+    {
+     "lat": 50.9641,
+     "lon": 6.953
+    },
+    {
+     "lat": 50.9641,
+     "lon": 6.9525
+    },
+    {
+     "lat": 50.9638,
+     "lon": 6.9525
+    }
+   ],
+   "tags": {
+    "highway": "pedestrian",
+    "area": "yes",
+    "place": "square",
+    "name": "Testplatz"
+   }
+  },
+  {
+   "type": "node",
+   "id": 3001,
+   "lat": 50.9629,
+   "lon": 6.9514,
+   "tags": {
+    "natural": "tree"
+   }
+  },
+  {
+   "type": "node",
+   "id": 3002,
+   "lat": 50.9633,
+   "lon": 6.9526,
+   "tags": {
+    "natural": "tree"
+   }
+  },
+  {
+   "type": "node",
+   "id": 3003,
+   "lat": 50.9624,
+   "lon": 6.9514,
+   "tags": {
+    "natural": "tree"
+   }
+  },
+  {
+   "type": "node",
+   "id": 4001,
+   "lat": 50.96312,
+   "lon": 6.9514,
+   "tags": {
+    "highway": "street_lamp"
+   }
+  },
+  {
+   "type": "node",
+   "id": 4002,
+   "lat": 50.96312,
+   "lon": 6.9526,
+   "tags": {
+    "highway": "street_lamp"
+   }
+  },
+  {
+   "type": "node",
+   "id": 5001,
+   "lat": 50.9632,
+   "lon": 6.95215,
+   "tags": {
+    "shop": "bakery",
+    "name": "Backstube Nippes"
+   }
+  }
+ ]
+}

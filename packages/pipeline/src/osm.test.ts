@@ -1,0 +1,43 @@
+import { expect, test } from 'vitest';
+import { loadFixture } from './fixture.js';
+import { parseOsm } from './osm.js';
+
+test('fixture feature counts', () => {
+  const f = loadFixture();
+  expect(f.roads.filter((r) => r.kind === 'residential')).toHaveLength(2);
+  expect(f.roads).toHaveLength(3); // + footway
+  expect(f.trees).toHaveLength(3);
+  expect(f.lamps).toHaveLength(2);
+  expect(f.shops).toEqual([expect.objectContaining({ name: 'Backstube Nippes', type: 'bakery' })]);
+  expect(f.tramTracks).toHaveLength(1);
+  expect(f.tramStops.map((s) => s.name)).toEqual(['Florastr.']);
+  expect(f.greens).toHaveLength(1);
+});
+
+test('residential road without tags is 6.5 m wide, two-way, one lane', () => {
+  const r = loadFixture().roads.find((x) => x.name === 'Teststraße')!;
+  expect(r).toMatchObject({ kind: 'residential', width: 6.5, oneway: false, lanes: 1 });
+});
+
+test('width tag beats lanes beats kind; oneway parsed', () => {
+  const mk = (tags: Record<string, string>) =>
+    parseOsm({ elements: [{ type: 'way', id: 1, tags: { highway: 'tertiary', ...tags }, geometry: [{ lat: 50.96, lon: 6.95 }, { lat: 50.961, lon: 6.95 }] }] }).roads[0]!;
+  expect(mk({}).width).toBe(8);
+  expect(mk({ lanes: '2' }).width).toBe(6.5);
+  expect(mk({ lanes: '2', width: '7.2' }).width).toBe(7.2);
+  expect(mk({ oneway: 'yes' }).oneway).toBe(true);
+});
+
+test('closed square area becomes a square, not a road', () => {
+  const f = loadFixture();
+  expect(f.squares).toHaveLength(1);
+  expect(f.squares[0]!.name).toBe('Testplatz');
+  expect(f.roads.some((r) => r.kind === 'pedestrian')).toBe(false);
+});
+
+test('boundary relation parts are joined (one reversed) into a closed ring', () => {
+  const b = loadFixture().boundary;
+  expect(b).toHaveLength(5);
+  expect(b[0]).toEqual(b[4]);
+  expect(new Set(b.map((p) => `${p.x.toFixed(0)},${p.z.toFixed(0)}`)).size).toBe(4);
+});
