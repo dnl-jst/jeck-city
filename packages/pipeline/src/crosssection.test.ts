@@ -1,4 +1,4 @@
-import { expect, test } from 'vitest';
+import { describe, expect, test } from 'vitest';
 import { crossSectionFromTags } from './crosssection.js';
 import { parseOsm } from './osm.js';
 
@@ -83,4 +83,45 @@ test('parseOsm: Road.cross and width = carriageway; oneway=-1 flips left/right w
   expect(rev.oneway).toBe(true);
   expect(rev.points[0]!.z).toBeLessThan(rev.points[1]!.z); // reversed: now runs south (+z)
   expect(rev.cross).toMatchObject({ lanesForward: 1, lanesBackward: 0, parkLeft: 0, parkRight: 2 });
+});
+
+test('parking:<side>=separate is a strip only with a parking area alongside that side', () => {
+  const t = { lanes: '2', 'parking:left': 'separate', 'parking:right': 'separate' };
+  expect(crossSectionFromTags(t, 'secondary')).toMatchObject({ parkLeft: 0, parkRight: 0 });
+  const c = crossSectionFromTags(t, 'secondary', { left: {}, right: { width: 2.4, orientation: 'diagonal' } });
+  expect(c).toMatchObject({ parkLeft: 2.0, parkLeftOrientation: 'parallel', parkRight: 2.4, parkRightOrientation: 'diagonal' });
+  expect(crossSectionFromTags({ 'parking:left': 'separate' }, 'secondary', { left: { orientation: 'perpendicular' } }).parkLeft).toBe(5.0);
+});
+
+describe('parseOsm resolves parking:*=separate against street-side parking areas', () => {
+  // way runs north (lon 6.95); left of travel is west. 1 m east-west ≈ 1.426e-5° lon here.
+  const M = 1 / 70130;
+  const way = { type: 'way', id: 1, tags: { highway: 'secondary', lanes: '2', 'parking:left': 'separate' }, geometry: [{ lat: 50.96, lon: 6.95 }, { lat: 50.961, lon: 6.95 }] };
+  const area = (id: number, lat0: number, lat1: number, x0: number, x1: number, tags: Record<string, string> = {}) => {
+    const g = [[lat0, x0], [lat0, x1], [lat1, x1], [lat1, x0], [lat0, x0]].map(([lat, x]) => ({ lat: lat!, lon: 6.95 + x! * M }));
+    return { type: 'way', id, tags: { amenity: 'parking', parking: 'street_side', orientation: 'parallel', ...tags }, geometry: g };
+  };
+  const road = (...els: object[]) => parseOsm({ elements: [way, ...els] }).roads[0]!;
+
+  test('area 3.25–5.75 m west of the centre line, 44 m long → left strip 2.5 m', () => {
+    const r = road(area(2, 50.9602, 50.9606, -5.75, -3.25));
+    expect(r.cross.parkLeft).toBeCloseTo(2.5, 1);
+    expect(r.cross.parkLeftOrientation).toBe('parallel');
+    expect(r.cross.parkRight).toBe(0);
+    expect(r.width).toBeCloseTo(6.5 + r.cross.parkLeft, 6);
+  });
+
+  test('no area, an area on the other side, too short or too far → no strip', () => {
+    expect(road().cross.parkLeft).toBe(0);
+    expect(road(area(2, 50.9602, 50.9606, 3.25, 5.75)).cross.parkLeft).toBe(0); // east = right
+    expect(road(area(2, 50.9602, 50.96025, -5.75, -3.25)).cross.parkLeft).toBe(0); // 5.6 m long
+    expect(road(area(2, 50.9602, 50.9606, -14, -11)).cross.parkLeft).toBe(0); // 11 m away
+    expect(road(area(2, 50.9602, 50.9606, -5.75, -3.25, { parking: 'surface' })).cross.parkLeft).toBe(0);
+  });
+
+  test('a very deep area is clamped to 5.5 m; diagonal orientation from the area', () => {
+    const r = road(area(2, 50.9602, 50.9606, -11, -3.25, { orientation: 'diagonal' }));
+    expect(r.cross.parkLeft).toBeCloseTo(5.5, 6);
+    expect(r.cross.parkLeftOrientation).toBe('diagonal');
+  });
 });

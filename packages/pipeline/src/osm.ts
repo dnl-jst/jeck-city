@@ -1,5 +1,6 @@
 import { wgs84ToLocal } from '@nn/shared';
-import { crossSectionFromTags, reversed, type CrossSection } from './crosssection.js';
+import { crossSectionFromTags, reversed, type CrossSection, type SeparateSides } from './crosssection.js';
+import { separateParkingSides, type ParkingArea } from './separateparking.js';
 
 export type Pt = { x: number; z: number };
 /** width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order. */
@@ -76,13 +77,17 @@ export function joinRings(ways: Pt[][]): Pt[][] {
 
 const centroid = (p: Pt[]): Pt => ({ x: p.reduce((s, q) => s + q.x, 0) / p.length, z: p.reduce((s, q) => s + q.z, 0) / p.length });
 
-function parseRoad(el: El, pts: Pt[], t: Tags): Road | undefined {
+/** Ways tagged parking:*=separate wait for the parking areas (post-pass in parseOsm). */
+const hasSeparateParking = (t: Tags) => ['left', 'right', 'both'].some((s) => t[`parking:${s}`] === 'separate');
+const STREET_PARKING = new Set(['street_side', 'lane', 'layby']);
+
+function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Road | undefined {
   const base = (t.highway ?? '').replace(/_link$/, '');
   const kind = base === 'trunk' ? 'primary' : base;
   if (!ROAD_KINDS.has(kind) || t.tunnel === 'yes' || pts.length < 2) return undefined;
   const reverse = t.oneway === '-1';
   const oneway = t.oneway === 'yes' || t.oneway === '1' || reverse || t.junction === 'roundabout';
-  const tagged = crossSectionFromTags(t, kind);
+  const tagged = crossSectionFromTags(t, kind, separate); // separate: relative to the way as drawn
   const cross = reverse ? reversed(tagged) : tagged;
   const lanes = cross.lanesForward + cross.lanesBackward;
   const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width: cross.carriageway, oneway, lanes, cross };
@@ -95,6 +100,8 @@ export function parseOsm(json: unknown): OsmFeatures {
   const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
+  const parkingAreas: ParkingArea[] = [];
+  const pending: { index: number; el: El; pts: Pt[]; t: Tags }[] = [];
   for (const el of elements) {
     const t = el.tags ?? {};
     if (el.type === 'relation') {
@@ -121,16 +128,24 @@ export function parseOsm(json: unknown): OsmFeatures {
         if (closed && (t.area === 'yes' || t.place === 'square' || t.highway === 'pedestrian')) f.squares.push({ name: t.name ?? '', outline: pts });
         else {
           const r = parseRoad(el, pts, t);
+          if (r && hasSeparateParking(t)) pending.push({ index: f.roads.length, el, pts, t });
           if (r) f.roads.push(r);
         }
       } else if (closed && GREEN(t)) f.greens.push(pts);
-      else {
+      else if (closed && t.amenity === 'parking' && STREET_PARKING.has(t.parking ?? '')) {
+        const area: ParkingArea = { ring: pts };
+        const o = t.orientation ?? t['parking:orientation'];
+        if (o) area.orientation = o;
+        parkingAreas.push(area);
+      } else {
         const shop = shopOf(centroid(closed ? pts.slice(0, -1) : pts), t);
         if (shop) f.shops.push(shop);
       }
     }
   }
   f.tramStops = dedupeStops(stops);
+  // parking:*=separate becomes a strip where a street-side parking area runs alongside
+  for (const p of pending) f.roads[p.index] = parseRoad(p.el, p.pts, p.t, separateParkingSides(p.pts, parkingAreas))!;
   return f;
 }
 

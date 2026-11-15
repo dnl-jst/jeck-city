@@ -46,12 +46,19 @@ function cycleOn(t: Tags, side: 'left' | 'right'): number {
 }
 
 /** Parking strip on the carriageway for one side: width and orientation (null without a strip). */
-function parkOn(t: Tags, side: 'left' | 'right'): { width: number; orientation: ParkOrientation | null } {
+/** A separately mapped parking area alongside one side of the way (amenity=parking, street_side/lane/layby). */
+export type SeparateParking = { width?: number; orientation?: string };
+export type SeparateSides = { left?: SeparateParking; right?: SeparateParking };
+
+function parkOn(t: Tags, side: 'left' | 'right', sep?: SeparateParking): { width: number; orientation: ParkOrientation | null } {
   const none = { width: 0, orientation: null };
   const v = t[`parking:${side}`] ?? t['parking:both'];
   if (v !== undefined) {
-    const o = t[`parking:${side}:orientation`] ?? t['parking:both:orientation'];
+    const o = (sep?.orientation !== undefined && ORIENTATIONS.has(sep.orientation) ? sep.orientation : undefined)
+      ?? t[`parking:${side}:orientation`] ?? t['parking:both:orientation'];
     const orientation: ParkOrientation = o !== undefined && ORIENTATIONS.has(o) ? (o as ParkOrientation) : 'parallel';
+    // separate: a strip only where an OSM parking area actually runs alongside on this side
+    if (v === 'separate' && sep) return { width: sep.width ?? PARK_WIDTH[orientation], orientation };
     if (v === 'lane' || v === 'street_side' || v === 'yes') return { width: PARK_WIDTH[orientation], orientation };
     if (v === 'half_on_kerb') return { width: HALF_ON_KERB, orientation };
     return none; // on_kerb, separate, no, …
@@ -71,9 +78,10 @@ function parkOn(t: Tags, side: 'left' | 'right'): { width: number; orientation: 
  * else 2 (oneway 1); 3.25 m each (residential/living_street 3.0). Cycle lanes 1.6 m and parking strips
  * (parallel 2.0, diagonal 4.5, perpendicular 5.0, half_on_kerb 1.0) per side. A `width` tag sets the carriageway:
  * components scale proportionally, but the lanes never get narrower than their nominal width.
- * Paths and service roads are one lane of their class width.
+ * Paths and service roads are one lane of their class width. `parking:<side>=separate` counts as a strip only when
+ * `separate` names a parking area found alongside that side (width from the area, else the orientation default).
  */
-export function crossSectionFromTags(tags: Tags, kind: string): CrossSection {
+export function crossSectionFromTags(tags: Tags, kind: string, separate: SeparateSides = {}): CrossSection {
   const width = Number.parseFloat(tags.width ?? '');
   if (kind in PATH_WIDTH) {
     const w = width > 0 ? width : PATH_WIDTH[kind]!;
@@ -93,8 +101,8 @@ export function crossSectionFromTags(tags: Tags, kind: string): CrossSection {
   let laneWidth = NARROW.has(kind) ? NARROW_LANE_WIDTH : LANE_WIDTH;
   let cycleLeft = cycleOn(tags, 'left');
   let cycleRight = cycleOn(tags, 'right');
-  const pl = parkOn(tags, 'left');
-  const pr = parkOn(tags, 'right');
+  const pl = parkOn(tags, 'left', separate.left);
+  const pr = parkOn(tags, 'right', separate.right);
   let parkLeft = pl.width;
   let parkRight = pr.width;
 
