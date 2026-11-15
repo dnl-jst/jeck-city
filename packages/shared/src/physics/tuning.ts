@@ -59,8 +59,8 @@ export const TUNING = {
     /** Engine force fades to zero over this many km/h below the top speed (soft limiter). */
     limiterBandKmh: 4,
 
-    /** Brake strength per wheel: brake button / throttle against direction of travel. */
-    brake: 25,
+    /** Brake impulse per wheel and step: brake button / throttle against direction of travel. 60 ≈ 1.1 g, ~10 m from 60 km/h. */
+    brake: 60,
     /** Light brake when no throttle is given, so the car rolls to a stop. */
     coastBrake: 2,
     /** Parking brake of an unoccupied car. */
