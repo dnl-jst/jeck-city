@@ -15,6 +15,9 @@ const BOX_HALF_Y = 0.45;
 /** Ground friction of a parked bike (low: it rolls out after getting off) and extra damping. */
 const FRICTION = 0.3;
 const LINEAR_DAMPING = 0.4;
+/** Half width of a parked dutch/road/mtb box: the frame, not the handlebar (rack slots are 0.5 m apart). */
+const SLIM_HALF_X = 0.15;
+const CARGO: ReadonlySet<BikeType> = new Set(['longjohn', 'trike']);
 const ANGULAR_DAMPING = 3;
 
 const yawQuat = (h: number) => ({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) });
@@ -146,7 +149,7 @@ export class ParkedBikes {
         .setCanSleep(true),
     );
     world.createCollider(
-      R.ColliderDesc.cuboid(bikeColliderRadius(spec), BOX_HALF_Y, spec.wheelbase / 2 + 0.3)
+      R.ColliderDesc.cuboid(CARGO.has(this.types[id]!) ? bikeColliderRadius(spec) : SLIM_HALF_X, BOX_HALF_Y, spec.wheelbase / 2 + 0.3)
         .setMass(spec.massParked)
         .setFriction(FRICTION)
         .setCollisionGroups(BIKE_GROUPS),

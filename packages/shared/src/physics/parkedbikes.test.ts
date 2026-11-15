@@ -108,6 +108,15 @@ describe('parked bikes', () => {
     expect(bikes.poses[0]!.x).toBeCloseTo(0, 2);
   });
 
+  test('rack neighbours 0.5 m apart stay put when their bodies appear', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 0, 0, 0), bike(0.5, 0, 0, 1), bike(1, 0, 0, 2)]);
+    bikes.updatePhysics(0, 0);
+    steps(pw, 60, () => bikes.sync());
+    bikes.sync();
+    expect(bikes.poses.map((p) => Math.round(p.x * 100) / 100)).toEqual([0, 0.5, 1]);
+  });
+
   test('nearest mountable is within reach and not ridden', async () => {
     const pw = await createPhysicsWorld(flat());
     const bikes = new ParkedBikes(pw, [bike(0, 0), bike(3, 0)]);
