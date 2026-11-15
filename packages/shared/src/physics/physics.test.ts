@@ -266,6 +266,24 @@ describe('vehicle', () => {
     expect(car.pose().z).toBeLessThan(-10);
   });
 
+  test('braking from top speed stops within 13 m, both via brake and via reverse throttle', async () => {
+    for (const input of [{ throttle: 0, steer: 0, brake: true }, { throttle: -1, steer: 0, brake: false }]) {
+      const pw = await createPhysicsWorld(miniScene());
+      const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI }); // heading north (−z)
+      car.setOccupied(true);
+      runCar(pw, car, full, 10);
+      const z0 = car.pose().z;
+      let steps = 0;
+      while (car.speed() > 0.3 && steps < 300) {
+        car.applyInput(input);
+        pw.step();
+        steps++;
+      }
+      expect(z0 - car.pose().z).toBeLessThan(13);
+      expect(car.wheelsInContact()).toBe(4); // no nose-dive flip
+    }
+  });
+
   test('steer > 0 turns right', async () => {
     const pw = await createPhysicsWorld(miniScene());
     const car = new Vehicle(pw, { x: -150, z: -100, heading: 0 }); // facing south, right = west
