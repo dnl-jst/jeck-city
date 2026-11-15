@@ -15,7 +15,10 @@ import { buildRoadGraph } from './roadgraph.js';
 import { findSpawn } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
+import { sidewalkFit } from './sidewalkmetric.js';
+import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry } from './streets.js';
+import { streetTrees } from './streettrees.js';
 
 const RAW_DIR = 'data/raw';
 const OVERRIDES = 'data/building-overrides.json';
@@ -24,6 +27,7 @@ const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
+const TREE_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude: Geobasis NRW (dl-de/zero-2.0)';
 
@@ -78,9 +82,15 @@ async function main() {
   const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
   console.log(`shops: ${shops.length} (${Object.keys(curated).length} curated names, ${shops.filter((s) => s.sign).length} with sign)`);
 
-  const streets = buildStreetGeometry(f);
+  // the building line comes from every LoD2 footprint, overridden ones too (their footprint is where the model stands);
+  // streets, trees, lamps, parking and the spawn all use this one set
+  const sidewalks = allSidewalkWidths(f.roads, buildings);
+  const streets = buildStreetGeometry(f, sidewalks);
+  const fit = sidewalkFit(streets.sidewalk, [streets.road, streets.curb, streets.parking, streets.green, streets.squares], buildings);
+  const pc = (v: number) => `${((100 * v) / fit.area).toFixed(2)} %`;
+  console.log(`sidewalk: ${(fit.area / 1e3).toFixed(1)}k m², overshoot: ${fit.overshoot.toFixed(0)} m² (${pc(fit.overshoot)}), undershoot: ${fit.undershoot.toFixed(0)} m² (${pc(fit.undershoot)})`);
   const graph = buildRoadGraph(f);
-  const spawn = findSpawn(f.roads, SPAWN_TARGET, active);
+  const spawn = findSpawn(f.roads, SPAWN_TARGET, buildings);
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
 
   await mkdir(OUT_DIR, { recursive: true });
@@ -131,6 +141,10 @@ async function main() {
   const lamps = [...f.lamps, ...extraLamps];
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
+  const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps, sidewalks);
+  const trees = [...f.trees, ...extraTrees];
+  const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
+  console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 
   const manifest: WorldManifest = {
     version: 1,
@@ -140,7 +154,7 @@ async function main() {
     spawn: { x: r2(spawn.x), y: spawn.y, z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
     lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
-    trees: f.trees.map((p) => [r2(p.x), r2(p.z)]),
+    trees: trees.map((p) => [r2(p.x), r2(p.z)]),
     tramStops: graph.stops.map((s) => {
       const p = placeShelter(s.pos, f);
       return { name: s.name, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) };
@@ -154,6 +168,8 @@ async function main() {
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
+  const car0 = manifest.parked[0]!;
+  console.log(`spawn car: ${Math.hypot(car0.x - spawn.x, car0.z - spawn.z).toFixed(2)} m from the spawn`);
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;

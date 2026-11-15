@@ -1,6 +1,9 @@
 import { expect, test } from 'vitest';
 import { Vector3 } from 'three';
-import { beamPattern, canGetOut, exitSpot, glareFacing, headingOf, nearestEnterableCar } from './car';
+import {
+  CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, canGetOut, exitSpot, glareFacing, headingOf, nearestEnterableCar,
+  needsCarRebuild, visibleCars,
+} from './car';
 
 test('nearest free car within 3 m', () => {
   expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, occupied: true }, { id: 2, x: 2.5, z: 0, occupied: false }])).toBe(2);
@@ -38,6 +41,27 @@ test('getting out only below 2 m/s, forwards or reversing', () => {
   expect(canGetOut(-1.9)).toBe(true);
   expect(canGetOut(2.5)).toBe(false);
   expect(canGetOut(-3)).toBe(false);
+});
+
+test('visibleCars: indices of the cars within the render radius, in manifest order', () => {
+  const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: -249 }, { x: 176, z: 176 }, { x: 177, z: 178 }];
+  expect(CAR_RENDER_RADIUS).toBe(250);
+  expect(visibleCars(poses, 0, 0)).toEqual([0, 2, 3]);
+  expect(visibleCars(poses, 300, 0)).toEqual([1, 3, 4]);
+  expect(visibleCars(poses, 0, 0, 10)).toEqual([0]);
+});
+
+test('needsCarRebuild: only after the camera moved more than 20 m since the last rebuild', () => {
+  expect(CAR_REBUILD_MOVE).toBe(20);
+  expect(needsCarRebuild(null, 5, 5)).toBe(true);
+  expect(needsCarRebuild({ x: 0, z: 0 }, 12, 16)).toBe(false); // exactly 20 m
+  expect(needsCarRebuild({ x: 0, z: 0 }, 12, 16.1)).toBe(true);
+});
+
+test('visibleCars: physics-active and occupied cars are always drawn, whatever the distance', () => {
+  const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: 400 }, { x: 10, z: 0 }];
+  expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [2, 1, 3])).toEqual([0, 1, 2, 3]);
+  expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [])).toEqual([0, 3]);
 });
 
 // headlight low beam: lamps 0.8 m above the road, so the road d m ahead lies at tangent -0.8/d below the axis

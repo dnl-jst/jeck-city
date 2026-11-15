@@ -5,6 +5,34 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { chunkKey, propHash as hash, treeScale, type PropPose, type WorldManifest } from '@nn/shared';
+import { SHOP } from './materials/storeys';
+
+/** Street trees are drawn only within this distance of the camera (m)… */
+export const TREE_RENDER_RADIUS = 250;
+/** …and cast shadows only within this one… */
+export const TREE_SHADOW_RADIUS = 80;
+/** …both sets rebuilt only after the camera moved more than this since the last rebuild (m). */
+export const TREE_REBUILD_MOVE = 20;
+
+type XZ = { x: number; z: number };
+
+/**
+ * Indices (ascending) of the trees in loaded chunks (`inside`) within `shadow` of (x, z) — drawn with shadows — and
+ * of those between `shadow` and `radius` — drawn without.
+ */
+export function treeSets(trees: readonly (readonly [number, number])[], x: number, z: number, inside: (x: number, z: number) => boolean = () => true, shadow = TREE_SHADOW_RADIUS, radius = TREE_RENDER_RADIUS): { near: number[]; far: number[] } {
+  const near: number[] = [], far: number[] = [];
+  trees.forEach(([tx, tz], i) => {
+    const d2 = (tx - x) ** 2 + (tz - z) ** 2;
+    if (d2 > radius * radius || !inside(tx, tz)) return;
+    (d2 <= shadow * shadow ? near : far).push(i);
+  });
+  return { near, far };
+}
+
+/** Whether the tree sets must be rebuilt: never built, or the camera moved more than TREE_REBUILD_MOVE since. */
+export const needsTreeRebuild = (last: XZ | null, x: number, z: number): boolean =>
+  !last || Math.hypot(x - last.x, z - last.z) > TREE_REBUILD_MOVE;
 
 /** Height of the lamp's light source above ground (m). */
 export const LAMP_LIGHT_Y = 5.55;
@@ -116,9 +144,10 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   return group;
 }
 
-/** Sign board centre height (m): the shopfront sign band of the facade shader spans 3.15–3.88 m. */
-export const SIGN_Y = 3.52;
-const SIGN_H = 0.6;
+/** Sign board centre height (m): the middle of the shopfront sign band of the facade shader (storeys.ts SHOP). */
+export const SIGN_Y = (SHOP.signBottom + SHOP.signTop) / 2;
+/** Sign board height (m); fits inside the sign band. */
+export const SIGN_H = 0.6;
 /** Sign atlas: boards 64 px high, at most 416 px wide, shelf-packed into rows 2048 px wide with 4 px gaps (mipmaps). */
 const ATLAS_W = 2048, CELL_H = 64, CELL_MAX_W = 416, GAP = 4;
 
@@ -220,7 +249,10 @@ export function buildShopSigns(shops: WorldManifest['shops'], material: MeshStan
   return mesh;
 }
 
-/** Street furniture: instanced lamps and trees plus tram stops, limited to loaded chunks; all shop signs. */
+/**
+ * Street furniture: instanced lamps and tram stops in loaded chunks; trees in loaded chunks within 250 m of the
+ * camera (shadows only within 80 m, updateTrees); all shop signs.
+ */
 export class Props {
   /** Lantern glass; Lighting drives its emissive intensity at night. */
   readonly lampGlass = new MeshStandardMaterial({ color: 0xdcd6c4, emissive: 0xffc98a, emissiveIntensity: 0, roughness: 0.2 });
@@ -238,7 +270,9 @@ export class Props {
   private readonly fallen = new Map<number, Group>();
   private loaded: ReadonlySet<string> = new Set();
   private readonly lamps: [InstancedMesh, InstancedMesh];
-  private readonly trees: [InstancedMesh, InstancedMesh];
+  /** Trunks and crowns: trees within TREE_SHADOW_RADIUS (casting shadows), and those beyond (not casting). */
+  private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] };
+  private lastTrees: XZ | null = null;
   private readonly haloPoints: Points;
   /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
   private readonly stops = new Map<number, Group>();
@@ -252,18 +286,27 @@ export class Props {
     const tg = treeGeometries();
     const n = manifest.lamps.length, t = manifest.trees.length;
     this.lamps = [new InstancedMesh(lg.metal, this.lampMetal, n), new InstancedMesh(lg.glass, this.lampGlass, n)];
-    this.trees = [new InstancedMesh(tg.trunk, this.trunkMat, t), new InstancedMesh(tg.crown, this.crownMat, t)];
-    this.trees[1].setColorAt(0, new Color()); // allocate instanceColor
+    const pair = (): [InstancedMesh, InstancedMesh] => {
+      const p: [InstancedMesh, InstancedMesh] = [new InstancedMesh(tg.trunk, this.trunkMat, t), new InstancedMesh(tg.crown, this.crownMat, t)];
+      p[1].setColorAt(0, new Color()); // allocate instanceColor
+      p[1].receiveShadow = true;
+      return p;
+    };
+    this.trees = { near: pair(), far: pair() };
     const haloGeo = new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(n * 3), 3).setUsage(DynamicDrawUsage));
     this.haloPoints = new Points(haloGeo, this.halo);
     this.haloPoints.frustumCulled = false;
-    for (const m of [...this.lamps, ...this.trees]) {
+    for (const m of this.lamps) {
       m.count = 0;
       m.castShadow = true;
       m.frustumCulled = false; // instances spread over the whole loaded area
       scene.add(m);
     }
-    this.trees[1].receiveShadow = true;
+    for (const m of [...this.trees.near, ...this.trees.far]) {
+      m.count = 0;
+      m.castShadow = this.trees.near.includes(m);
+      scene.add(m); // frustum-culled by the bounding sphere of the drawn instances
+    }
     scene.add(this.haloPoints);
   }
 
@@ -295,11 +338,11 @@ export class Props {
     }
   }
 
-  /** Rebuilds the instance sets for the loaded chunks; call when that set changes. */
+  /** Rebuilds the instance sets for the loaded chunks; call when that set changes (trees: at the last camera position). */
   rebuild(loaded: ReadonlySet<string>): void {
     this.loaded = loaded;
     const inside = (x: number, z: number) => loaded.has(chunkKey(x, z));
-    const m = new Matrix4(), q = new Quaternion(), s = new Vector3(), p = new Vector3(), up = new Vector3(0, 1, 0);
+    const m = new Matrix4();
 
     const halo = this.haloPoints.geometry.getAttribute('position') as BufferAttribute;
     let i = 0;
@@ -315,22 +358,8 @@ export class Props {
     this.haloPoints.geometry.setDrawRange(0, i);
     halo.needsUpdate = true;
 
-    const c = new Color();
-    i = 0;
-    for (const [x, z] of this.manifest.trees) {
-      if (!inside(x, z)) continue;
-      const k = treeScale(x, z);
-      q.setFromAxisAngle(up, hash(x, z, 2) * Math.PI * 2);
-      m.compose(p.set(x, 0, z), q, s.set(k * (0.9 + 0.2 * hash(x, z, 3)), k, k * (0.9 + 0.2 * hash(x, z, 4))));
-      this.trees[0].setMatrixAt(i, m);
-      this.trees[1].setMatrixAt(i, m);
-      c.setHSL(0.24 + 0.06 * hash(x, z, 5), 0.42 + 0.15 * hash(x, z, 6), 0.2 + 0.08 * hash(x, z, 7));
-      this.trees[1].setColorAt(i, c);
-      i++;
-    }
-    for (const t of this.trees) { t.count = i; t.instanceMatrix.needsUpdate = true; }
-    this.trees[1].instanceColor!.needsUpdate = true;
-    for (const t of [...this.lamps, ...this.trees]) t.computeBoundingSphere();
+    for (const l of this.lamps) l.computeBoundingSphere();
+    if (this.lastTrees) this.writeTrees(this.lastTrees.x, this.lastTrees.z);
 
     for (const [k, stop] of this.manifest.tramStops.entries()) {
       const want = inside(stop.x, stop.z);
@@ -350,6 +379,37 @@ export class Props {
         });
         this.stops.delete(k);
       }
+    }
+  }
+
+  /** Trees around the camera at (x, z): rebuilt after TREE_REBUILD_MOVE of movement (call every frame). */
+  updateTrees(x: number, z: number): void {
+    if (needsTreeRebuild(this.lastTrees, x, z)) this.writeTrees(x, z);
+  }
+
+  private writeTrees(x: number, z: number): void {
+    this.lastTrees = { x, z };
+    const loaded = this.loaded;
+    const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)));
+    const m = new Matrix4(), q = new Quaternion(), s = new Vector3(), p = new Vector3(), up = new Vector3(0, 1, 0), c = new Color();
+    for (const [which, idx] of [['near', sets.near], ['far', sets.far]] as const) {
+      const [trunk, crown] = this.trees[which];
+      idx.forEach((ti, i) => {
+        const [tx, tz] = this.manifest.trees[ti]!;
+        const k = treeScale(tx, tz); // same scale as the trunk collider (StreetProps)
+        q.setFromAxisAngle(up, hash(tx, tz, 2) * Math.PI * 2);
+        m.compose(p.set(tx, 0, tz), q, s.set(k * (0.9 + 0.2 * hash(tx, tz, 3)), k, k * (0.9 + 0.2 * hash(tx, tz, 4))));
+        trunk.setMatrixAt(i, m);
+        crown.setMatrixAt(i, m);
+        c.setHSL(0.24 + 0.06 * hash(tx, tz, 5), 0.42 + 0.15 * hash(tx, tz, 6), 0.2 + 0.08 * hash(tx, tz, 7));
+        crown.setColorAt(i, c);
+      });
+      for (const im of [trunk, crown]) {
+        im.count = idx.length;
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere();
+      }
+      crown.instanceColor!.needsUpdate = true;
     }
   }
 }

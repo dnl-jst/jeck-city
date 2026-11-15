@@ -48,6 +48,8 @@ export class Game {
   readonly wheel = new WheelControl();
   wheelState: WheelState = { open: false, highlighted: null };
   private readonly stepper = new FixedStepper(DT, 5);
+  /** Fixed physics steps taken so far (tests wait on simulation time, not on the wall clock). */
+  steps = 0;
   private vehicle: Vehicle | null = null;
   private carColor = 0;
   /** Physics state before and after the last step, blended by stepper.alpha for rendering. */
@@ -137,6 +139,7 @@ export class Game {
         this.vehicle!.applyInput({ throttle, steer: steer.right, brake: input.brake() && !this.flying });
       }
       this.pw.step();
+      this.steps++;
       this.prevPos = this.currPos;
       this.currPos = this.char.position();
       if (this.vehicle) {
@@ -145,6 +148,7 @@ export class Game {
       }
     });
     this.cars.sync();
+    this.cars.updateVisibility(this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.proximityAge += dt;
     if (this.proximityAge > 0.5) {
       this.proximityAge = 0;

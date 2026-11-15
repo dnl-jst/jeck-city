@@ -1,10 +1,14 @@
 import { readFileSync } from 'node:fs';
 import type { BuildingMesh } from './buildings.js';
+import { crossSectionFromTags, type CrossSection } from './crosssection.js';
 import { parseOsm, type OsmFeatures } from './osm.js';
 
 /** Test helper: parsed osm-small.json. */
 export const loadFixture = (): OsmFeatures =>
   parseOsm(JSON.parse(readFileSync(new URL('../fixtures/osm-small.json', import.meta.url), 'utf8')));
+
+/** Test helper: cross-section of a `kind` road with the given carriageway width (as if tagged width=…). */
+export const crossOf = (kind: string, width: number): CrossSection => crossSectionFromTags({ width: String(width) }, kind);
 
 /** Test helper: axis-aligned box building (4 walls, flat roof), wall triangles outward, roof up. */
 export function boxBuilding(id: string, x0: number, z0: number, x1: number, z1: number, h: number, flags = 0): BuildingMesh {
