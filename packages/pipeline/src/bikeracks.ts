@@ -24,6 +24,22 @@ const MIN_STRIP = 0.5;
 const TRACK_CLEARANCE = 3;
 const BOUNDARY_CLEARANCE = 1;
 
+/** Hoop plus a parked bike reach this far along the heading from the hoop centre (m). */
+const BIKE_REACH = 0.95;
+/** A rack too close to a wall moves towards the road in these steps, at most MAX_WALL_SHIFT (m). */
+const WALL_SHIFT_STEP = 0.25;
+const MAX_WALL_SHIFT = 2.5;
+
+/** The hoop position (shifted towards the road if needed) whose hoop and bikes are outside every footprint, or null. */
+function clearOfBuildings(h: Pt, toRoad: Pt, buildings: BuildingMesh[]): Pt | null {
+  for (let shift = 0; shift <= MAX_WALL_SHIFT + 1e-9; shift += WALL_SHIFT_STEP) {
+    const p = { x: h.x + toRoad.x * shift, z: h.z + toRoad.z * shift };
+    const ends = [p, { x: p.x + toRoad.x * BIKE_REACH, z: p.z + toRoad.z * BIKE_REACH }, { x: p.x - toRoad.x * BIKE_REACH, z: p.z - toRoad.z * BIKE_REACH }];
+    if (!ends.some((e) => insideAnyFootprint(e, buildings))) return p;
+  }
+  return null;
+}
+
 /** Bike slots: this far either side of a hoop, along the row (clear of the hoop with the 0.15 m half-wide parked box). */
 const SLOT_OFFSET = 0.25;
 /** Cargo bikes stand parallel to the row this far behind it (away from the road). */
@@ -111,8 +127,10 @@ export function layoutRacks(f: OsmFeatures, buildings: BuildingMesh[]): RackRow[
       const hoops: Pt[] = [];
       for (let k = 0; k < m; k++) {
         const t = (k - (m - 1) / 2) * HOOP_SPACING;
-        const h = { x: centre.x + dir.x * t - toRoad.x * back, z: centre.z + dir.z * t - toRoad.z * back };
-        if (insideAnyFootprint(h, buildings)) continue;
+        const at = { x: centre.x + dir.x * t - toRoad.x * back, z: centre.z + dir.z * t - toRoad.z * back };
+        // hoop and the bikes in it reach ±BIKE_REACH along the heading: move towards the road until clear of walls
+        const h = clearOfBuildings(at, toRoad, buildings);
+        if (!h) continue;
         if (f.tramTracks.some((tr) => distToPolyline(h, tr) < TRACK_CLEARANCE)) continue;
         if (!pointInPolygon(h, f.boundary) || distToPolyline(h, ring) < BOUNDARY_CLEARANCE) continue;
         hoops.push(h);
@@ -147,7 +165,9 @@ export function fillRacks(rows: RackRow[], seed: number, buildings: BuildingMesh
         const pos = { x: h.x - fx * CARGO_BEHIND, z: h.z - fz * CARGO_BEHIND };
         const type = rand() < 0.5 ? 3 : 4;
         const heading = Math.atan2(ax, az) + (rand() < 0.5 ? 0 : Math.PI);
-        if (!insideAnyFootprint(pos, buildings)) {
+        // the whole cargo bike (±1.3 m along the row, ±0.45 m across) must be outside every building
+        const corners = [-1, 1].flatMap((a) => [-1, 1].map((b) => ({ x: pos.x + ax * 1.3 * a - fx * 0.45 * b, z: pos.z + az * 1.3 * a - fz * 0.45 * b })));
+        if (![pos, ...corners].some((c) => insideAnyFootprint(c, buildings))) {
           out.push({ ...pos, heading: Math.atan2(Math.sin(heading), Math.cos(heading)), type, color: color() });
           lastCargo = k;
           return;

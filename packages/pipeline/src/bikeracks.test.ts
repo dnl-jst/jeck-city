@@ -61,6 +61,26 @@ describe('layoutRacks', () => {
     expect(hoops(layoutRacks(world([r], [stands(0, 600)]), []))).toHaveLength(0);
   });
 
+  test('a rack mapped right at a facade moves out so hoop and bikes stay clear of the wall', () => {
+    const r = mk(1, 'residential', ROAD);
+    const kerb = sideOffsets(r.cross).right.kerb;
+    const wall = kerb + 4;
+    const house = boxBuilding('B1', -30, wall, 30, wall + 15, 10);
+    for (const kind of ['stands', 'wall'] as const) {
+      const rows = layoutRacks(world([r], [{ pos: { x: 0, z: wall - 0.3 }, kind, capacity: 6 }]), [house]);
+      expect(hoops(rows).length, kind).toBe(3);
+      const bikes = fillRacks(rows, 3, [house]);
+      for (const row of rows) for (const h of row.hoops) {
+        // the bikes stand along the heading, ±0.95 m around the hoop
+        expect(h.z + 0.95 * Math.abs(Math.cos(row.heading)), kind).toBeLessThan(wall);
+      }
+      for (const b of bikes) {
+        const half = b.type >= 3 ? 1.3 : 0.95;
+        expect(b.z + half * Math.abs(Math.cos(b.heading)), kind).toBeLessThan(wall + 1e-9);
+      }
+    }
+  });
+
   test('rack in a parking strip stays there, and parked cars next to it go', () => {
     const r = mk(1, 'residential', ROAD, { 'parking:right': 'lane' });
     const o = sideOffsets(r.cross).right;
