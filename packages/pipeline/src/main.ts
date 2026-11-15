@@ -83,7 +83,7 @@ async function main() {
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
   }
 
-  const collision = buildCollision({ buildings, curb: streets.curb, boundary: f.boundary, overrides });
+  const collision = buildCollision({ buildings, curb: streets.curb, sidewalk: streets.sidewalk, boundary: f.boundary, overrides });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
 

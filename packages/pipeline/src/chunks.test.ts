@@ -58,14 +58,14 @@ test('override entry removes the building from chunk geometry and collision', ()
   const c = buildChunks(buildings(), streets(), overrides).find((k) => k.key === '0_0')!;
   expect(c.buildings!.ranges.map((r) => r.id)).toEqual(['A']);
   expect(c.buildings!.positions.length).toBe(20 * 3);
-  const col = buildCollision({ buildings: buildings(), curb: empty(), boundary, overrides });
+  const col = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, overrides });
   const xs = Array.from({ length: col.vertices.length / 3 }, (_, i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 2]!]);
   expect(xs.some(([x, z]) => x === 50 && z === 50)).toBe(false); // B's corner
   expect(xs.some(([x, z]) => x === 10 && z === 10)).toBe(true); // A's corner
 });
 
 test('collision has buildings, kerbs and a ground rectangle at y=0 over the boundary bbox + 200 m', () => {
-  const col = buildCollision({ buildings: buildings(), curb: streets().curb, boundary });
+  const col = buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary });
   const n = col.vertices.length / 3;
   const v = (i: number) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!];
   const all = Array.from({ length: n }, (_, i) => v(i));
@@ -80,9 +80,26 @@ test('collision has buildings, kerbs and a ground rectangle at y=0 over the boun
   expect(Array.from(col.boundary)).toEqual([0, 0, 300, 0, 300, 300, 0, 300]);
 });
 
+test('collision includes the walkable sidewalk surface at y = 0.12, welded with the kerb, without degenerate triangles', () => {
+  const kerb = twoTris(0.12);
+  // sidewalk shares the kerb triangle's edge (20,10)-(10,20) and adds one degenerate (collinear) triangle
+  const sidewalk: Mesh = {
+    positions: new Float32Array([20, 0.12, 10, 10, 0.12, 20, 20, 0.12, 20, 30, 0.12, 30, 40, 0.12, 40, 50, 0.12, 50]),
+    indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
+    uv: new Float32Array(12),
+  };
+  const kerbOnly = buildCollision({ buildings: [], curb: kerb, sidewalk: empty(), boundary });
+  const col = buildCollision({ buildings: [], curb: kerb, sidewalk, boundary });
+  expect(col.indices.length - kerbOnly.indices.length).toBe(3); // one sidewalk triangle; the collinear one is dropped
+  const tri = Array.from(col.indices.slice(-9, -6), (i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!]);
+  expect(tri).toContainEqual([20, Math.fround(0.12), 20]);
+  expect(tri.every((p) => p[1] === Math.fround(0.12))).toBe(true);
+  expect(col.vertices.length - kerbOnly.vertices.length).toBe(3 * 1); // only (20, 0.12, 20) is new: the shared edge is welded
+});
+
 test('collision can drop backdrop roofs', () => {
-  const full = buildCollision({ buildings: buildings(), curb: empty(), boundary });
-  const lean = buildCollision({ buildings: buildings(), curb: empty(), boundary, dropBackdropRoofs: true });
+  const full = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary });
+  const lean = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, dropBackdropRoofs: true });
   expect(full.indices.length - lean.indices.length).toBe(2 * 3); // C's two roof triangles
 });
 

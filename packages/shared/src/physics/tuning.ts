@@ -34,6 +34,10 @@ export const TUNING = {
     maxSlope: (45 * Math.PI) / 180,
   },
 
+  /**
+   * Known limitation (v1, revisit in Plan 2): characters are kinematic, i.e. immovable for dynamic
+   * bodies, so a car that hits a person stops dead as if against a post. Wheel rays ignore characters.
+   */
   vehicle: {
     /** Chassis box (full sizes): length along heading, height, width. */
     length: 4.2,

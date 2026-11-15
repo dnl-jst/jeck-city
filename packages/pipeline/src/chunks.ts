@@ -182,19 +182,27 @@ class SoupBuilder {
     }
     return i;
   }
+  /** Adds triangle (a, b, c) of positions p; zero-area triangles (also after welding) are dropped. */
   tri(p: ArrayLike<number>, a: number, b: number, c: number): void {
-    const ia = this.vertex(p[a * 3]!, p[a * 3 + 1]!, p[a * 3 + 2]!);
-    const ib = this.vertex(p[b * 3]!, p[b * 3 + 1]!, p[b * 3 + 2]!);
-    const ic = this.vertex(p[c * 3]!, p[c * 3 + 1]!, p[c * 3 + 2]!);
+    const P = (i: number, k: number) => p[i * 3 + k]!;
+    const ux = P(b, 0) - P(a, 0), uy = P(b, 1) - P(a, 1), uz = P(b, 2) - P(a, 2);
+    const vx = P(c, 0) - P(a, 0), vy = P(c, 1) - P(a, 1), vz = P(c, 2) - P(a, 2);
+    const area2 = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+    if (area2 < 1e-6) return;
+    const ia = this.vertex(P(a, 0), P(a, 1), P(a, 2));
+    const ib = this.vertex(P(b, 0), P(b, 1), P(b, 2));
+    const ic = this.vertex(P(c, 0), P(c, 1), P(c, 2));
     if (ia !== ib && ib !== ic && ia !== ic) this.indices.push(ia, ib, ic);
   }
 }
 
 /**
- * collision.bin content: building walls/roofs, kerbs (inside the world area) and one ground rectangle
- * at y = 0 covering the boundary bbox + 200 m. Vertices are welded; overridden buildings are left out.
+ * collision.bin content: building walls/roofs, kerbs and sidewalks (raised street surfaces at y = 0.12,
+ * inside the world area) and one ground rectangle at y = 0 covering the boundary bbox + 200 m.
+ * Vertices are welded; zero-area triangles and overridden buildings are left out.
+ * Not included: road, tram, green and squares — they lie at most 0.01 m above the ground, which covers them.
  */
-export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean }): CollisionAsset {
+export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean }): CollisionAsset {
   const s = new SoupBuilder();
   for (const b of o.buildings) {
     if (o.overrides && b.id in o.overrides) continue;
@@ -202,10 +210,13 @@ export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; bound
     for (let v = 0; v < b.kind.length; v += 3) if (!(skipRoofs && b.kind[v] === 1)) s.tri(b.positions, v, v + 1, v + 2);
   }
   const area = worldRect(o.boundary);
-  const c = o.curb;
-  for (let t = 0; t < c.indices.length; t += 3) {
-    const [a, b, d] = [c.indices[t]!, c.indices[t + 1]!, c.indices[t + 2]!];
-    if (inRect(area, (c.positions[a * 3]! + c.positions[b * 3]! + c.positions[d * 3]!) / 3, (c.positions[a * 3 + 2]! + c.positions[b * 3 + 2]! + c.positions[d * 3 + 2]!) / 3)) s.tri(c.positions, a, b, d);
+  for (const c of [o.curb, o.sidewalk]) {
+    for (let t = 0; t < c.indices.length; t += 3) {
+      const [a, b, d] = [c.indices[t]!, c.indices[t + 1]!, c.indices[t + 2]!];
+      const cx = (c.positions[a * 3]! + c.positions[b * 3]! + c.positions[d * 3]!) / 3;
+      const cz = (c.positions[a * 3 + 2]! + c.positions[b * 3 + 2]! + c.positions[d * 3 + 2]!) / 3;
+      if (inRect(area, cx, cz)) s.tri(c.positions, a, b, d);
+    }
   }
   const { minX: x0, maxX: x1, minZ: z0, maxZ: z1 } = area;
   const ground = [x0, 0, z0, x0, 0, z1, x1, 0, z1, x1, 0, z0].map(Math.fround);

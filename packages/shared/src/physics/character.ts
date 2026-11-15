@@ -72,6 +72,16 @@ export class Character {
     return { ...this.vel };
   }
 
+  /** Puts the feet at pos immediately (getting out of a car, server corrections); clears velocity. */
+  teleport(pos: Vec3): void {
+    const t = { x: pos.x, y: pos.y + CENTRE, z: pos.z };
+    this.body.setTranslation(t, true);
+    this.body.setNextKinematicTranslation(t);
+    this.pw.world.propagateModifiedBodyPositionsToColliders(); // queries see the new spot before the next step
+    this.vy = 0;
+    this.vel = { x: 0, y: 0, z: 0 };
+  }
+
   /** Off: the capsule leaves all contacts and queries and ignores input (e.g. while sitting in a car). */
   setEnabled(on: boolean): void {
     this.enabled = on;

@@ -126,6 +126,22 @@ describe('character', () => {
     expect(minY).toBeGreaterThan(-0.05);
   });
 
+  test('teleport moves the feet there at once; the character then stands and collides from there', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const c = new Character(pw, { x: 0, y: 0, z: -20 });
+    runChar(pw, c, { forward: 1, right: 0, run: true, yaw: 0 }, 0.5);
+    c.teleport({ x: 0, y: 0.12, z: 20 }); // onto the kerb slab
+    expect(c.position()).toEqual({ x: 0, y: expect.closeTo(0.12, 5), z: 20 });
+    expect(c.velocity()).toEqual({ x: 0, y: 0, z: 0 });
+    runChar(pw, c, idle, 1);
+    expect(c.position().y).toBeCloseTo(0.12, 1);
+    expect(c.position().z).toBeCloseTo(20, 3);
+    c.teleport({ x: 8, y: 0, z: -20 }); // 2 m in front of the wall, then walk into it
+    runChar(pw, c, { forward: 1, right: 0, run: false, yaw: Math.PI / 2 }, 3);
+    expect(c.position().x).toBeLessThan(10 - 0.3);
+    expect(c.position().x).toBeGreaterThan(9);
+  });
+
   test('setEnabled(false) removes it from collision queries', async () => {
     const pw = await createPhysicsWorld(miniScene());
     const a = new Character(pw, { x: 0, y: 0, z: -20 });
@@ -257,13 +273,8 @@ const COLLISION_BIN = fileURLToPath(new URL('../../../../apps/client/public/worl
 const MANIFEST = fileURLToPath(new URL('../../../../apps/client/public/world/manifest.json', import.meta.url));
 const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST);
 
-/**
- * Smoke test on the real world. The expected foot height is the collision surface under the spawn
- * (found by a ray before the character exists): the manifest says 0.12 (sidewalk), but collision.bin
- * currently holds only the 0.15 m kerb strips, not the sidewalk ribbons, so the spawn point lies on the y = 0 ground.
- */
 test.skipIf(!haveReal)(
-  haveReal ? 'real collision.bin: world < 3 s, character stands on the surface at spawn' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/collision.bin not found — run the pipeline]',
+  haveReal ? 'real collision.bin: world < 3 s, character at spawn stands on the sidewalk (y ≈ 0.12)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/collision.bin not found — run the pipeline]',
   async () => {
     const file = readFileSync(COLLISION_BIN);
     const asset = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
@@ -271,12 +282,9 @@ test.skipIf(!haveReal)(
     const t0 = performance.now();
     const pw = await createPhysicsWorld(asset);
     expect(performance.now() - t0).toBeLessThan(3000);
-    const hit = pw.world.castRay(new pw.rapier.Ray({ x: spawn.x, y: 3, z: spawn.z }, { x: 0, y: -1, z: 0 }), 10, true);
-    const surfaceY = 3 - hit!.timeOfImpact;
-    expect([0, 0.12].some((h) => Math.abs(surfaceY - h) < 0.01)).toBe(true); // road level or sidewalk level
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
-    expect(Math.abs(c.position().y - surfaceY)).toBeLessThan(0.05);
+    expect(Math.abs(c.position().y - 0.12)).toBeLessThanOrEqual(0.03);
   },
   15_000,
 );
