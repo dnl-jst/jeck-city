@@ -29,6 +29,7 @@ declare global {
      */
     __nnState?: () => {
       mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
+      engine: 'off' | 'starting' | 'running';
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
   }
@@ -185,7 +186,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   window.__nnState = () => {
     const f = game!.focus();
-    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station };
+    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station, engine: game!.ignition.state };
   };
   window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
   hud.hideLoading();

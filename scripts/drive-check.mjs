@@ -1,5 +1,5 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
-// Scripted drive in headless Chromium: spawn (no ?cam) next to the spawn car, press E, hold W (then W+D), and check that the
+// Scripted drive in headless Chromium: spawn (no ?cam) next to the spawn car, press E, wait for the engine, hold W (then W+D), and check that the
 // car moved > 20 m, is not inside a building, and that getting out puts the player on foot again. Saves
 // task11-car.png (day) and task11-night-car.png (night) into shotsDir when given.
 import { chromium } from 'playwright';
@@ -17,6 +17,8 @@ async function drive(page, time, shot) {
   const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 60_000 }).catch(() => { throw new Error(what); });
   await page.keyboard.press('KeyE');
   await until(() => window.__nnState().mode === 'drive', null, 'E did not enter the car');
+  // throttle is dead until the engine has started
+  await until(() => window.__nnState().engine === 'running', null, 'engine did not start');
   const s0 = await state();
   const away = (m) => until(([x, z, m]) => { const s = window.__nnState(); return Math.hypot(s.x - x, s.z - z) > m; }, [s0.x, s0.z, m], `car did not get ${m} m far`);
   await page.keyboard.down('KeyW');

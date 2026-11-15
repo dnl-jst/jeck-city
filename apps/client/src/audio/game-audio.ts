@@ -12,9 +12,7 @@ export type AudioMixerLike = Pick<
 /** The parts of Radio that GameAudio uses (fakes in tests). */
 export type RadioLike = Pick<Radio, 'tune' | 'setMuted' | 'unlocked' | 'suspend' | 'resume'>;
 
-/** Door shut, then the engine starts, this long after the door opens. */
-const DOOR_DELAY = 0.35;
-/** Step, landing, door and bell timing never see a longer step (no step bursts after a hitch); impacts use the real dt. */
+/** Step, landing and bell timing never see a longer step (no step bursts after a hitch); impacts use the real dt. */
 const MAX_DT = 0.1;
 const STEPS: SoundId[] = ['step1', 'step2', 'step3', 'step4'];
 
@@ -47,9 +45,8 @@ export class GameAudio {
   private unlocked = false;
   private loaded = false;
   private inCar = false;
+  /** Engine caught (Ignition 'running'): engine voices and radio on. */
   private engineOn = false;
-  /** Seconds until door close + engine start; null when nothing is pending. */
-  private doorTimer: number | null = null;
   private muted = false;
   private wasGrounded = true;
 
@@ -101,32 +98,47 @@ export class GameAudio {
     }
   }
 
+  /** Getting in: door opens; the Ignition then calls doorClosed(), crank() and engineRunning(). */
   enterCar(): void {
     this.inCar = true;
     this.impacts = new ImpactDetector();
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
-    this.doorTimer = DOOR_DELAY;
     this.d.mixer.setInCar(true);
+  }
+
+  doorClosed(): void {
+    this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
+  }
+
+  crank(): void {
+    this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
+  }
+
+  /** The engine has caught: engine voices (once loaded + unlocked) and the radio. */
+  engineRunning(): void {
+    if (!this.inCar || this.engineOn) return;
+    this.engineOn = true;
+    this.startLoops();
     this.tune(this.d.tuner.enterCar());
   }
 
   exitCar(): void {
+    const running = this.engineOn;
     this.inCar = false;
     this.engineOn = false;
-    this.doorTimer = null;
     this.stopStatic();
     this.d.radio.tune(null);
     this.d.tuner.exitCar();
     this.vehicle.stop();
-    this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
+    if (running) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
     this.d.mixer.setInCar(false);
   }
 
-  /** Next (1) or previous (-1) station; only in a car. */
+  /** Next (1) or previous (-1) station; only in a car with the engine running. */
   radioStep(dir: 1 | -1): void {
-    if (!this.inCar) return;
+    if (!this.engineOn) return;
     this.tune(dir === 1 ? this.d.tuner.next() : this.d.tuner.prev());
   }
 
@@ -141,19 +153,9 @@ export class GameAudio {
     this.wasGrounded = s.grounded;
   }
 
-  /** In a car, every frame: door/engine start sequence, impacts, engine and skid voices. Speeds in m/s. */
+  /** In a car, every frame: impacts, engine and skid voices. Speeds in m/s. */
   drive(s: { forward: number; lateral: number; vx: number; vz: number; throttle: number; handbrake: boolean }, dt: number): void {
     const cueDt = Math.min(dt, MAX_DT);
-    if (this.doorTimer !== null) {
-      this.doorTimer -= cueDt;
-      if (this.doorTimer <= 0) {
-        this.doorTimer = null;
-        this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
-        this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
-        this.engineOn = true;
-        this.startLoops();
-      }
-    }
     // real dt: dv is the change over the whole frame, a clamped dt would inflate the deceleration after a hitch
     const hit = this.impacts.update(s.vx, s.vz, dt);
     if (hit > 0) {

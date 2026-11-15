@@ -45,20 +45,53 @@ function setup() {
 const DRIVE = { forward: 0, lateral: 0, vx: 0, vz: 0, throttle: 0, handbrake: false };
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-test('entering starts Köllefornia and flashes its name', () => {
+test('radio waits for the engine', () => {
   const { audio, shots, tunes, flashes } = setup();
   audio.enterCar();
+  expect(tunes).toEqual([]);
+  expect(flashes).toEqual([]);
+  expect(audio.station).toBeNull();
+  expect(shots.map((s) => s.id)).toEqual(['doorOpen']);
+  audio.engineRunning();
   expect(tunes).toEqual(['koellefornia']);
   expect(flashes).toEqual(['Radio Köllefornia']);
-  expect(shots.map((s) => s.id)).toContain('doorOpen');
-  expect(shots.map((s) => s.id)).not.toContain('engineStart');
-  for (let i = 0; i < 4; i++) audio.drive(DRIVE, 0.1);
+  expect(audio.station).toBe('koellefornia');
+});
+
+test('crank plays the starter', () => {
+  const { audio, shots } = setup();
+  audio.enterCar();
+  for (let i = 0; i < 60; i++) audio.drive(DRIVE, 0.1);
+  expect(shots.map((s) => s.id)).toEqual(['doorOpen']); // no door timer of its own any more
+  audio.doorClosed();
+  audio.crank();
   expect(shots.map((s) => s.id)).toEqual(['doorOpen', 'doorClose', 'engineStart']);
+});
+
+test('leaving while cranking', () => {
+  const { audio, shots, tunes } = setup();
+  audio.enterCar();
+  audio.doorClosed();
+  audio.crank();
+  audio.exitCar();
+  expect(shots.map((s) => s.id)).not.toContain('engineStop');
+  expect(tunes.every((t) => t === null)).toBe(true);
+  expect(audio.station).toBeNull();
+});
+
+test('radioStep before the engine runs does nothing', () => {
+  const { audio, tunes, flashes } = setup();
+  audio.enterCar();
+  audio.radioStep(1);
+  audio.radioStep(-1);
+  expect(tunes).toEqual([]);
+  expect(flashes).toEqual([]);
 });
 
 test('R cycles and flashes', () => {
   const { audio, tunes, flashes } = setup();
   audio.enterCar();
+  audio.engineRunning();
   flashes.length = 0;
   for (let i = 0; i < 4; i++) audio.radioStep(1);
   expect(flashes).toEqual(['Radio Köln', '1LIVE', 'Radio aus', 'Radio Köllefornia']);
@@ -75,6 +108,7 @@ test('radio step on foot does nothing', () => {
 test('exit stops the radio', () => {
   const { audio, tunes, shots } = setup();
   audio.enterCar();
+  audio.engineRunning();
   expect(audio.station).toBe('koellefornia');
   audio.exitCar();
   expect(tunes.at(-1)).toBeNull();
@@ -109,6 +143,7 @@ test('mute toggles and flashes', () => {
 test('unreachable flashes once', () => {
   const { audio, voices, flashes } = setup();
   audio.enterCar();
+  audio.engineRunning();
   audio.radioEvents.onConnecting();
   const stat = voices.find((v) => v.id === 'static')!;
   expect(stat.stopped).toBe(false);
@@ -121,6 +156,7 @@ test('unreachable flashes once', () => {
 test('static stops before every tune and once playing', () => {
   const { audio, voices } = setup();
   audio.enterCar();
+  audio.engineRunning();
   audio.radioEvents.onConnecting();
   audio.radioStep(1);
   expect(voices.filter((v) => v.id === 'static').every((v) => v.stopped)).toBe(true);
@@ -132,7 +168,7 @@ test('static stops before every tune and once playing', () => {
 test('loops start only once loaded and unlocked; engine waits for both', async () => {
   const { audio, voices } = setup();
   audio.enterCar();
-  for (let i = 0; i < 4; i++) audio.drive(DRIVE, 0.1);
+  audio.engineRunning();
   audio.unlock();
   await flush();
   expect(voices).toEqual([]);

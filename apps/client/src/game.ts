@@ -9,6 +9,7 @@ import type { Input } from './input';
 import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedCars, type CarPose } from './car';
 import { PlayerFigure } from './player';
 import { FollowCamera, FreeFly } from './camera';
+import { Ignition } from './ignition';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -38,6 +39,8 @@ export class Game {
   readonly driven: DrivenCar;
   readonly follow: FollowCamera;
   readonly fly: FreeFly;
+  /** Door, starter, engine: throttle, radio and lights wait for it. */
+  readonly ignition = new Ignition();
   private readonly stepper = new FixedStepper(DT, 5);
   private vehicle: Vehicle | null = null;
   private carColor = 0;
@@ -105,12 +108,18 @@ export class Game {
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
     const steer = this.flying ? { forward: 0, right: 0 } : input.axes();
+    for (const e of this.ignition.update(dt)) {
+      if (e === 'doorClose') audio?.doorClosed();
+      else if (e === 'crank') audio?.crank();
+      else audio?.engineRunning();
+    }
+    const throttle = this.ignition.state === 'running' ? steer.forward : 0;
     this.stepper.advance(dt, () => {
       if (this.mode === 'walk') {
         this.char.applyInput({ forward: steer.forward, right: steer.right, run: input.run() && !this.flying, yaw: this.follow.yaw, jump: this.jumpPending });
         this.jumpPending = false;
       } else {
-        this.vehicle!.applyInput({ throttle: steer.forward, steer: steer.right, brake: input.brake() && !this.flying });
+        this.vehicle!.applyInput({ throttle, steer: steer.right, brake: input.brake() && !this.flying });
       }
       this.pw.step();
       this.prevPos = this.currPos;
@@ -147,7 +156,7 @@ export class Game {
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
       this.driven.setPose(pose);
       const braking = input.brake() || (input.axes().forward < 0 && this.vehicle!.speed() > 1);
-      this.driven.setLights(night, braking && !this.flying);
+      this.driven.setLights(night, braking && !this.flying, this.ignition.lightPower(Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
       if (audio) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
@@ -185,6 +194,7 @@ export class Game {
     this.driven.show(this.carColor);
     this.follow.setDriving(true, headingOf(this.currPose));
     this.mode = 'drive';
+    this.ignition.start();
     this.ctx.audio?.enterCar();
   }
 
@@ -212,6 +222,7 @@ export class Game {
     this.follow.setDriving(false);
     this.mode = 'walk';
     this.airTime = 0;
+    this.ignition.stop();
     this.ctx.audio?.exitCar();
   }
 

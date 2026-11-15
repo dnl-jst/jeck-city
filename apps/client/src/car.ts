@@ -174,12 +174,12 @@ export class DrivenCar {
     this.group.quaternion.set(p.qx, p.qy, p.qz, p.qw);
   }
 
-  /** night 0..1; braking lights the tail lamps fully by day too. */
-  setLights(night: number, braking: boolean): void {
-    this.headMat.emissiveIntensity = 0.15 + 2.2 * night;
-    this.tailMat.emissiveIntensity = braking ? 2.5 : 0.08 + 1.1 * night;
-    this.beamMat.opacity = 0.55 * night;
-    this.beamMat.visible = night > 0.02;
+  /** night 0..1; braking lights the tail lamps fully by day too; power 0..1 (ignition: off, flickering, on) scales everything. */
+  setLights(night: number, braking: boolean, power: number): void {
+    this.headMat.emissiveIntensity = (0.15 + 2.2 * night) * power;
+    this.tailMat.emissiveIntensity = (braking && power > 0.5 ? 2.5 : 0.08 + 1.1 * night) * power;
+    this.beamMat.opacity = 0.55 * night * power;
+    this.beamMat.visible = power > 0.5 && night > 0.02;
   }
 }
 
