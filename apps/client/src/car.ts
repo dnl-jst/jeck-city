@@ -5,68 +5,17 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
-  heightAt, terrainNormal, TUNING, Vehicle, VEHICLE_REST_Y, type PhysicsWorld, type TerrainGrid, type WorldManifest,
+  CAR_PHYSICS_FAR, CAR_PHYSICS_NEAR, headingOf, parkedPose, TUNING, Vehicle, VEHICLE_REST_Y, type CarPose, type PhysicsWorld, type TerrainGrid,
+  type WorldManifest,
+} from '@nn/shared';
+
+// moved to @nn/shared (sim/rules.ts, sim/cars.ts); re-exported for the client until Game runs on WorldSim
+export {
+  CAR_PHYSICS_FAR, CAR_PHYSICS_NEAR, canGetOut, EXIT_BEHIND, EXIT_MAX_SPEED, EXIT_SIDE, exitSpot, headingOf, nearestEnterableCar, parkedPose,
+  type CarPose,
 } from '@nn/shared';
 
 type XZ = { x: number; z: number };
-export type CarPose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
-
-const poseUp = new Vector3(0, 1, 0), poseN = new Vector3(), poseTilt = new Quaternion(), poseYaw = new Quaternion();
-
-/**
- * Pose of a parked car at (x, z) facing heading: the chassis centre rests VEHICLE_REST_Y above the terrain,
- * tilted from upright onto the terrain normal (yaw first, then the tilt, so the heading is kept).
- */
-export function parkedPose(x: number, z: number, heading: number, t: TerrainGrid): CarPose {
-  const n = terrainNormal(t, x, z);
-  poseTilt.setFromUnitVectors(poseUp, poseN.set(n.x, n.y, n.z));
-  poseYaw.setFromAxisAngle(poseUp, heading);
-  const q = poseTilt.multiply(poseYaw);
-  return { x, y: heightAt(t, x, z) + VEHICLE_REST_Y, z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
-}
-
-/** Free car (not occupied) nearest to the player within maxDist, by id; null if none. */
-export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z: number; occupied: boolean }[], maxDist = 3): number | null {
-  let best: number | null = null;
-  let bestD = maxDist;
-  for (const c of cars) {
-    if (c.occupied) continue;
-    const d = Math.hypot(c.x - player.x, c.z - player.z);
-    if (d <= bestD) [best, bestD] = [c.id, d];
-  }
-  return best;
-}
-
-/** Getting out is only possible below this speed (m/s). */
-export const EXIT_MAX_SPEED = 2;
-export const canGetOut = (speed: number): boolean => Math.abs(speed) < EXIT_MAX_SPEED;
-
-/** Lateral distance of the exit spot from the car's centre line (m): 0.6 m clear of the 1.8 m wide body. */
-export const EXIT_SIDE = 1.5;
-/** Distance of the fallback exit spot behind the car's centre (m): 0.9 m clear of the 4.2 m long body. */
-export const EXIT_BEHIND = TUNING.vehicle.length / 2 + 0.9;
-
-/**
- * Where the driver gets out: 1.5 m to the left of the car; if that spot is blocked, to the right;
- * else behind the car. null when all three are blocked. Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
- */
-export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean): XZ | null {
-  const s = Math.sin(car.heading), c = Math.cos(car.heading);
-  const spots = [
-    { x: car.x + c * EXIT_SIDE, z: car.z - s * EXIT_SIDE },
-    { x: car.x - c * EXIT_SIDE, z: car.z + s * EXIT_SIDE },
-    { x: car.x - s * EXIT_BEHIND, z: car.z - c * EXIT_BEHIND },
-  ];
-  return spots.find((p) => isFree(p.x, p.z)) ?? null;
-}
-
-/** Heading (forward = (sin h, cos h)) of a chassis rotation. */
-export function headingOf(q: { qx: number; qy: number; qz: number; qw: number }): number {
-  // local +z rotated by q, projected onto x/z
-  const fx = 2 * (q.qx * q.qz + q.qw * q.qy);
-  const fz = 1 - 2 * (q.qx * q.qx + q.qy * q.qy);
-  return Math.atan2(fx, fz);
-}
 
 // ---------------------------------------------------------------- model
 
@@ -421,10 +370,6 @@ export class DrivenCar {
 
 // ---------------------------------------------------------------- parked cars
 
-/** Physics bodies exist only for cars this close to the player (m)… */
-export const CAR_PHYSICS_NEAR = 150;
-/** …and are removed again beyond this distance (hysteresis). */
-export const CAR_PHYSICS_FAR = 200;
 /** Parked cars are drawn only within this distance of the camera (m)… */
 export const CAR_RENDER_RADIUS = 250;
 /** …and that set is rebuilt only after the camera moved more than this since the last rebuild (m). */

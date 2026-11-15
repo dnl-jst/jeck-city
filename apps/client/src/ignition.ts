@@ -1,13 +1,7 @@
-/** Seconds after getting in: the door shuts, then the starter cranks. */
-export const DOOR_CLOSE_AT = 0.35, CRANK_AT = 0.5;
-/**
- * Seconds into engine-start.ogg at which the engine has caught and runs. Measured with ffmpeg
- * (astats RMS in 50 ms windows, 48 kHz → asetnsamples=n=2400): the starter cranks at -30..-33 dB up to 0.80 s,
- * the engine fires at 0.85 s (-22 dB) and runs from 0.90 s (-13 dB; a flare to ~1.8 s, then steady idle at -21 dB).
- */
-export const ENGINE_CATCH_S = 0.9;
+import { CRANK_AT, DOOR_CLOSE_AT, ENGINE_CATCH_S, type IgnitionEvent } from '@nn/shared';
 
-export type IgnitionEvent = 'doorClose' | 'crank' | 'running';
+// the tick-based sequence lives in @nn/shared (sim/ignition.ts); this seconds-based variant drives Game until it runs on WorldSim
+export { CRANK_AT, DOOR_CLOSE_AT, ENGINE_CATCH_S, type IgnitionEvent } from '@nn/shared';
 
 const STEPS: { at: number; e: IgnitionEvent }[] = [
   { at: DOOR_CLOSE_AT, e: 'doorClose' }, { at: CRANK_AT, e: 'crank' }, { at: CRANK_AT + ENGINE_CATCH_S, e: 'running' },

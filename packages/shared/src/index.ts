@@ -12,3 +12,4 @@ export * from './physics/step';
 export * from './physics/props';
 export * from './physics/surface';
 export * from './net';
+export * from './sim';

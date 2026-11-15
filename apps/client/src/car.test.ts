@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { Quaternion, Vector3 } from 'three';
-import { VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
+import { terrainNormal, VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
 import {
   CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, canGetOut, exitSpot, glareFacing, headingOf, nearestEnterableCar,
   needsCarRebuild, parkedPose, visibleCars,
@@ -112,4 +112,21 @@ test('parked car rests on terrain and follows its slope', () => {
   expect(headingOf(p)).toBeCloseTo(0, 5);
   // heading kept on a slope
   expect(headingOf(parkedPose(40, 50, 1.2, t))).toBeCloseTo(1.2, 2);
+});
+
+test('parkedPose (moved to @nn/shared, plain math) equals the former Three.js version', () => {
+  const up = new Vector3(0, 1, 0), n = new Vector3(), tilt = new Quaternion(), yaw = new Quaternion();
+  const cols = 101, rows = 101;
+  const heights = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = 0.07 * c - 0.12 * r + 0.3 * Math.sin(c * 0.2) * Math.cos(r * 0.3);
+  const t: TerrainGrid = { x0: 0, z0: 0, cols, rows, datum: 0, heights };
+  for (const [x, z, h] of [[40, 50, 0], [12.3, 77.7, 1.2], [60.5, 20.25, -2.5], [80, 80, Math.PI]] as const) {
+    const p = parkedPose(x, z, h, t);
+    const tn = terrainNormal(t, x, z);
+    const q = tilt.setFromUnitVectors(up, n.set(tn.x, tn.y, tn.z)).multiply(yaw.setFromAxisAngle(up, h));
+    expect(p.qx).toBeCloseTo(q.x, 12);
+    expect(p.qy).toBeCloseTo(q.y, 12);
+    expect(p.qz).toBeCloseTo(q.z, 12);
+    expect(p.qw).toBeCloseTo(q.w, 12);
+  }
 });
