@@ -26,6 +26,9 @@ export const HUD_CSS = `
   .nn-hint { bottom: 22px; padding: 4px 10px; border-radius: 12px; background: rgba(10,12,20,0.45); }
   .nn-hint:empty, .nn-note:empty { display: none; }
   .nn-note { bottom: 56px; color: #f2c46b; }
+  .nn-net { position: fixed; z-index: 3; left: 50%; top: 14px; transform: translateX(-50%); padding: 4px 12px; border-radius: 12px;
+    background: rgba(10,12,20,0.7); color: #ffb4a8; pointer-events: none; font: 13px/1.3 system-ui, sans-serif; }
+  .nn-net:empty { display: none; }
   .nn-wheel { position: fixed; left: 50%; top: 50%; width: min(340px, 80vmin); aspect-ratio: 1; pointer-events: none;
     transform: translate(-50%, -50%) scale(0.86); opacity: 0; visibility: hidden;
     transition: opacity 0.14s ease-out, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.25), visibility 0s 0.18s;
@@ -76,6 +79,7 @@ export class Hud {
   private readonly status: HTMLDivElement;
   private readonly hint: HTMLDivElement;
   private readonly note: HTMLDivElement;
+  private readonly net: HTMLDivElement;
   private noteTimer = 0;
   private readonly loading: HTMLDivElement;
   private readonly attribution: HTMLDivElement;
@@ -89,6 +93,7 @@ export class Hud {
     this.attribution = el('div', 'nn-attribution', root);
     this.hint = el('div', 'nn-hint', root);
     this.note = el('div', 'nn-note', root);
+    this.net = el('div', 'nn-net', root);
     const style = document.createElement('style');
     style.textContent = HUD_CSS;
     document.head.append(style);
@@ -124,6 +129,11 @@ export class Hud {
     this.note.textContent = text;
     clearTimeout(this.noteTimer);
     this.noteTimer = window.setTimeout(() => { this.note.textContent = ''; }, 2000);
+  }
+
+  /** Connection status at the top centre (e.g. "Verbindung unterbrochen …"); '' hides it. */
+  setNetStatus(text: string): void {
+    this.net.textContent = text;
   }
 
   setAttribution(text: string): void {

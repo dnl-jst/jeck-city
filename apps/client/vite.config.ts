@@ -1,8 +1,20 @@
 import { gzipSync } from "node:zlib";
 import { defineConfig } from "vite";
 
+// dev: the client port (NN_CLIENT_PORT) and the game server it proxies to (PORT, as for the server itself) are configurable,
+// so a second checkout can run next to the first
+const clientPort = Number(process.env.NN_CLIENT_PORT ?? 5173);
+const target = `http://localhost:${process.env.PORT ?? 2567}`;
+// Colyseus 0.18 talks to the page's own origin: POST /matchmake/<method>/<room>, then a WebSocket to /<processId>/<roomId>
+// (two url-safe ids); plus /healthz. The regex keeps Vite's own paths (/src/..., /@vite/..., /world/...) out of it.
+const proxy = {
+  '/healthz': { target },
+  '/matchmake': { target },
+  '^/[A-Za-z0-9_-]{8,}/[A-Za-z0-9_-]{8,}(\\?.*)?$': { target, ws: true },
+};
+
 export default defineConfig({
-  server: { host: true, port: 5173, strictPort: true },
+  server: { host: true, port: clientPort, strictPort: true, proxy },
   // vite preview does not compress; a real static host does. gzip text/binary assets so `npm run accept` measures
   // what a deployment would transfer.
   preview: { port: 4173 },

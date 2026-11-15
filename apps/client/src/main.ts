@@ -2,7 +2,7 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, WorldSim,
+  decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, worldHash, WorldSim,
   type MapData, type SunState, type TerrainGrid, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
@@ -16,6 +16,8 @@ import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game } from './game';
 import { OfflineSession } from './session';
+import { Lobby } from './net/lobby';
+import { Connection, connectRoom, JoinRejected, STATUS_TEXTS } from './net/connection';
 import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
@@ -40,6 +42,8 @@ declare global {
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
+    /** Dev/debug: the server connection (null offline). */
+    __nnConn?: () => Connection | null;
     /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
     __nnWheelNudge?: (dx: number, dy: number) => void;
   }
@@ -54,8 +58,9 @@ const dateOverride = params.get('date');
 const currentSun = (): SunState => sunState(withDateParam(new Date(), dateOverride), timeOverride);
 // dev hook: ?cam=x,y,z,yawDeg,pitchDeg spawns the player at x/z facing yaw (manifest heading convention), camera pitch
 const devCam = parseCamParam(params.get('cam'));
-// ?offline=1 asks for a local WorldSim without a server (to be allowed with DEV or ?debug=1 only once there is a
-// server). Until then offline is the only mode: the parameter is accepted and changes nothing.
+// ?offline=1: a local WorldSim without a server and without the name dialog; only with the dev server or ?debug=1,
+// otherwise ignored (everyone else plays online)
+const offline = params.get('offline') === '1' && (import.meta.env.DEV || debug);
 /** The local player's id in an offline session. */
 const OFFLINE_ME = 0;
 const DEG = Math.PI / 180;
@@ -204,8 +209,9 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/** manifest.json, shared by the chunk loader and the simulation. */
-const manifestLoad: Promise<WorldManifest> = fetchOk('/world/manifest.json').then(async (r) => parseManifest(await r.json()));
+/** The raw bytes of manifest.json: parsed for the chunk loader and the simulation, hashed for the join. */
+const manifestBytes: Promise<ArrayBuffer> = fetchOk('/world/manifest.json').then((r) => r.arrayBuffer());
+const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseManifest(JSON.parse(new TextDecoder().decode(b))));
 /** manifest + collision.bin + terrain.bin → the simulated world (built while the spawn chunks stream in). */
 let physicsLoading = true;
 let worldStatus = '';
@@ -233,8 +239,34 @@ async function loadMap(): Promise<MapData | null> {
   }
 }
 
+/** The server connection (online mode, once joined). The game still plays on an OfflineSession; Task 10 follows it. */
+let connection: Connection | null = null;
+/**
+ * Name dialog → join. Resolves with the connection (null offline). The world keeps loading meanwhile; a version
+ * conflict leaves the dialog showing its text and never resolves.
+ */
+async function connect(): Promise<Connection | null> {
+  if (offline) return null;
+  const lobby = new Lobby(document.body);
+  const hash = await worldHash(await manifestBytes);
+  for (;;) {
+    const name = await lobby.ask();
+    try {
+      const conn = await connectRoom(name, hash, lobby);
+      conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
+      lobby.close();
+      return conn;
+    } catch (e) {
+      if (!(e instanceof JoinRejected)) throw e;
+      if (e.failure.kind === 'version') return new Promise<never>(() => undefined);
+      // bad name: its text is shown under the field, ask again
+    }
+  }
+}
+
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap()]).then(([m, { sim, terrain }, mapData]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(([m, { sim, terrain }, mapData, conn]) => {
+  connection = conn;
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -270,6 +302,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     };
   };
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
+  if (import.meta.env.DEV || debug) window.__nnConn = () => connection;
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

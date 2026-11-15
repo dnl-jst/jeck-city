@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build"
   },
   "dependencies": {
+    "@colyseus/sdk": "0.18.10",
     "@nn/shared": "*",
     "three": "0.187.0"
   },
