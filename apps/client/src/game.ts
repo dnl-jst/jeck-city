@@ -11,6 +11,7 @@ import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedC
 import { PlayerFigure } from './player';
 import { FollowCamera, FreeFly } from './camera';
 import { Ignition } from './ignition';
+import { MapMode, type DriveControls } from './map/map-mode';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -47,6 +48,12 @@ export class Game {
   /** Hold R in the car: radio wheel (tap R = next station). */
   readonly wheel = new WheelControl();
   wheelState: WheelState = { open: false, highlighted: null };
+  /** The M map: while open, steering input is neutral and mouse/wheel go to the map. */
+  readonly map = new MapMode();
+  /** Mouse movement and wheel notches for the big map this frame (zero while it is closed). */
+  mapInput = { dx: 0, dy: 0, notches: 0 };
+  /** Steering input of this frame after the map gate. */
+  private ctl: DriveControls = { forward: 0, right: 0, brake: false, run: false };
   private readonly stepper = new FixedStepper(DT, 5);
   /** Fixed physics steps taken so far (tests wait on simulation time, not on the wall clock). */
   steps = 0;
@@ -103,10 +110,16 @@ export class Game {
     const notches = input.takeWheel();
     if (debug && input.consume('KeyF')) this.toggleFly();
     if (input.consume('KeyN')) audio?.toggleMute();
+    if (!this.flying && input.consume('KeyM')) {
+      this.map.toggle();
+      if (this.map.open) this.closeWheel();
+    }
+    this.mapInput = this.map.open ? { dx: mouse.dx, dy: mouse.dy, notches } : { dx: 0, dy: 0, notches: 0 };
+    if (this.map.takeClosed()) input.clearPresses();
     if (this.flying) {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
-    } else {
+    } else if (!this.map.open) {
       const rPressed = input.consume('KeyR'); // a press+release between two frames still counts as held once
       if (input.takeBlur()) this.closeWheel(); // window blur: the wheel is cancelled, not committed
       if (this.mode === 'drive' && this.ignition.state !== 'running') this.closeWheel(); // R does nothing until the engine runs
@@ -124,19 +137,20 @@ export class Game {
       }
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
-    const steer = this.flying ? { forward: 0, right: 0 } : input.axes();
+    const raw = this.flying ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
+    const ctl = this.ctl = this.map.gate(raw);
     for (const e of this.ignition.update(dt)) {
       if (e === 'doorClose') audio?.doorClosed();
       else if (e === 'crank') audio?.crank();
       else audio?.engineRunning();
     }
-    const throttle = this.ignition.state === 'running' ? steer.forward : 0;
+    const throttle = this.ignition.state === 'running' ? ctl.forward : 0;
     this.stepper.advance(dt, () => {
       if (this.mode === 'walk') {
-        this.char.applyInput({ forward: steer.forward, right: steer.right, run: input.run() && !this.flying, yaw: this.follow.yaw, jump: this.jumpPending });
+        this.char.applyInput({ forward: ctl.forward, right: ctl.right, run: ctl.run, yaw: this.follow.yaw, jump: this.jumpPending });
         this.jumpPending = false;
       } else {
-        this.vehicle!.applyInput({ throttle, steer: steer.right, brake: input.brake() && !this.flying });
+        this.vehicle!.applyInput({ throttle, steer: ctl.right, brake: ctl.brake });
       }
       this.pw.step();
       this.steps++;
@@ -159,7 +173,7 @@ export class Game {
   }
 
   private render(dt: number, night: number): void {
-    const { input, audio } = this.ctx;
+    const { audio } = this.ctx;
     const a = this.stepper.alpha;
     if (this.mode === 'walk') {
       const p = lerp3(this.prevPos, this.currPos, a);
@@ -174,8 +188,8 @@ export class Game {
       const prev = this.prevPose ?? this.currPose;
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
       this.driven.setPose(pose);
-      const braking = input.brake() || (input.axes().forward < 0 && this.vehicle!.speed() > 1);
-      this.driven.setLights(night, braking && !this.flying, this.ignition.lightPower(Math.random));
+      const braking = this.ctl.brake || (this.ctl.forward < 0 && this.vehicle!.speed() > 1);
+      this.driven.setLights(night, braking, this.ignition.lightPower(Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
       this.driven.updateGlare(this.ctx.camera, this.occluded, dt);
       if (audio) {
@@ -184,7 +198,7 @@ export class Game {
         const s = Math.sin(h), c = Math.cos(h);
         audio.drive({
           forward: v.x * s + v.z * c, lateral: v.x * c - v.z * s, vx: v.x, vz: v.z,
-          throttle: this.flying ? 0 : input.axes().forward, handbrake: input.brake() && !this.flying,
+          throttle: this.ctl.forward, handbrake: this.ctl.brake,
         }, dt);
       }
     }
