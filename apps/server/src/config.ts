@@ -17,8 +17,10 @@ export type Config = {
   dev: boolean;
   /** Directory with manifest.json, collision.bin and terrain.bin. */
   worldDir: string;
+  /** Built client to serve (apps/client/dist), or null when there is none. */
+  clientDir: string | null;
   fakeLag: FakeLag | null;
-  /** Seconds a dropped player keeps their figure and car (Task 8). */
+  /** Seconds a dropped player keeps their figure and car . */
   reconnectS: number;
   /** Joins allowed per address in a sliding 60 s window. */
   joinPerMin: number;
@@ -32,6 +34,12 @@ const repoPath = (p: string): string => fileURLToPath(new URL(`../../../${p}`, i
 function defaultWorldDir(): string {
   const dist = repoPath('apps/client/dist/world');
   return existsSync(`${dist}/manifest.json`) ? dist : repoPath('apps/client/public/world');
+}
+
+/** apps/client/dist if it has been built. */
+function defaultClientDir(): string | null {
+  const dist = repoPath('apps/client/dist');
+  return existsSync(`${dist}/index.html`) ? dist : null;
 }
 
 function intEnv(env: Env, name: string, fallback: number, min: number, max: number): number {
@@ -64,6 +72,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
     logLevel,
     dev,
     worldDir: env.NN_WORLD_DIR || defaultWorldDir(),
+    clientDir: env.NN_CLIENT_DIR || defaultClientDir(),
     fakeLag: dev && env.NN_FAKE_LAG ? parseFakeLag(env.NN_FAKE_LAG) : null,
     reconnectS: RECONNECT_S,
     joinPerMin: JOIN_PER_IP_PER_MIN,

@@ -5,6 +5,7 @@ import { defineRoom, defineServer, matchMaker, WebSocketTransport } from 'colyse
 import { loadWorldAssets, worldHash } from '@nn/shared';
 import type { Config } from './config';
 import { log, setLogLevel } from './log';
+import { staticHandler } from './static';
 import { nippesRoom, type NippesRoom } from './room';
 
 export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<void> };
@@ -22,17 +23,26 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
   const [assets, hash] = await Promise.all([loadWorldAssets(read), read('manifest.json').then(worldHash)]);
 
   const transport = new WebSocketTransport();
+  let room: NippesRoom | undefined;
   const server = defineServer({
     rooms: { nippes: defineRoom(nippesRoom({ cfg, assets, worldHash: hash })) },
     transport,
     greet: false,
+    express: (app) => {
+      app.get('/healthz', (_req: unknown, res: { json(b: unknown): void }) => res.json(room?.health() ?? { players: 0, tickP95Ms: 0, dropped: 0 }));
+      if (cfg.clientDir) {
+        const serve = staticHandler(cfg.clientDir);
+        app.get('/', serve); // an explicit root route keeps Colyseus from adding its own greeting there
+        app.use(serve);
+      }
+    },
     gracefullyShutdown: opts.exitOnShutdown ?? false,
     ...(cfg.publicUrl ? { publicAddress: cfg.publicUrl } : {}),
   });
   await server.listen(cfg.port);
   const port = (transport.server!.address() as AddressInfo).port;
   const listing = await matchMaker.createRoom('nippes', {});
-  const room = matchMaker.getLocalRoomById(listing.roomId) as NippesRoom;
+  room = matchMaker.getLocalRoomById(listing.roomId) as NippesRoom;
   log('info', 'listening', { port, worldHash: hash, dev: cfg.dev });
   return { port, room, stop: () => server.gracefullyShutdown(false) };
 }

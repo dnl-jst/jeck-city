@@ -1,11 +1,18 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { encodeInputs, NEUTRAL_INPUT, PROTOCOL_VERSION, worldHash } from '@nn/shared';
+import {
+  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, worldHash,
+  type PlayerInput, type Snapshot,
+} from '@nn/shared';
 import { loadConfig } from './config';
 import { startServer, type RunningServer } from './server';
 
-const cfg = loadConfig({}, { port: 0, maxPlayers: 2, logLevel: 'error', joinPerMin: 1000 });
+const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
+writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
+const cfg = loadConfig({}, { port: 0, maxPlayers: 2, logLevel: 'error', joinPerMin: 1000, reconnectS: 3, clientDir });
 const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(`${cfg.worldDir}/${f}`));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -36,6 +43,9 @@ describe.skipIf(!haveAssets)('nippes room', () => {
   const join = async (name: string, over: Record<string, unknown> = {}): Promise<Room> => {
     const r = await client().join('nippes', { name, protocolVersion: PROTOCOL_VERSION, worldHash: hash, ...over });
     open.push(r);
+    // handlers a test does not care about (a test's own onMessage replaces these)
+    r.onMessage('s', () => undefined);
+    r.onMessage('welcome', () => undefined);
     return r;
   };
   /** Leaves all rooms opened so far and waits until the server has removed them. */
@@ -170,4 +180,174 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(b.connection.isOpen).toBe(true);
     await leaveAll();
   }, 20_000);
+
+  /** Sends one input per 16 ms like a client; `input` can be changed while it runs. */
+  class Pilot {
+    input: PlayerInput = NEUTRAL_INPUT(0);
+    private seq = 1;
+    private readonly timer: NodeJS.Timeout;
+    constructor(private room: Room) {
+      this.timer = setInterval(() => this.send(), 16);
+    }
+    send(): void {
+      if (this.room.connection.isOpen) this.room.sendBytes('i', encodeInputs({ seq: this.seq++, tick: 0, inputs: [this.input] }));
+    }
+    /** Sends `use` for exactly one input. */
+    press(): void {
+      const keep = this.input;
+      this.input = { ...keep, use: true };
+      this.send();
+      this.input = keep;
+    }
+    stop(): void {
+      clearInterval(this.timer);
+    }
+  }
+  /** Latest snapshot and all events a client received. */
+  const watch = (r: Room) => {
+    const w = { last: null as Snapshot | null, events: [] as Snapshot['events'], count: 0, ownModes: [] as number[], modeAt: [] as { tick: number; mode: number }[] };
+    r.onMessage('s', (bytes: Uint8Array) => {
+      const snap = decodeSnapshot(new Uint8Array(bytes));
+      if (!snap) return;
+      w.last = snap;
+      w.count++;
+      w.events.push(...snap.events);
+      if (w.ownModes[w.ownModes.length - 1] !== snap.own.mode) {
+        w.ownModes.push(snap.own.mode);
+        w.modeAt.push({ tick: snap.serverTick, mode: snap.own.mode });
+      }
+    });
+    return w;
+  };
+  /** Kills the socket like a dead network (no close handshake), from the server's end of the pipe. */
+  const hardClose = (r: Room) =>
+    (srv.room.clients.find((c) => c.sessionId === r.sessionId)!.ref as unknown as { terminate(): void }).terminate();
+  const slotOf = (r: Room) => srv.room.slotOf(r.sessionId)!;
+  const teleport = (r: Room, x: number, z: number) => r.send('devTeleport', { x, z });
+  /** Position beside car 0 (right side, 2 m) so that `use` enters it. */
+  const besideCar = (side: number) => {
+    const pose = srv.room.sim.cars.vehicle(0)?.pose() ?? srv.room.sim.cars.poses[0]!;
+    const h = headingOf(pose);
+    return { pose, h, x: pose.x + Math.cos(h) * side, z: pose.z - Math.sin(h) * side };
+  };
+
+  it('two clients see each other', async () => {
+    const a = await join('Anna'), b = await join('Bert');
+    const wa = watch(a), wb = watch(b);
+    await until(() => !!wa.last && !!wb.last);
+    expect(wa.last!.walkers.map((w) => w.slot)).toEqual([slotOf(b)]);
+    expect(wb.last!.walkers.map((w) => w.slot)).toEqual([slotOf(a)]);
+    // 20 Hz
+    const c0 = wa.count;
+    await sleep(1000);
+    expect(wa.count - c0).toBeGreaterThanOrEqual(15);
+    expect(wa.count - c0).toBeLessThanOrEqual(25);
+    await leaveAll();
+  });
+
+  it('enter is exclusive', async () => {
+    const a = await join('Anna'), b = await join('Bert');
+    const { x, z } = besideCar(2);
+    teleport(a, x, z);
+    teleport(b, x + 0.3, z);
+    await sleep(300);
+    const pa = new Pilot(a), pb = new Pilot(b);
+    pa.press();
+    pb.press();
+    await sleep(500);
+    pa.stop();
+    pb.stop();
+    const modes = [slotOf(a), slotOf(b)].map((s) => srv.room.sim.player(s).mode);
+    expect(modes.filter((m) => m === 'drive')).toHaveLength(1);
+    expect(srv.room.sim.cars.driver[0]).not.toBeNull();
+    await leaveAll();
+  });
+
+  it('car hits walker → down, up after ~1 s', async () => {
+    const a = await join('Anna'), b = await join('Bert');
+    const wb = watch(b);
+    const { x, z, h } = besideCar(2);
+    teleport(a, x, z);
+    await sleep(300);
+    const pa = new Pilot(a);
+    pa.press();
+    await until(() => srv.room.sim.player(slotOf(a)).mode === 'drive');
+    // B stands 12 m ahead of the car
+    const car = srv.room.sim.cars.vehicle(0)!.pose();
+    teleport(b, car.x + Math.sin(h) * 12, car.z + Math.cos(h) * 12);
+    pa.input = { ...NEUTRAL_INPUT(0), forward: 1 };
+    await until(() => wb.events.some((e) => e.t === 'knock'), 8000);
+    pa.input = { ...NEUTRAL_INPUT(0), brake: true }; // stop before running him over again
+    expect(wb.events).toContainEqual({ t: 'knock', slot: slotOf(b) });
+    await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2);
+    const down = wb.modeAt.findIndex((m) => m.mode === 2);
+    const downS = (wb.modeAt[down + 1]!.tick - wb.modeAt[down]!.tick) / 60;
+    expect(Math.abs(downS - 1)).toBeLessThanOrEqual(0.1 + 1 / 20); // 1.0 s ± 0.1 s, measured at 20 Hz resolution
+    pa.stop();
+    await leaveAll();
+  }, 30_000);
+
+  it('reconnect within the window keeps player and car', async () => {
+    const a = await join('Anna');
+    const { x, z } = besideCar(2);
+    teleport(a, x, z);
+    await sleep(300);
+    const pa = new Pilot(a);
+    pa.press();
+    await until(() => srv.room.sim.player(slotOf(a)).mode === 'drive');
+    pa.stop();
+    const slot = slotOf(a), token = a.reconnectionToken;
+    open.splice(open.indexOf(a), 1);
+    hardClose(a);
+    await sleep(1200);
+    expect(srv.room.sim.player(slot).mode).toBe('drive');
+    expect(srv.room.sim.cars.driver[0]).toBe(slot);
+    const a2 = await client().reconnect(token);
+    open.push(a2);
+    const w = watch(a2);
+    await until(() => !!w.last);
+    expect(slotOf(a2)).toBe(slot);
+    expect(w.last!.own.mode).toBe(1);
+    expect(w.last!.own.carId).toBe(0);
+    expect(srv.room.sim.cars.driver[0]).toBe(slot);
+    await leaveAll();
+  }, 20_000);
+
+  it('after the window the player is gone and the car is free', async () => {
+    const a = await join('Anna');
+    const { x, z } = besideCar(2);
+    teleport(a, x, z);
+    await sleep(300);
+    const pa = new Pilot(a);
+    pa.press();
+    await until(() => srv.room.sim.player(slotOf(a)).mode === 'drive');
+    pa.stop();
+    const slot = slotOf(a);
+    open.splice(open.indexOf(a), 1);
+    hardClose(a);
+    await sleep(1500);
+    expect(srv.room.sim.hasPlayer(slot)).toBe(true);
+    await until(() => !srv.room.sim.hasPlayer(slot), 5000);
+    expect(srv.room.sim.cars.driver[0]).toBeNull();
+    await until(() => srv.room.clients.length === 0);
+  }, 20_000);
+
+  it('serves the built client next to the matchmaker', async () => {
+    const r = await fetch(`http://127.0.0.1:${srv.port}/`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('cache-control')).toBe('no-cache');
+    expect(await r.text()).toBe('<h1>nippes</h1>');
+    expect((await fetch(`http://127.0.0.1:${srv.port}/missing.js`)).status).toBe(404);
+  });
+
+  it('/healthz reports players, tick p95 and dropped steps', async () => {
+    await join('Anna');
+    const r = await fetch(`http://127.0.0.1:${srv.port}/healthz`);
+    expect(r.status).toBe(200);
+    const h = (await r.json()) as { players: number; tickP95Ms: number; dropped: number };
+    expect(h.players).toBe(1);
+    expect(h.tickP95Ms).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(h.dropped)).toBe(true);
+    await leaveAll();
+  });
 });

@@ -1,10 +1,13 @@
 import { performance } from 'node:perf_hooks';
-import { Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
+import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  checkName, decodeInputs, dedupeName, FixedStepper, MAX_MESSAGE_BYTES, parseStationId, PROTOCOL_VERSION,
-  SNAPSHOT_EVERY, TICK_HZ, WorldSim, type PlayerId, type PlayerInput, type PropPose, type WorldAssets,
+  buildSnapshot, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
+  parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, TICK_HZ, WorldSim,
+  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
+import { LagLine } from './fake-lag';
+import { TickStats, type Health } from './health';
 import { InputQueue } from './inputs';
 import { JoinLimiter } from './join-limit';
 import { ipHash, log } from './log';
@@ -28,7 +31,17 @@ const MODE = { walk: 0, drive: 1, down: 2 } as const;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 
 type Auth = { name: string; ipHash: string };
-type Seat = { slot: PlayerId; name: string; ipHash: string; queue: InputQueue; kicked: boolean };
+type Seat = {
+  slot: PlayerId; name: string; ipHash: string; queue: InputQueue; kicked: boolean;
+  client: Client;
+  /** Snapshot interest set of this client. */
+  interest: Interest;
+  /** Connection lost, inside the reconnect window: neutral input, no snapshots. */
+  away: boolean;
+  /** Fake lag (dev) per direction; null when off. */
+  lagIn: LagLine | null;
+  lagOut: LagLine | null;
+};
 
 /** Byte size of a raw ws 'message' payload (Buffer, ArrayBuffer or fragments). */
 function rawSize(data: unknown): number {
@@ -58,6 +71,9 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   private unwarnedDrops = 0;
   private lastWarnMs = -Infinity;
   private lastTickMs: number | null = null;
+  private readonly stats = new TickStats();
+  /** Sim events since the last snapshot round; every client's snapshot gets all of them. */
+  private events: SimEvent[] = [];
 
   async onCreate(): Promise<void> {
     const { cfg, assets } = this.deps;
@@ -70,12 +86,15 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
 
     this.onMessageBytes('i', (client, bytes: Uint8Array) => {
       const seat = this.seatOf(client);
-      const p = seat && decodeInputs(bytes);
-      if (p) seat.queue.push(p, performance.now());
+      if (!seat) return;
+      this.inbound(seat, () => {
+        const p = decodeInputs(bytes);
+        if (p) seat.queue.push(p, performance.now());
+      });
     });
     this.onMessage('radio', (client, msg: unknown) => {
       const seat = this.seatOf(client);
-      if (seat) this.sim.setRadio(seat.slot, parseStationId(msg));
+      if (seat) this.inbound(seat, () => this.sim.setRadio(seat.slot, parseStationId(msg)));
     });
     this.onMessage('devTeleport', (client, msg: unknown) => {
       const seat = this.seatOf(client);
@@ -83,8 +102,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const { x, z } = (msg ?? {}) as { x?: unknown; z?: unknown };
       if (!finite(x) || !finite(z)) return;
       // a fresh figure at (x, z); a car they drove stays there with the engine off
-      this.sim.removePlayer(seat.slot);
-      this.sim.addPlayer(seat.slot, { x, z });
+      this.inbound(seat, () => {
+        this.sim.removePlayer(seat.slot);
+        this.sim.addPlayer(seat.slot, { x, z });
+      });
     });
     this.onMessage('*', (client, type: string | number) => this.kick(client, `unknown message ${String(type).slice(0, 32)}`));
 
@@ -124,21 +145,51 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const name = dedupeName(auth.name, [...this.seats.values()].map((s) => s.name));
 
     this.sim.addPlayer(slot);
-    const seat: Seat = { slot, name, ipHash: auth.ipHash, queue: new InputQueue(this.sim.player(slot).yaw), kicked: false };
+    const lag = this.deps.cfg.fakeLag;
+    const seat: Seat = {
+      slot, name, ipHash: auth.ipHash, queue: new InputQueue(this.sim.player(slot).yaw), kicked: false, client,
+      interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
+    };
     this.seats.set(client.sessionId, seat);
     this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1 }));
-    // registered before Colyseus' own listener (added after onJoin), so it sees every message first
-    client.ref.on('message', (data: unknown) => {
-      if (rawSize(data) > MAX_MESSAGE_BYTES) this.kick(client, 'oversized message');
-    });
+    this.watchMessageSize(client);
     client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
   }
 
+  /** The connection broke without a goodbye: the figure (and car) stay for cfg.reconnectS, with neutral input. */
+  onDrop(client: Client, code?: number): void {
+    const seat = this.seats.get(client.sessionId);
+    if (!seat) return;
+    // no second chance after a protocol violation (kicked, oversized frame, Colyseus message-rate cut)
+    if (seat.kicked || code === CloseCode.WITH_ERROR) return this.removeSeat(client, code);
+    seat.away = true;
+    log('info', 'drop', { slot: seat.slot, ipHash: seat.ipHash, code });
+    this.allowReconnection(client, this.deps.cfg.reconnectS).catch(() => undefined); // onLeave follows when it runs out
+  }
+
+  onReconnect(client: Client): void {
+    const seat = this.seats.get(client.sessionId);
+    if (!seat) return;
+    seat.client = client; // a new Client object for the new connection
+    seat.away = false;
+    seat.interest = new Interest(); // the new connection knows nothing yet
+    this.watchMessageSize(client);
+    this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick }));
+    log('info', 'reconnect', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash });
+  }
+
   onLeave(client: Client, code?: number): void {
+    this.removeSeat(client, code);
+  }
+
+  /** The figure goes away, a car it drove stays behind (engine off) and the slot is free again. */
+  private removeSeat(client: Client, code?: number): void {
     const seat = this.seats.get(client.sessionId);
     if (!seat) return;
     this.seats.delete(client.sessionId);
+    seat.lagIn?.cancel();
+    seat.lagOut?.cancel();
     this.sim.removePlayer(seat.slot);
     this.state.players.delete(String(seat.slot));
     log('info', 'leave', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash, code, players: this.seats.size });
@@ -157,6 +208,36 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
 
   slotOf(sessionId: string): PlayerId | undefined {
     return this.seats.get(sessionId)?.slot;
+  }
+
+  /** /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks. */
+  health(): Health {
+    return this.stats.health(this.seats.size);
+  }
+
+  /** Runs `action` now, or after the simulated inbound lag (dev). Order per client is kept. */
+  private inbound(seat: Seat, action: () => void): void {
+    if (seat.lagIn) seat.lagIn.push(() => { if (this.seats.get(seat.client.sessionId) === seat) action(); });
+    else action();
+  }
+
+  /** Sends now, or after the simulated outbound lag (dev). Nothing is sent while the client is away. */
+  private outbound(seat: Seat, action: () => void): void {
+    if (seat.away) return;
+    if (seat.lagOut) seat.lagOut.push(() => { if (this.seats.get(seat.client.sessionId) === seat && !seat.away) action(); });
+    else action();
+  }
+
+  /** Disconnects clients sending oversized raw messages. Registered before Colyseus' own listener, so it sees every message first. */
+  private watchMessageSize(client: Client): void {
+    client.ref.on('message', (data: unknown) => {
+      if (rawSize(data) > MAX_MESSAGE_BYTES) this.kick(client, 'oversized message');
+    });
+    // a frame beyond the transport's payload limit closes the socket as 1006, like a dead network: tell them apart here
+    client.ref.on('error', (e: { code?: string }) => {
+      const seat = this.seats.get(client.sessionId);
+      if (seat && e?.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') seat.kicked = true;
+    });
   }
 
   private seatOf(client: Client): Seat | undefined {
@@ -183,6 +264,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const due = Number.isFinite(dt) && dt > 0 ? Math.floor((this.stepper.alpha * step + dt) / step + 1e-9) : 0;
     const ran = this.stepper.advance(dt, () => this.stepOnce());
     const dropped = Math.max(0, due - ran);
+    this.stats.drop(dropped);
     this.droppedSteps += dropped;
     this.unwarnedDrops += dropped;
     if (this.unwarnedDrops > 0 && now - this.lastWarnMs >= OVERRUN_WARN_MS) {
@@ -197,8 +279,25 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const seats = [...this.seats.values()].sort((a, b) => a.queue.headArrival - b.queue.headArrival || a.slot - b.slot);
     const inputs = new Map<PlayerId, PlayerInput>();
     for (const s of seats) inputs.set(s.slot, s.queue.next());
-    this.sim.step(inputs);
-    if (this.sim.tick % SNAPSHOT_EVERY === 0) this.syncState();
+    const t0 = performance.now();
+    for (const e of this.sim.step(inputs)) this.events.push(e);
+    if (this.sim.tick % SNAPSHOT_EVERY === 0) {
+      this.syncState();
+      this.sendSnapshots();
+    }
+    this.stats.record(performance.now() - t0);
+  }
+
+  /** One snapshot per connected client: its own state in full, the rest within its interest set. */
+  private sendSnapshots(): void {
+    const events = this.events;
+    this.events = [];
+    for (const seat of this.seats.values()) {
+      if (seat.away) continue;
+      const snap = buildSnapshot(this.sim, seat.slot, seat.interest, seat.queue.ackSeq, events, (id) => id);
+      const bytes = encodeSnapshot(snap);
+      this.outbound(seat, () => seat.client.sendBytes('s', bytes));
+    }
   }
 
   /** Mirrors players, moved or driven cars and lying lamps into the schema state. */
