@@ -1,6 +1,7 @@
 import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
 import {
-  Character, FixedStepper, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
+  Character, FixedStepper, heightAt, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type TerrainGrid, type Vehicle,
+  type WorldManifest,
 } from '@nn/shared';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
@@ -16,17 +17,24 @@ type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
 const DT = TUNING.world.dt;
 
-/** What the game needs from the page: scene and camera, input, HUD, the dev URL parameters and (optionally) sound. */
+/**
+ * What the game needs from the page: scene and camera, input, HUD, the dev URL parameters, the terrain grid
+ * and (optionally) sound.
+ */
 export type GameContext = {
-  scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null; audio?: GameAudio;
+  scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null; terrain: TerrainGrid;
+  audio?: GameAudio;
 };
 
 const STATIC_ONLY = staticWorldFilter();
 
+/** Ray length of surfaceY (m): any terrain height lies within it (heights may be negative, below the datum). */
+const SURFACE_RAY = 200;
+
 /** Height of the first static surface below (x, fromY, z), or null. */
 export function surfaceY(pw: PhysicsWorld, x: number, z: number, fromY: number): number | null {
   const { rapier: R, world: w } = pw;
-  const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), fromY + 5, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
+  const hit = w.castRay(new R.Ray({ x, y: fromY, z }, { x: 0, y: -1, z: 0 }), SURFACE_RAY, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
   return hit ? fromY - hit.timeOfImpact : null;
 }
 
@@ -63,17 +71,19 @@ export class Game {
   private readonly qb = new Quaternion();
 
   constructor(readonly pw: PhysicsWorld, m: WorldManifest, private readonly ctx: GameContext) {
-    const { scene, camera, input, devCam } = ctx;
+    const { scene, camera, input, devCam, terrain } = ctx;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
     this.driven = new DrivenCar(scene);
     this.fly = new FreeFly(camera, input);
     const spawn = devCam ? { x: devCam.x, z: devCam.z, heading: devCam.yawDeg * DEG } : m.spawn;
-    const y = surfaceY(pw, spawn.x, spawn.z, 3) ?? 0;
+    // first surface below a point 3 m above the terrain (sidewalk, kerb or the ground itself)
+    const ground = heightAt(terrain, spawn.x, spawn.z);
+    const y = surfaceY(pw, spawn.x, spawn.z, ground + 3) ?? ground;
     this.char = new Character(pw, { x: spawn.x, y: y + 0.02, z: spawn.z });
     this.prevPos = this.currPos = this.char.position();
     this.figure.heading = spawn.heading;
-    this.cars = new ParkedCars(scene, pw, m.parked);
+    this.cars = new ParkedCars(scene, pw, m.parked, terrain);
     this.follow = new FollowCamera(camera, pw);
     this.follow.yaw = spawn.heading;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
@@ -238,7 +248,7 @@ export class Game {
     this.currPose = this.prevPose = null;
     this.driven.hide();
     this.char.setEnabled(true);
-    this.char.teleport({ x: spot.x, y: (surfaceY(this.pw, spot.x, spot.z, pose.y + 1) ?? 0) + 0.02, z: spot.z });
+    this.char.teleport({ x: spot.x, y: (surfaceY(this.pw, spot.x, spot.z, pose.y + 1) ?? heightAt(this.ctx.terrain, spot.x, spot.z)) + 0.02, z: spot.z });
     this.prevPos = this.currPos = this.char.position();
     this.figure.heading = heading;
     this.figure.visible = true;
@@ -251,7 +261,7 @@ export class Game {
   }
 
   private closeWheel(): void {
-    this.wheel.cancel();
+    this.wheel.cancel(this.ctx.input.held('KeyR'));
     this.wheelState = { open: false, highlighted: this.wheelState.highlighted }; // keep the slot for the fade-out
   }
 

@@ -1,13 +1,14 @@
 // Usage: npm run screenshot -- <url> <out.png>
-// Renders the page in headless Chromium (software WebGL), waits for window.__nnReady (fails on 'error'), saves a PNG.
+// Renders the page in headless Chromium (host GPU; NN_SOFTWARE_GL=1: software WebGL), waits for window.__nnReady (fails on 'error'), saves a PNG.
 import { chromium } from 'playwright';
+import { browserArgs } from './browser-args.mjs';
 
 const [url, out] = process.argv.slice(2);
 if (!url || !out) {
   console.error('usage: npm run screenshot -- <url> <out.png>');
   process.exit(2);
 }
-const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ args: browserArgs });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') console.error(`[page ${m.type()}] ${m.text()}`); });

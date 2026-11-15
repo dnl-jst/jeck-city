@@ -53,10 +53,13 @@ export class WheelControl {
     return wasOpen ? { open: false, highlighted, commit: highlighted } : { open: false, highlighted: i.current, tap: true };
   }
 
-  /** Closes the wheel without a pick (getting out, flying); R must be let go before it counts again. */
-  cancel(): void {
+  /**
+   * Closes the wheel without a pick (getting out, flying, engine not running). If R is held (`held`), it must be
+   * let go before it counts again; a cancel while R is up must not swallow the next press.
+   */
+  cancel(held = true): void {
     this.reset();
-    this.waitRelease = true;
+    this.waitRelease = held;
   }
 
   private pick(current: StationId | null): StationId | null {

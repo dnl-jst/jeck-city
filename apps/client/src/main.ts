@@ -2,7 +2,8 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  createPhysicsWorld, decodeCollision, localToWgs84, parseTimeOverride, sunState, type PhysicsWorld, type SunState,
+  createPhysicsWorld, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseTimeOverride, sunState, type PhysicsWorld,
+  type SunState, type TerrainGrid,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
@@ -26,7 +27,7 @@ declare global {
     __nnInfo?: () => { calls: number; triangles: number };
     /**
      * Dev/tests: what the player is doing (radio: the chosen station, null on foot), and the height of the first
-     * static surface below (x, 100, z).
+     * static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
       mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
@@ -105,12 +106,13 @@ window.addEventListener('pointerdown', () => gameAudio.unlock());
 window.addEventListener('keydown', () => gameAudio.unlock());
 document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
 
-// courtyards, forecourts and gaps between buildings
-const ground = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
-ground.rotation.x = -Math.PI / 2;
-ground.renderOrder = -1;
-ground.receiveShadow = true;
-scene.add(ground);
+// far ground beyond the terrain grid (the chunks' `ground` meshes cover the world area); y from the manifest
+const farGround = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
+farGround.rotation.x = -Math.PI / 2;
+farGround.renderOrder = -1;
+farGround.receiveShadow = true;
+farGround.visible = false; // until the manifest says how low it lies
+scene.add(farGround);
 
 let game: Game | null = null;
 let fps = 0;
@@ -166,25 +168,32 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/** collision.bin → physics world (runs while the spawn chunks stream in). */
+/** collision.bin + terrain.bin → physics world (runs while the spawn chunks stream in). */
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
-async function loadPhysics(): Promise<PhysicsWorld> {
-  const url = '/world/collision.bin';
-  const res = await fetchOk(url);
-  const pw = await createPhysicsWorld(decodeCollision(await res.arrayBuffer()));
+async function loadPhysics(): Promise<{ pw: PhysicsWorld; terrain: TerrainGrid }> {
+  const [collision, terrain] = await Promise.all([
+    fetchOk('/world/collision.bin').then(async (r) => decodeCollision(await r.arrayBuffer())),
+    fetchOk('/world/terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
+  ]);
+  const pw = await createPhysicsWorld(collision, terrain);
   physicsLoading = false; // only once the world is built
   showStatus();
-  return pw;
+  return { pw, terrain };
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics()]).then(([m, pw]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics()]).then(([m, { pw, terrain }]) => {
   hud.setAttribution(m.attribution);
-  props = new Props(scene, m);
-  lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio });
+  farGround.position.y = m.farGroundY;
+  farGround.visible = true;
+  props = new Props(scene, m, terrain);
+  lighting = new Lighting(
+    scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
+    (x, z) => heightAt(terrain, x, z),
+  );
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio });
   if (devCam && debug && devCam.y > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -199,7 +208,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     };
   };
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
-  window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
+  window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);
   window.__nnReady = true;

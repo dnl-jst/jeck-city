@@ -1,9 +1,10 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
-// Scripted drive in headless Chromium: spawn (no ?cam) next to the spawn car, press E, wait for the engine, hold W (then W+D), and check that the
+// Scripted drive in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn (no ?cam) next to the spawn car, press E, wait for the engine, hold W (then W+D), and check that the
 // car moved > 20 m, is not inside a building, and that getting out puts the player on foot again. In the day run, hold R
 // to open the radio wheel, point right (dev hook __nnWheelNudge, no pointer lock headless) and release: Radio Köln.
 // Saves task11-car.png (day), task11-night-car.png (night) and radio-wheel.png (open wheel) into shotsDir when given.
 import { chromium } from 'playwright';
+import { browserArgs } from './browser-args.mjs';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const shots = process.argv[3];
@@ -14,7 +15,7 @@ async function drive(page, time, shot, wheelShot) {
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
   const state = () => page.evaluate(() => window.__nnState());
-  // software rendering runs at a few fps, so the simulation is slower than real time: wait on state, not on clocks
+  // software rendering (NN_SOFTWARE_GL=1) runs at a few fps, so the simulation is slower than real time: wait on state, not on clocks
   const until = (fn, arg, what) => page.waitForFunction(fn, arg, { timeout: 60_000 }).catch(() => { throw new Error(what); });
   await page.keyboard.press('KeyE');
   await until(() => window.__nnState().mode === 'drive', null, 'E did not enter the car');
@@ -67,7 +68,7 @@ async function radioWheel(page, until, shot) {
   console.log('radio wheel: hold R, point right, release -> radiokoeln');
 }
 
-const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ args: browserArgs });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   page.on('pageerror', (e) => console.error(`[page error] ${e.message}`));

@@ -113,6 +113,8 @@ export class Lighting {
     private readonly halo: PointsMaterial,
     private readonly facadeNight: IUniform<number>,
     private readonly facadeSky: IUniform<Color>,
+    /** Ground height under a lamp (terrain). */
+    private readonly groundY: (x: number, z: number) => number = () => 0,
   ) {
     scene.fog = this.fog;
     scene.background = null;
@@ -195,7 +197,7 @@ export class Lighting {
       const idx = nearestLamps(this.lamps, cameraPos.x, cameraPos.z, LAMP_LIGHTS);
       this.pool.forEach((l, i) => {
         const lamp = idx[i] !== undefined ? this.lamps[idx[i]!] : undefined;
-        if (lamp) l.position.set(lamp[0], LAMP_LIGHT_Y - 0.25, lamp[1]);
+        if (lamp) l.position.set(lamp[0], this.groundY(lamp[0], lamp[1]) + LAMP_LIGHT_Y - 0.25, lamp[1]);
         else l.position.set(0, -100, 0);
       });
     }
