@@ -1,4 +1,4 @@
-import { BufferAttribute, BufferGeometry, Mesh, type Material, type Object3D, type Scene, type Texture } from 'three';
+import { BufferAttribute, BufferGeometry, Mesh, MeshStandardMaterial, type Material, type Object3D, type Scene, type Texture } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
@@ -71,6 +71,8 @@ export class WorldLoader {
   /** Incremented whenever a chunk is added to or removed from the scene. */
   revision = 0;
   readonly facade = createFacadeMaterial();
+  /** Emissive materials of loaded override models (stained glass …): dim by day, glowing at night. */
+  private readonly glow = new Set<MeshStandardMaterial>();
   readonly street = createStreetMaterials();
 
   constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
@@ -109,6 +111,7 @@ export class WorldLoader {
    * A failed chunk is retried with backoff (RETRY_DELAYS_MS); `now` is in ms.
    */
   update(cameraPos: { x: number; z: number }, now = performance.now()): void {
+    for (const mat of this.glow) mat.emissiveIntensity = 0.12 + 1.4 * this.facade.userData.nightFactor.value;
     const m = this.manifest;
     if (!m || !this.ready) return;
     this.lastPos = { x: cameraPos.x, z: cameraPos.z };
@@ -158,6 +161,7 @@ export class WorldLoader {
           mesh.castShadow = true;
         } else mesh.renderOrder = STREET_RENDER_ORDER[mesh.name] ?? 0;
       });
+      for (const model of this.manifest!.models.filter((x) => x.chunk === key)) root.add(await this.loadModel(model.file));
       root.matrixAutoUpdate = false;
       root.updateMatrixWorld(true);
       this.scene.add(root);
@@ -166,6 +170,21 @@ export class WorldLoader {
     } finally {
       this.pending.delete(key);
     }
+  }
+
+  /** A replacement model (world space, own materials); marked so unload() frees its materials too. */
+  private async loadModel(file: string): Promise<Object3D> {
+    const buf = await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer();
+    const model = (await this.gltf.parseAsync(buf, this.baseUrl)).scene;
+    model.name = file;
+    model.userData.ownMaterials = true;
+    model.traverse((o) => {
+      const mesh = o as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = mesh.receiveShadow = true;
+      for (const mat of [mesh.material].flat()) if (mat instanceof MeshStandardMaterial && mat.emissiveMap) this.glow.add(mat);
+    });
+    return model;
   }
 
   private trackBedMesh(tram: Mesh): Mesh {
@@ -187,6 +206,12 @@ export class WorldLoader {
     const root = this.loaded.get(key);
     if (!root) return;
     this.scene.remove(root);
+    for (const model of root.children.filter((c) => c.userData.ownMaterials)) {
+      model.traverse((c) => {
+        for (const mat of [(c as Mesh).material ?? []].flat()) this.glow.delete(mat as MeshStandardMaterial);
+      });
+      disposeGltf(model);
+    }
     disposeTree(root);
     this.loaded.delete(key);
     this.revision++;
