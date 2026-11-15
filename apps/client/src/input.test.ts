@@ -51,6 +51,14 @@ test('releaseAll (window blur) lets go of every key and pending press', () => {
   expect(i.consume('KeyE')).toBe(false);
 });
 
+test('releaseAll reports the interruption once via takeBlur', () => {
+  const i = new Input();
+  expect(i.takeBlur()).toBe(false);
+  i.releaseAll();
+  expect(i.takeBlur()).toBe(true);
+  expect(i.takeBlur()).toBe(false);
+});
+
 test('mouse movement accumulates until taken', () => {
   const i = new Input();
   i.mouseMove(10, -4);

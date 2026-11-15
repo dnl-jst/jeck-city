@@ -57,7 +57,7 @@ async function radioWheel(page, until, shot) {
   await page.keyboard.down('KeyR');
   await until(() => window.__nnState().wheelOpen, null, 'holding R did not open the radio wheel');
   await page.evaluate(() => window.__nnWheelNudge(60, 0));
-  await page.waitForTimeout(400); // open transition; a few frames to apply the nudge
+  await until(() => window.__nnState().wheelHighlighted === 'radiokoeln', null, 'nudge did not highlight Radio Köln');
   if (shot) {
     await page.screenshot({ path: shot });
     console.log(`saved ${shot}`);

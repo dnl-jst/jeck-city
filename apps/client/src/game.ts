@@ -102,9 +102,11 @@ export class Game {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
     } else {
-      input.consume('KeyR'); // the wheel reads the held key; a stale press must not act later
-      if (this.mode === 'drive') {
-        this.wheelState = this.wheel.update({ held: input.held('KeyR'), dx: mouse.dx, dy: mouse.dy, dt, current: audio?.station ?? null });
+      const rPressed = input.consume('KeyR'); // a press+release between two frames still counts as held once
+      if (input.takeBlur()) this.closeWheel(); // window blur: the wheel is cancelled, not committed
+      if (this.mode === 'drive' && this.ignition.state !== 'running') this.closeWheel(); // R does nothing until the engine runs
+      else if (this.mode === 'drive') {
+        this.wheelState = this.wheel.update({ held: input.held('KeyR') || rPressed, dx: mouse.dx, dy: mouse.dy, dt, current: audio?.station ?? null });
         if (this.wheelState.tap) audio?.radioStep(1);
         if (this.wheelState.commit !== undefined) audio?.radioSelect(this.wheelState.commit);
       }
@@ -240,7 +242,7 @@ export class Game {
 
   private closeWheel(): void {
     this.wheel.cancel();
-    this.wheelState = { open: false, highlighted: null };
+    this.wheelState = { open: false, highlighted: this.wheelState.highlighted }; // keep the slot for the fade-out
   }
 
   /**

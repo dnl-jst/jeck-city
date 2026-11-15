@@ -15,6 +15,7 @@ export class Input {
   private readonly down = new Set<string>();
   /** Initial presses not yet consumed (key repeat never adds one). */
   private readonly pressed = new Set<string>();
+  private blurred = false;
   private dx = 0;
   private dy = 0;
   private notches = 0;
@@ -35,6 +36,14 @@ export class Input {
   releaseAll(): void {
     this.down.clear();
     this.pressed.clear();
+    this.blurred = true;
+  }
+
+  /** True once after releaseAll() (window blur): a held-key gesture in progress was interrupted, not finished. */
+  takeBlur(): boolean {
+    const b = this.blurred;
+    this.blurred = false;
+    return b;
   }
 
   /** True once per initial press of `code`. */

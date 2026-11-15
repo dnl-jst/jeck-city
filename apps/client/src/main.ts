@@ -30,7 +30,7 @@ declare global {
      */
     __nnState?: () => {
       mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
-      engine: 'off' | 'starting' | 'running'; wheelOpen: boolean;
+      engine: 'off' | 'starting' | 'running'; wheelOpen: boolean; wheelHighlighted: StationId | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
     /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
@@ -100,8 +100,9 @@ const radio = new Radio(() => new Audio(), {
 const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
 const radioWheel = new RadioWheel(document.body);
 gameAudio.load().catch(console.error);
-window.addEventListener('pointerdown', () => gameAudio.unlock(), { once: true });
-window.addEventListener('keydown', () => gameAudio.unlock(), { once: true });
+// no `once`: a later rejected play()/resume() is retried on the next gesture (unlock is idempotent)
+window.addEventListener('pointerdown', () => gameAudio.unlock());
+window.addEventListener('keydown', () => gameAudio.unlock());
 document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
 
 // courtyards, forecourts and gaps between buildings
@@ -194,7 +195,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     const f = game!.focus();
     return {
       mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station,
-      engine: game!.ignition.state, wheelOpen: game!.wheelState.open,
+      engine: game!.ignition.state, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
     };
   };
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);

@@ -227,6 +227,15 @@ test('loops start only once loaded and unlocked; engine waits for both', async (
   expect(voices.filter((v) => v.id === 'ambience')).toHaveLength(1);
 });
 
+test('a later gesture revives a waiting stream', async () => {
+  const { audio, calls } = setup();
+  audio.unlock();
+  await flush();
+  calls.length = 0;
+  audio.unlock();
+  expect(calls).toEqual(['mixer.unlock', 'radio.unlocked']);
+});
+
 test('steps, landing, impacts and tram bell', () => {
   const { audio, shots } = setup();
   for (let i = 0; i < 60; i++) audio.walk({ speed: 1.5, grounded: true, airTime: 0 }, 1 / 60);

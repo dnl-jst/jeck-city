@@ -147,6 +147,7 @@ export class AudioMixer {
     const gain = ctx.createGain();
     gain.gain.value = o.gain ?? 1;
     src.connect(gain);
+    let pan: PannerNode | null = null;
     if (o.at) {
       const panner = new PannerNode(ctx, {
         panningModel: 'HRTF',
@@ -158,6 +159,7 @@ export class AudioMixer {
       });
       gain.connect(panner);
       panner.connect(this.sfx);
+      pan = panner;
     } else {
       gain.connect(this.sfx);
     }
@@ -166,6 +168,7 @@ export class AudioMixer {
     src.onended = () => {
       ended = true;
       gain.disconnect();
+      pan?.disconnect();
     };
     return {
       stop() {

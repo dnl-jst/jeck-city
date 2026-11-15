@@ -17,6 +17,12 @@ test('slots and constants', () => {
   expect(PICK_RADIUS_PX).toBe(40);
 });
 
+test('a one-frame held followed by release is still a tap', () => {
+  const w = new WheelControl();
+  expect(step(w, true).tap).toBeUndefined();
+  expect(step(w, false)).toMatchObject({ open: false, tap: true });
+});
+
 test('tap is next station', () => {
   const w = new WheelControl();
   const rs = [step(w, true), step(w, true)];
