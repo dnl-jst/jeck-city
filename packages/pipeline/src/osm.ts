@@ -1,7 +1,9 @@
 import { wgs84ToLocal } from '@nn/shared';
+import { crossSectionFromTags, reversed, type CrossSection } from './crosssection.js';
 
 export type Pt = { x: number; z: number };
-export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number };
+/** width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order. */
+export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection };
 export type OsmFeatures = {
   boundary: Pt[];
   roads: Road[];
@@ -22,11 +24,7 @@ type Tags = Record<string, string>;
 type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[]; tags?: Tags; members?: { type: string; role: string; geometry?: LL[] }[] };
 
 const BOUNDARY_ID = 2613766;
-const LANE_WIDTH = 3.25;
-const KIND_WIDTH: Record<string, number> = {
-  primary: 10, secondary: 9, tertiary: 8, residential: 6.5, unclassified: 6.5, living_street: 6,
-  service: 4, footway: 2.5, path: 2.5, cycleway: 2.5, pedestrian: 6,
-};
+const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
 
@@ -81,13 +79,13 @@ const centroid = (p: Pt[]): Pt => ({ x: p.reduce((s, q) => s + q.x, 0) / p.lengt
 function parseRoad(el: El, pts: Pt[], t: Tags): Road | undefined {
   const base = (t.highway ?? '').replace(/_link$/, '');
   const kind = base === 'trunk' ? 'primary' : base;
-  if (!(kind in KIND_WIDTH) || t.tunnel === 'yes' || pts.length < 2) return undefined;
-  const lanes = Math.max(1, Math.round(Number(t.lanes)) || 1);
-  const w = Number.parseFloat(t.width ?? '');
-  const width = w > 0 ? w : Number(t.lanes) > 0 ? lanes * LANE_WIDTH : KIND_WIDTH[kind]!;
+  if (!ROAD_KINDS.has(kind) || t.tunnel === 'yes' || pts.length < 2) return undefined;
   const reverse = t.oneway === '-1';
   const oneway = t.oneway === 'yes' || t.oneway === '1' || reverse || t.junction === 'roundabout';
-  const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width, oneway, lanes };
+  const tagged = crossSectionFromTags(t, kind);
+  const cross = reverse ? reversed(tagged) : tagged;
+  const lanes = cross.lanesForward + cross.lanesBackward;
+  const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width: cross.carriageway, oneway, lanes, cross };
   if (t.name) road.name = t.name;
   return road;
 }

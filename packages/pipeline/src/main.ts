@@ -78,7 +78,7 @@ async function main() {
   const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
   console.log(`shops: ${shops.length} (${Object.keys(curated).length} curated names, ${shops.filter((s) => s.sign).length} with sign)`);
 
-  const streets = buildStreetGeometry(f);
+  const streets = buildStreetGeometry(f, active);
   const graph = buildRoadGraph(f);
   const spawn = findSpawn(f.roads, SPAWN_TARGET, active);
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);

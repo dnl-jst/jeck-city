@@ -1,5 +1,8 @@
 import { expect, test } from 'vitest';
-import { loadFixture } from './fixture.js';
+import { boxBuilding, loadFixture } from './fixture.js';
+import { crossSectionFromTags, type CrossSection } from './crosssection.js';
+import type { Road } from './osm.js';
+import { distToPolyline } from './polyline.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
 import { wgs84ToLocal } from '@nn/shared';
 
@@ -69,4 +72,59 @@ test('uv: u runs in metres along the road', () => {
   const maxU = Math.max(...Array.from({ length: m.uv.length / 2 }, (_, i) => m.uv[i * 2]!));
   expect(maxU).toBeGreaterThan(190); // Querstraße is ~200 m
   expect(maxU).toBeLessThan(210);
+});
+
+const road1 = (f0: ReturnType<typeof loadFixture>, name: string) => f0.roads.find((r) => r.name === name)!;
+
+test('road ribbon is as wide as the carriageway from the cross-section', () => {
+  const t = road1(f, 'Teststraße');
+  expect(t.width).toBeCloseTo(6.0, 6); // residential: 2 × 3.0 m
+  const at = wgs84ToLocal(50.9631, 6.951); // western end
+  const zs = verts(g.road).filter((v) => Math.abs(v.x - at.x) < 0.5 && Math.abs(v.z - at.z) < 10).map((v) => v.z);
+  expect(Math.max(...zs) - Math.min(...zs)).toBeCloseTo(6.0, 2);
+});
+
+test('sidewalk reaches the facade: building 4 m behind the kerb → outer edge on the facade', () => {
+  const cross = crossSectionFromTags({}, 'residential'); // 6.0 m, kerbs at z = ±3
+  const r: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 50, z: 0 }, { x: 100, z: 0 }], width: cross.carriageway, oneway: false, lanes: 2, cross };
+  const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, [boxBuilding('S', -10, 7, 110, 30, 12)]);
+  const south = verts(geo.sidewalk).filter((v) => v.z > 0);
+  const north = verts(geo.sidewalk).filter((v) => v.z < 0);
+  expect(Math.max(...south.map((v) => v.z))).toBeCloseTo(7, 4);
+  expect(Math.min(...south.map((v) => v.z))).toBeCloseTo(3.15, 4); // starts behind the kerb stone
+  expect(Math.min(...north.map((v) => v.z))).toBeCloseTo(-3 - 2.5, 4); // no building: 2.5 m
+});
+
+test('dual carriageway: no kerb or sidewalk between the two oneway ways, a green median instead', () => {
+  const [s1, s2] = f.roads.filter((r) => r.name === 'Doppelstraße');
+  const gap = distToPolyline(s1!.points[0]!, s2!.points); // ≈ 11.1 m centre to centre
+  const ds = (v: { x: number; z: number }) => [distToPolyline(v, s1!.points), distToPolyline(v, s2!.points)] as const;
+  const between = (v: { x: number; z: number }) => {
+    const [a, b] = ds(v);
+    return a + b < gap + 0.01 && a > 3.25 - 1e-3 && b > 3.25 - 1e-3;
+  };
+  const outside = (v: { x: number; z: number }) => {
+    const [a, b] = ds(v);
+    return Math.min(a, b) > 3.25 && Math.min(a, b) < 10 && a + b > gap + 1;
+  };
+  expect(verts(g.sidewalk).some(between)).toBe(false);
+  expect(verts(g.curb).some(between)).toBe(false);
+  expect(verts(g.green).filter(between).length).toBeGreaterThanOrEqual(4);
+  expect(verts(g.sidewalk).filter(outside).length).toBeGreaterThanOrEqual(4); // outer sides keep their sidewalks
+});
+
+test('sidewalks of a side street stop before a wide crossing carriageway', () => {
+  const c = crossSectionFromTags({ lanes: '4', 'cycleway:both': 'lane', 'parking:both': 'lane' }, 'secondary'); // 20.2 m
+  const mk = (id: number, kind: string, pts: [number, number][], cross: CrossSection): Road =>
+    ({ id, kind, points: pts.map(([x, z]) => ({ x, z })), width: cross.carriageway, oneway: false, lanes: 2, cross });
+  const wide = mk(1, 'secondary', [[-100, 0], [0, 0], [100, 0]], c);
+  const side = mk(2, 'residential', [[0, 0], [0, 100]], crossSectionFromTags({}, 'residential'));
+  const geo = buildStreetGeometry({ ...f, roads: [wide, side], greens: [], squares: [], tramTracks: [] });
+  const hw = c.carriageway / 2;
+  for (const v of [...verts(geo.sidewalk), ...verts(geo.curb)]) {
+    if (Math.abs(v.x) < 10) expect(Math.abs(v.z)).toBeGreaterThanOrEqual(hw - 1e-3); // side street parts
+  }
+  for (const v of verts(geo.sidewalk)) {
+    if (Math.abs(v.z) > hw + 0.2) expect(Math.abs(v.x)).toBeGreaterThanOrEqual(3 + 0.15 - 1e-3); // wide road's sidewalks clear the side street
+  }
 });

@@ -1,12 +1,12 @@
 import { expect, test } from 'vitest';
-import { boxBuilding, loadFixture } from './fixture.js';
+import { boxBuilding, loadFixture, crossOf } from './fixture.js';
 import type { Road } from './osm.js';
 import { footprintContains, footprintDistance, insideAnyFootprint } from './footprint.js';
 import { findSpawn } from './spawn.js';
 import { spawnCarSpot, withSpawnCar } from './parking.js';
 
 const road = (id: number, name: string, pts: [number, number][]): Road => ({
-  id, name, kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2,
+  id, name, kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2, cross: crossOf('secondary', 10),
 });
 // A side street passes right through the target; Neusser Straße runs north–south 30 m east of it
 // (way drawn south → north). Its west sidewalk is covered by a building.
@@ -48,7 +48,7 @@ test('footprint test uses the projected roof', () => {
 });
 
 test('a parked car stands next to the spawn, on the carriageway, along the road', () => {
-  const road = (pts: [number, number][]): Road => ({ id: 2, name: 'Neusser Straße', kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2 });
+  const road = (pts: [number, number][]): Road => ({ id: 2, name: 'Neusser Straße', kind: 'secondary', points: pts.map(([x, z]) => ({ x, z })), width: 10, oneway: false, lanes: 2, cross: crossOf('secondary', 10) });
   const f = { ...loadFixture(), boundary: [{ x: -500, z: -500 }, { x: 500, z: -500 }, { x: 500, z: 500 }, { x: -500, z: 500 }], tramTracks: [] };
   for (const pts of [[[30, 200], [30, -200]], [[30, -200], [30, 200]]] as [number, number][][]) {
     const roads = [road(pts)];
