@@ -1,4 +1,4 @@
-import { utmToLocal } from '@nn/shared';
+import { heightAt, utmToLocal, type TerrainGrid } from '@nn/shared';
 import type { CityBuilding } from './citygml.js';
 import { triangulatePolygon3d } from './triangulate.js';
 
@@ -9,10 +9,12 @@ export type BuildingMesh = {
   positions: Float32Array;
   /** Flat per-triangle normals, one per vertex. */
   normals: Float32Array;
-  /** Walls: (metres along wall, height above ground). Roofs: world (x, z). */
+  /** Walls: (metres along wall, height above the LoD2 base, negative on plinths). Roofs: world (x, z). */
   facadeUv: Float32Array;
   /** Per vertex: 0 wall, 1 roof (ground/closure are dropped). */
   kind: Uint8Array;
+  /** Local y of the LoD2 base (lowest ground point minus terrain datum); 0 without terrain. */
+  base: number;
   buildingSeed: number;
   /** Bit 0: address on Neusser Str. (shop row). Bit 1 (backdrop) is set in Task 7. */
   flags: number;
@@ -107,7 +109,20 @@ export function isInternalWall(footprint: Footprint, roofTris: ArrayLike<number>
   return true;
 }
 
-export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
+/** A plinth is added when the terrain under the walls drops this far below the base (m)… */
+const PLINTH_TRIGGER = 0.3;
+/** …and reaches this far below the lowest terrain point (m). */
+const PLINTH_DEPTH = 0.3;
+/** Wall edge counts as a bottom edge when both ends are at most this far above the wall's lowest point (m). */
+const BOTTOM_TOLERANCE = 0.05;
+
+/**
+ * Without `ground`, y is height above the building's lowest ground point (y = z − minZ). With `ground`,
+ * y is absolute local height (z − datum); facade v stays z − minZ, and where the terrain under the walls
+ * drops 0.3 m or more below the base, every wall bottom edge gets a plinth quad down to 0.3 m below
+ * the lowest terrain point.
+ */
+export function buildBuildingMesh(b: CityBuilding, terrain?: { datum: number; terrain: TerrainGrid }): BuildingMesh | null {
   const ground = b.surfaces.filter((s) => s.kind === 'ground');
   const groundPts = ground.flatMap((s) => s.outer);
   const allPts = b.surfaces.flatMap((s) => s.outer);
@@ -144,6 +159,11 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
     if (s.kind !== 'roof') continue;
     for (const k of t.indices) roofTris.push(local[k * 3]!, local[k * 3 + 1]!, local[k * 3 + 2]!);
   }
+
+  // Internal-wall and roof tests above work in the relative frame (y = z − minZ); emitted y is shifted by `base`.
+  const base = terrain ? minZ - terrain.datum : 0;
+  type Edge = { a: readonly [number, number, number]; b: readonly [number, number, number]; ua: number; ub: number; n: readonly [number, number, number] };
+  const bottomEdges: Edge[] = [];
 
   const pos: number[] = [], nor: number[] = [], uv: number[] = [], kind: number[] = [];
   for (const { s, t, local } of surfaces) {
@@ -196,16 +216,52 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
         [bb, c] = [c, bb];
         n = [-n[0], -n[1], -n[2]];
       }
-      for (const i of [a, bb, c]) {
-        pos.push(local[i]!, local[i + 1]!, local[i + 2]!);
+      const corners = [a, bb, c];
+      for (const i of corners) {
+        pos.push(local[i]!, local[i + 1]! + base, local[i + 2]!);
         nor.push(n[0], n[1], n[2]);
         if (isWall) uv.push(Math.hypot(local[i]! - x0, local[i + 2]! - z0), local[i + 1]!);
         else uv.push(local[i]!, local[i + 2]!);
         kind.push(isWall ? 0 : 1);
       }
+      if (!terrain || !isWall) continue;
+      const wallMin = Math.min(...ring.map((p) => p[1]));
+      for (let e = 0; e < 3; e++) {
+        const i = corners[e]!, j = corners[(e + 1) % 3]!;
+        if (local[i + 1]! > wallMin + BOTTOM_TOLERANCE || local[j + 1]! > wallMin + BOTTOM_TOLERANCE) continue;
+        bottomEdges.push({
+          a: [local[i]!, local[i + 1]! + base, local[i + 2]!],
+          b: [local[j]!, local[j + 1]! + base, local[j + 2]!],
+          ua: Math.hypot(local[i]! - x0, local[i + 2]! - z0),
+          ub: Math.hypot(local[j]! - x0, local[j + 2]! - z0),
+          n,
+        });
+      }
     }
   }
   if (pos.length === 0) return null;
+
+  if (terrain && bottomEdges.length > 0) {
+    let gmin = Infinity;
+    for (const e of bottomEdges) gmin = Math.min(gmin, heightAt(terrain.terrain, e.a[0], e.a[2]), heightAt(terrain.terrain, e.b[0], e.b[2]));
+    for (const g of footprint) for (const p of g.outer) gmin = Math.min(gmin, heightAt(terrain.terrain, p.x, p.z));
+    if (gmin < base + PLINTH_TRIGGER) {
+      const bottom = gmin - PLINTH_DEPTH;
+      for (const { a, b: e, ua, ub, n } of bottomEdges) {
+        // Below edge a→b of a wall triangle: walking b→a keeps the wall's winding on the other side of the edge.
+        const quad: [readonly [number, number, number], number][] = [
+          [e, ub], [a, ua], [[a[0], bottom, a[2]], ua],
+          [e, ub], [[a[0], bottom, a[2]], ua], [[e[0], bottom, e[2]], ub],
+        ];
+        for (const [p, u] of quad) {
+          pos.push(p[0], p[1], p[2]);
+          nor.push(n[0], n[1], n[2]);
+          uv.push(u, p[1] - base);
+          kind.push(0);
+        }
+      }
+    }
+  }
 
   return {
     id: b.id,
@@ -214,6 +270,7 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
     normals: new Float32Array(nor),
     facadeUv: new Float32Array(uv),
     kind: new Uint8Array(kind),
+    base,
     buildingSeed: fnv1a(b.id),
     flags: b.street === 'Neusser Str.' ? FLAG_NEUSSER : 0,
   };

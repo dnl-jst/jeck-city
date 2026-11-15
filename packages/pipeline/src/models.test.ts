@@ -40,3 +40,32 @@ test('buildCollision adds extra triangle soups', () => {
   const more = buildCollision({ buildings: [], curb: empty, sidewalk: empty, boundary, extra: [new Float32Array([0, 0, 0, 1, 5, 0, 0, 5, 1])] });
   expect(more.indices.length - base.indices.length).toBe(3);
 });
+
+test('lift moves render and collision', async () => {
+  const src = await glb([{ name: 'church', tx: 3, tz: 4 }, { name: 'church_col', tx: 3, tz: 4 }]);
+  const renderMinY = async (bin: Uint8Array) => {
+    const { MeshoptDecoder } = await import('meshoptimizer');
+    const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');
+    await MeshoptDecoder.ready;
+    const doc = await new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder }).readBinary(bin);
+    let min = Infinity;
+    for (const n of doc.getRoot().listNodes()) {
+      const m = n.getWorldMatrix();
+      for (const prim of n.getMesh()?.listPrimitives() ?? []) {
+        const pos = prim.getAttribute('POSITION')!;
+        const p = [0, 0, 0];
+        for (let i = 0; i < pos.getCount(); i++) {
+          pos.getElement(i, p);
+          min = Math.min(min, m[1] * p[0]! + m[5] * p[1]! + m[9] * p[2]! + m[13]);
+        }
+      }
+    }
+    return min;
+  };
+  const colMinY = (c: Float32Array) => Math.min(...Array.from({ length: c.length / 3 }, (_, i) => c[i * 3 + 1]!));
+  const flat = await prepareModel(src);
+  const lifted = await prepareModel(src, 2.5);
+  expect((await renderMinY(lifted.glb)) - (await renderMinY(flat.glb))).toBeCloseTo(2.5, 4);
+  expect(colMinY(lifted.collision) - colMinY(flat.collision)).toBeCloseTo(2.5, 5);
+  expect(lifted.centre).toEqual(flat.centre);
+});
