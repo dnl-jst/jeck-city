@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
+import { buildBuildingMesh, isInternalWall, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { utmToLocal } from '@nn/shared';
 
@@ -122,4 +122,32 @@ test('concave U house: every wall normal points out of the footprint, windings a
     expect(cx * nx + cz * nz).toBeGreaterThan(0);
   }
   expect(walls).toBe(16);
+});
+
+test('internal walls: probes both sides inside the footprint and roofs on both sides reach the wall top', () => {
+  const sq = (x0: number, x1: number) => ({ outer: [{ x: x0, z: 0 }, { x: x1, z: 0 }, { x: x1, z: 10 }, { x: x0, z: 10 }], holes: [] });
+  const footprint = [sq(0, 10), sq(10, 20)]; // two building parts sharing the edge x = 10
+  const flatRoof = (x0: number, x1: number, y: number) => [x0, y, 0, x1, y, 0, x1, y, 10, x0, y, 0, x1, y, 10, x0, y, 10];
+  const even = [...flatRoof(0, 10, 10), ...flatRoof(10, 20, 10)];
+  const stepped = [...flatRoof(0, 10, 10), ...flatRoof(10, 20, 6)];
+  const wall = (x: number, z0: number, z1: number, h: number) => [[x, 0, z0], [x, 0, z1], [x, h, z1], [x, h, z0]] as [number, number, number][];
+  const east = { x: 1, z: 0 };
+  // party wall of equal parts: hidden
+  expect(isInternalWall(footprint, even, wall(10, 0, 10, 10), east)).toBe(true);
+  // the tall part's wall rises above the lower part's roof: visible
+  expect(isInternalWall(footprint, stepped, wall(10, 0, 10, 10), east)).toBe(false);
+  // outer walls
+  expect(isInternalWall(footprint, even, wall(0, 0, 10, 10), east)).toBe(false);
+  expect(isInternalWall(footprint, even, wall(20, 0, 10, 10), east)).toBe(false);
+  // a seam wall sticking out of the footprint at one end is visible there
+  expect(isInternalWall(footprint, even, wall(10, 0, 14, 10), east)).toBe(false);
+});
+
+test('internal walls: a gable seam under a matching gable roof is hidden, one poking above it is not', () => {
+  const footprint = [{ outer: [{ x: 0, z: 0 }, { x: 20, z: 0 }, { x: 20, z: 10 }, { x: 0, z: 10 }], holes: [] }];
+  // gable roof, ridge along x at z = 5 (y 13), eaves at z = 0 / 10 (y 9)
+  const roof = [0, 9, 0, 20, 9, 0, 20, 13, 5, 0, 9, 0, 20, 13, 5, 0, 13, 5, 0, 13, 5, 20, 13, 5, 20, 9, 10, 0, 13, 5, 20, 9, 10, 0, 9, 10];
+  const gable = (apex: number) => [[10, 0, 0], [10, 0, 10], [10, 9, 10], [10, apex, 5], [10, 9, 0]] as [number, number, number][];
+  expect(isInternalWall(footprint, roof, gable(13), { x: 1, z: 0 })).toBe(true);
+  expect(isInternalWall(footprint, roof, gable(14), { x: 1, z: 0 })).toBe(false);
 });

@@ -71,3 +71,13 @@ export function junctions(lines: Pt[][]): Map<string, Pt> {
   for (const [k, e] of deg) if (e.n >= 3) out.set(k, e.p);
   return out;
 }
+
+/** Even-odd point-in-polygon test (ring may or may not repeat its first point). */
+export function pointInPolygon(p: Pt, ring: Pt[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const a = ring[i]!, b = ring[j]!;
+    if (a.z > p.z !== b.z > p.z && p.x < ((b.x - a.x) * (p.z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
+  }
+  return inside;
+}

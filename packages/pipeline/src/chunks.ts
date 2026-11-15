@@ -1,0 +1,219 @@
+import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
+import { EXTMeshoptCompression } from '@gltf-transform/extensions';
+import { chunkKey, type CollisionAsset } from '@nn/shared';
+import { MeshoptEncoder } from 'meshoptimizer';
+import type { BuildingMesh } from './buildings.js';
+import type { Pt } from './osm.js';
+import type { Mesh } from './streets.js';
+
+export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'tram', 'green', 'squares'] as const;
+export type StreetName = (typeof STREET_MESHES)[number];
+export type StreetMeshes = Record<StreetName, Mesh>;
+/** data/building-overrides.json: building id → replacement GLB path. Listed buildings are left out. */
+export type Overrides = Record<string, string>;
+
+export const FLAG_BACKDROP = 2;
+
+/** All buildings of one chunk, indexed; every attribute is per vertex and float. */
+export type BuildingBatch = {
+  positions: Float32Array;
+  normals: Float32Array;
+  facadeUv: Float32Array;
+  kind: Float32Array;
+  seed: Float32Array; // buildingSeed / 2^32
+  flags: Float32Array;
+  indices: Uint32Array;
+  ranges: { id: string; firstVertex: number; vertexCount: number }[];
+};
+export type ChunkGeometry = { key: string; ix: number; iz: number; buildings?: BuildingBatch; streets: Partial<Record<StreetName, Mesh>> };
+
+class BatchBuilder {
+  pos: number[] = []; nor: number[] = []; uv: number[] = []; kind: number[] = []; seed: number[] = []; flags: number[] = [];
+  idx: number[] = [];
+  ranges: BuildingBatch['ranges'] = [];
+
+  /** Appends one building, merging vertices that are identical in all attributes (within the building only). */
+  add(b: BuildingMesh): void {
+    const first = this.pos.length / 3;
+    const seen = new Map<string, number>();
+    const seed = b.buildingSeed / 2 ** 32;
+    for (let v = 0; v < b.kind.length; v++) {
+      const p = b.positions, n = b.normals, u = b.facadeUv;
+      const key = `${p[v * 3]},${p[v * 3 + 1]},${p[v * 3 + 2]},${n[v * 3]},${n[v * 3 + 1]},${n[v * 3 + 2]},${u[v * 2]},${u[v * 2 + 1]},${b.kind[v]}`;
+      let i = seen.get(key);
+      if (i === undefined) {
+        i = this.pos.length / 3;
+        seen.set(key, i);
+        this.pos.push(p[v * 3]!, p[v * 3 + 1]!, p[v * 3 + 2]!);
+        this.nor.push(n[v * 3]!, n[v * 3 + 1]!, n[v * 3 + 2]!);
+        this.uv.push(u[v * 2]!, u[v * 2 + 1]!);
+        this.kind.push(b.kind[v]!);
+        this.seed.push(seed);
+        this.flags.push(b.flags);
+      }
+      this.idx.push(i);
+    }
+    this.ranges.push({ id: b.id, firstVertex: first, vertexCount: this.pos.length / 3 - first });
+  }
+
+  build(): BuildingBatch {
+    const f = (a: number[]) => Float32Array.from(a);
+    return {
+      positions: f(this.pos), normals: f(this.nor), facadeUv: f(this.uv), kind: f(this.kind), seed: f(this.seed), flags: f(this.flags),
+      indices: Uint32Array.from(this.idx), ranges: this.ranges,
+    };
+  }
+}
+
+export type Rect = { minX: number; minZ: number; maxX: number; maxZ: number };
+export const GROUND_MARGIN = 200;
+
+/** The world area: boundary bbox + 200 m (collision ground; street triangles outside are dropped). */
+export function worldRect(boundary: Pt[]): Rect {
+  const xs = boundary.map((p) => p.x), zs = boundary.map((p) => p.z);
+  return {
+    minX: Math.min(...xs) - GROUND_MARGIN, maxX: Math.max(...xs) + GROUND_MARGIN,
+    minZ: Math.min(...zs) - GROUND_MARGIN, maxZ: Math.max(...zs) + GROUND_MARGIN,
+  };
+}
+const inRect = (r: Rect | undefined, x: number, z: number) => !r || (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ);
+
+/** Copies the triangles of `m` whose centroid lies in each chunk (and in `area`) into per-chunk meshes (vertices remapped). */
+function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
+  const parts = new Map<string, { remap: Map<number, number>; pos: number[]; uv: number[]; idx: number[] }>();
+  const p = m.positions;
+  for (let t = 0; t < m.indices.length; t += 3) {
+    const [a, b, c] = [m.indices[t]!, m.indices[t + 1]!, m.indices[t + 2]!];
+    const cx = (p[a * 3]! + p[b * 3]! + p[c * 3]!) / 3, cz = (p[a * 3 + 2]! + p[b * 3 + 2]! + p[c * 3 + 2]!) / 3;
+    if (!inRect(area, cx, cz)) continue;
+    const key = chunkKey(cx, cz);
+    let part = parts.get(key);
+    if (!part) parts.set(key, (part = { remap: new Map(), pos: [], uv: [], idx: [] }));
+    for (const v of [a, b, c]) {
+      let i = part.remap.get(v);
+      if (i === undefined) {
+        i = part.pos.length / 3;
+        part.remap.set(v, i);
+        part.pos.push(p[v * 3]!, p[v * 3 + 1]!, p[v * 3 + 2]!);
+        part.uv.push(m.uv[v * 2]!, m.uv[v * 2 + 1]!);
+      }
+      part.idx.push(i);
+    }
+  }
+  const out = new Map<string, Mesh>();
+  for (const [k, q] of parts) out.set(k, { positions: Float32Array.from(q.pos), indices: Uint32Array.from(q.idx), uv: Float32Array.from(q.uv) });
+  return out;
+}
+
+/**
+ * Buildings by centroid, street triangles by triangle centroid; positions stay in world space.
+ * Street triangles outside `area` are dropped (OSM ways reach far beyond the play area).
+ */
+export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect): ChunkGeometry[] {
+  const chunks = new Map<string, ChunkGeometry>();
+  const chunk = (key: string): ChunkGeometry => {
+    let c = chunks.get(key);
+    if (!c) {
+      const [ix, iz] = key.split('_').map(Number) as [number, number];
+      chunks.set(key, (c = { key, ix, iz, streets: {} }));
+    }
+    return c;
+  };
+  const batches = new Map<string, BatchBuilder>();
+  for (const b of buildings) {
+    if (b.id in overrides) continue; // TODO: insert the replacement GLB from overrides[b.id] into this chunk
+    const key = chunkKey(b.centroid.x, b.centroid.z);
+    chunk(key);
+    let batch = batches.get(key);
+    if (!batch) batches.set(key, (batch = new BatchBuilder()));
+    batch.add(b);
+  }
+  for (const [key, batch] of batches) chunk(key).buildings = batch.build();
+  for (const name of STREET_MESHES) for (const [key, m] of splitMesh(streets[name], area)) chunk(key).streets[name] = m;
+  return [...chunks.values()].sort((a, b) => a.iz - b.iz || a.ix - b.ix);
+}
+
+let encoderReady: Promise<void> | undefined;
+
+/** chunk_*.glb bytes, layout as documented in @nn/shared manifest.ts; meshopt-compressed, not quantized (lossless). */
+export async function encodeChunkGlb(c: ChunkGeometry): Promise<Uint8Array> {
+  await (encoderReady ??= MeshoptEncoder.ready);
+  const doc = new Document();
+  doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
+  const buffer = doc.createBuffer();
+  const scene = doc.createScene(`chunk_${c.key}`);
+  // all arrays here are ArrayBuffer-backed (never shared memory)
+  const accessor = (type: 'SCALAR' | 'VEC2' | 'VEC3', array: Float32Array | Uint16Array | Uint32Array) =>
+    doc.createAccessor().setType(type).setArray(array as TypedArray).setBuffer(buffer);
+  const indices = (idx: Uint32Array, vertexCount: number) => accessor('SCALAR', vertexCount <= 0xffff ? Uint16Array.from(idx) : idx);
+  const addMesh = (name: string, attrs: [string, 'SCALAR' | 'VEC2' | 'VEC3', Float32Array][], idx: Uint32Array) => {
+    const prim = doc.createPrimitive().setIndices(indices(idx, attrs[0]![2].length / 3));
+    for (const [sem, type, arr] of attrs) prim.setAttribute(sem, accessor(type, arr));
+    scene.addChild(doc.createNode(name).setMesh(doc.createMesh(name).addPrimitive(prim)));
+  };
+  const b = c.buildings;
+  if (b) {
+    addMesh('buildings', [
+      ['POSITION', 'VEC3', b.positions], ['NORMAL', 'VEC3', b.normals], ['_FACADEUV', 'VEC2', b.facadeUv],
+      ['_KIND', 'SCALAR', b.kind], ['_SEED', 'SCALAR', b.seed], ['_FLAGS', 'SCALAR', b.flags],
+    ], b.indices);
+    scene.setExtras({ buildings: b.ranges });
+  }
+  for (const name of STREET_MESHES) {
+    const m = c.streets[name];
+    if (m && m.indices.length > 0) addMesh(name, [['POSITION', 'VEC3', m.positions], ['TEXCOORD_0', 'VEC2', m.uv]], m.indices);
+  }
+  const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.encoder': MeshoptEncoder });
+  return io.writeBinary(doc);
+}
+
+/** Welds exactly equal positions into one indexed triangle soup. */
+class SoupBuilder {
+  private seen = new Map<string, number>();
+  vertices: number[] = [];
+  indices: number[] = [];
+  vertex(x: number, y: number, z: number): number {
+    const key = `${x},${y},${z}`;
+    let i = this.seen.get(key);
+    if (i === undefined) {
+      i = this.vertices.length / 3;
+      this.seen.set(key, i);
+      this.vertices.push(x, y, z);
+    }
+    return i;
+  }
+  tri(p: ArrayLike<number>, a: number, b: number, c: number): void {
+    const ia = this.vertex(p[a * 3]!, p[a * 3 + 1]!, p[a * 3 + 2]!);
+    const ib = this.vertex(p[b * 3]!, p[b * 3 + 1]!, p[b * 3 + 2]!);
+    const ic = this.vertex(p[c * 3]!, p[c * 3 + 1]!, p[c * 3 + 2]!);
+    if (ia !== ib && ib !== ic && ia !== ic) this.indices.push(ia, ib, ic);
+  }
+}
+
+/**
+ * collision.bin content: building walls/roofs, kerbs (inside the world area) and one ground rectangle
+ * at y = 0 covering the boundary bbox + 200 m. Vertices are welded; overridden buildings are left out.
+ */
+export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean }): CollisionAsset {
+  const s = new SoupBuilder();
+  for (const b of o.buildings) {
+    if (o.overrides && b.id in o.overrides) continue;
+    const skipRoofs = o.dropBackdropRoofs === true && (b.flags & FLAG_BACKDROP) !== 0;
+    for (let v = 0; v < b.kind.length; v += 3) if (!(skipRoofs && b.kind[v] === 1)) s.tri(b.positions, v, v + 1, v + 2);
+  }
+  const area = worldRect(o.boundary);
+  const c = o.curb;
+  for (let t = 0; t < c.indices.length; t += 3) {
+    const [a, b, d] = [c.indices[t]!, c.indices[t + 1]!, c.indices[t + 2]!];
+    if (inRect(area, (c.positions[a * 3]! + c.positions[b * 3]! + c.positions[d * 3]!) / 3, (c.positions[a * 3 + 2]! + c.positions[b * 3 + 2]! + c.positions[d * 3 + 2]!) / 3)) s.tri(c.positions, a, b, d);
+  }
+  const { minX: x0, maxX: x1, minZ: z0, maxZ: z1 } = area;
+  const ground = [x0, 0, z0, x0, 0, z1, x1, 0, z1, x1, 0, z0].map(Math.fround);
+  s.tri(ground, 0, 1, 2); // counter-clockwise seen from above (+y normal)
+  s.tri(ground, 0, 2, 3);
+  return {
+    vertices: Float32Array.from(s.vertices),
+    indices: Uint32Array.from(s.indices),
+    boundary: Float32Array.from(o.boundary.flatMap((p) => [p.x, p.z])),
+  };
+}

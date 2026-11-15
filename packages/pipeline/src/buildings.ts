@@ -41,9 +41,70 @@ function inRing(r: Pt[], x: number, z: number): boolean {
   return inside;
 }
 
+export type Footprint = { outer: Pt[]; holes: Pt[][] }[];
+
 /** Point in union of ground polygons (holes respected). */
-function insideFootprint(fp: { outer: Pt[]; holes: Pt[][] }[], x: number, z: number): boolean {
+function insideFootprint(fp: Footprint, x: number, z: number): boolean {
   return fp.some((g) => inRing(g.outer, x, z) && !g.holes.some((h) => inRing(h, x, z)));
+}
+
+/** Highest roof y above (x, z); roofTris are local x,y,z triples. undefined if no roof covers the point. */
+function roofHeightAt(roofTris: ArrayLike<number>, x: number, z: number): number | undefined {
+  let best: number | undefined;
+  for (let i = 0; i + 8 < roofTris.length; i += 9) {
+    const ax = roofTris[i]!, ay = roofTris[i + 1]!, az = roofTris[i + 2]!;
+    const bx = roofTris[i + 3]!, by = roofTris[i + 4]!, bz = roofTris[i + 5]!;
+    const cx = roofTris[i + 6]!, cy = roofTris[i + 7]!, cz = roofTris[i + 8]!;
+    const det = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(det) < 1e-12) continue;
+    const l1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / det;
+    const l2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / det;
+    const l3 = 1 - l1 - l2;
+    if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+    const y = l1 * ay + l2 * by + l3 * cy;
+    if (best === undefined || y > best) best = y;
+  }
+  return best;
+}
+
+const FOOTPRINT_PROBE = 0.3;
+const ROOF_PROBE = 0.05;
+const HIDDEN_TOLERANCE = 0.1;
+
+/**
+ * A wall inside the building (party wall between parts, part seam): at the wall centre and near
+ * each wall vertex, probes 0.3 m to both sides lie in the building's own footprint, and on both
+ * sides the roof reaches the wall's top edge there, so no part of the wall can be seen (a taller
+ * part's wall rising above a lower part's roof stays). `ring` is the wall polygon in local x,y,z,
+ * `normal` its horizontal unit normal.
+ */
+export function isInternalWall(footprint: Footprint, roofTris: ArrayLike<number>, ring: readonly (readonly [number, number, number])[], normal: Pt): boolean {
+  const cx = ring.reduce((m, p) => m + p[0], 0) / ring.length;
+  const cz = ring.reduce((m, p) => m + p[2], 0) / ring.length;
+  const dx = -normal.z, dz = normal.x; // along the wall
+  const along = ring.map((p) => (p[0] - cx) * dx + (p[2] - cz) * dz);
+  /** Highest point of the wall polygon above wall position s. */
+  const topAt = (s: number): number => {
+    let top = -Infinity;
+    for (let i = 0; i < ring.length; i++) {
+      const j = (i + 1) % ring.length;
+      const [si, sj] = [along[i]!, along[j]!];
+      if ((si - s) * (sj - s) > 0) continue;
+      const y = Math.abs(sj - si) < 1e-9 ? Math.max(ring[i]![1], ring[j]![1]) : ring[i]![1] + ((s - si) / (sj - si)) * (ring[j]![1] - ring[i]![1]);
+      top = Math.max(top, y);
+    }
+    return top;
+  };
+  for (const s of [0, ...along.map((v) => v * 0.95)]) {
+    const px = cx + dx * s, pz = cz + dz * s;
+    const top = topAt(s);
+    for (const side of [1, -1]) {
+      if (!insideFootprint(footprint, px + normal.x * FOOTPRINT_PROBE * side, pz + normal.z * FOOTPRINT_PROBE * side)) return false;
+      const roof = roofHeightAt(roofTris, px + normal.x * ROOF_PROBE * side, pz + normal.z * ROOF_PROBE * side);
+      if (roof === undefined || roof < top - HIDDEN_TOLERANCE) return false;
+    }
+  }
+  return true;
 }
 
 export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
@@ -61,22 +122,32 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
   }
   cx /= refPts.length; cz /= refPts.length;
 
-  const footprint = ground.map((g) => ({
+  const footprint: Footprint = ground.map((g) => ({
     outer: g.outer.map(([e, n]) => utmToLocal(e, n)),
     holes: g.holes.map((h) => h.map(([e, n]) => utmToLocal(e, n))),
   }));
 
-  const pos: number[] = [], nor: number[] = [], uv: number[] = [], kind: number[] = [];
-  for (const s of b.surfaces) {
-    if (s.kind !== 'wall' && s.kind !== 'roof') continue;
+  const surfaces = b.surfaces.flatMap((s) => {
+    if (s.kind !== 'wall' && s.kind !== 'roof') return [];
     const t = triangulatePolygon3d(s.outer, s.holes);
-    if (!t) continue;
-    const isWall = s.kind === 'wall';
+    if (!t) return [];
     const local: number[] = [];
     for (let i = 0; i < t.positions.length; i += 3) {
       const { x, z } = utmToLocal(t.positions[i]!, t.positions[i + 1]!);
       local.push(x, t.positions[i + 2]! - minZ, z);
     }
+    return [{ s, t, local }];
+  });
+  // all roof triangles of the building (local x,y,z), for the internal-wall test
+  const roofTris: number[] = [];
+  for (const { s, t, local } of surfaces) {
+    if (s.kind !== 'roof') continue;
+    for (const k of t.indices) roofTris.push(local[k * 3]!, local[k * 3 + 1]!, local[k * 3 + 2]!);
+  }
+
+  const pos: number[] = [], nor: number[] = [], uv: number[] = [], kind: number[] = [];
+  for (const { s, t, local } of surfaces) {
+    const isWall = s.kind === 'wall';
     // Wall u origin: first point of the wall's outer ring.
     const { x: x0, z: z0 } = utmToLocal(s.outer[0]![0], s.outer[0]![1]);
 
@@ -116,6 +187,7 @@ export function buildBuildingMesh(b: CityBuilding): BuildingMesh | null {
     else if (footprint.length > 0) flipSurface = insideFootprint(footprint, mcx + (tx / hl) * 0.3, mcz + (tz / hl) * 0.3);
     else flipSurface = tx * (mcx - cx) + tz * (mcz - cz) < 0;
     if (flipSurface) { tx = -tx; ty = -ty; tz = -tz; }
+    if (isWall && hl >= 1e-6 && footprint.length > 0 && isInternalWall(footprint, roofTris, ring, { x: tx / hl, z: tz / hl })) continue;
     for (let k = 0; k < t.indices.length; k += 3) {
       let [a, bb, c] = tri(k);
       let n = normalOf(a, bb, c);
