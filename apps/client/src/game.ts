@@ -280,7 +280,9 @@ export class Game {
     const T = TUNING.character;
     const capsule = new R.Capsule(T.height / 2 - T.radius, T.radius);
     // bottom 0.3 m above the road: clears kerbs, touches walls, posts and other cars
-    const centre = { x, y: car.y - VEHICLE_REST_Y + 0.3 + T.height / 2, z };
+    // (from the higher of the car's ground and the terrain at the spot, so cross-slopes don't block it)
+    const bottom = Math.max(car.y - VEHICLE_REST_Y, heightAt(this.ctx.terrain, x, z) + 0.12) + 0.3;
+    const centre = { x, y: bottom + T.height / 2, z };
     return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, solid) === null;
   }
 }

@@ -27,9 +27,12 @@ export function tileNamesForBounds(minE: number, minN: number, maxE: number, max
 
 export const LOD2_TILES: string[] = tileNamesForBounds(BOUNDS.minE, BOUNDS.minN, BOUNDS.maxE, BOUNDS.maxN);
 
+/** NRW publishes DGM1 per vintage; the year is part of the file name. */
+export const DGM_VINTAGE = '2022';
+
 export const DGM_TILES: string[] = LOD2_TILES.map((n) => {
   const [, , e, nn] = n.split('_');
-  return `dgm1_32_${e}_${nn}_1_nw_2022.tif`;
+  return `dgm1_32_${e}_${nn}_1_nw_${DGM_VINTAGE}.tif`;
 });
 
 async function exists(path: string): Promise<boolean> {
@@ -81,6 +84,7 @@ export async function fetchDgmTiles(dir: string): Promise<string[]> {
     }
     console.log(`download ${name}`);
     const res = await fetch(DGM_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
+    if (res.status === 404) throw new Error(`DGM1 ${name}: HTTP 404. DGM_VINTAGE ('${DGM_VINTAGE}') in fetch.ts may be outdated, the NRW vintage may have changed (check the directory listing at ${DGM_BASE}).`);
     if (!res.ok || !res.body) throw new Error(`DGM1 ${name}: HTTP ${res.status}`);
     const tmp = `${path}.part`;
     try {

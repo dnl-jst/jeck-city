@@ -83,6 +83,10 @@ function sampleMosaic(m: Mosaic, e: number, n: number): number {
 export function terrainFromMosaic(m: Mosaic, rect: Rect): TerrainGrid {
   const x0 = Math.floor(rect.minX), z0 = Math.floor(rect.minZ);
   const cols = Math.ceil(rect.maxX) - x0 + 1, rows = Math.ceil(rect.maxZ) - z0 + 1;
+  const eMin = ORIGIN_UTM.e + x0, eMax = ORIGIN_UTM.e + x0 + cols - 1;
+  const nMax = ORIGIN_UTM.n - z0, nMin = ORIGIN_UTM.n - (z0 + rows - 1);
+  if (eMin < m.e0 || eMax > m.e0 + m.width || nMax > m.n0 || nMin < m.n0 - m.height)
+    throw new Error(`terrain rect E ${eMin}..${eMax}, N ${nMin}..${nMax} lies outside the DGM mosaic E ${m.e0}..${m.e0 + m.width}, N ${m.n0 - m.height}..${m.n0}`);
   const at = (x: number, z: number) => sampleMosaic(m, ORIGIN_UTM.e + x, ORIGIN_UTM.n - z);
   const datum = Math.round(at(0, 0) * 10) / 10;
   const heights = new Float32Array(cols * rows);

@@ -182,7 +182,7 @@ export class Lighting {
     this.sun.intensity = mood.sunI;
     this.sun.castShadow = lit;
     const texel = (2 * SHADOW_RADIUS) / 2048;
-    const t = this.sun.target.position.set(Math.round(cameraPos.x / texel) * texel, 0, Math.round(cameraPos.z / texel) * texel);
+    const t = this.sun.target.position.set(Math.round(cameraPos.x / texel) * texel, cameraPos.y, Math.round(cameraPos.z / texel) * texel);
     this.sun.position.copy(t).addScaledVector(dir, 400);
     this.sun.target.updateMatrixWorld();
 

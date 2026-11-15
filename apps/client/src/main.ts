@@ -194,7 +194,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     (x, z) => heightAt(terrain, x, z),
   );
   game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio });
-  if (devCam && debug && devCam.y > 20) {
+  if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
     game.fly.setHeading(devCam.yawDeg * DEG, devCam.pitchDeg * DEG);

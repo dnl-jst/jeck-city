@@ -62,3 +62,9 @@ test.skipIf(!existsSync(real))('readDgmTile reads a real tile', async () => {
   const t = await readDgmTile(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
   expect([t.e0, t.n0, t.width, t.height]).toEqual([356000, 5648000, 1000, 1000]);
 });
+
+test('terrainFromMosaic rejects a rect outside the mosaic', () => {
+  const m = ramp(ORIGIN_UTM.e - 5, ORIGIN_UTM.n + 5, 10, 10, () => 40);
+  expect(() => terrainFromMosaic(m, { minX: -3, maxX: 3, minZ: -3, maxZ: 3 })).not.toThrow();
+  expect(() => terrainFromMosaic(m, { minX: -3, maxX: 8, minZ: -3, maxZ: 3 })).toThrow(/outside the DGM mosaic/);
+});
