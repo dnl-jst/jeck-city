@@ -6,6 +6,7 @@ import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
 import { drapeMesh } from './drape.js';
+import { followDeviation, followTerrain } from './follow.js';
 import { prepareModel } from './models.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
@@ -28,6 +29,14 @@ const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
+/**
+ * Coarse terrain-following kerbs and sidewalks in the collision mesh: xz edges ≤ 8 m, cut further (down to 1 m) where
+ * the terrain under an edge bends more than 1.5 cm. Measured on the real terrain this beats a plain 4 m split in both
+ * size and deviation from the 1 m drape (see followTerrain).
+ */
+const KERB_EDGE = 8;
+const KERB_TOLERANCE = 0.015;
+const KERB_MIN_EDGE = 1;
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude und Gelände: Geobasis NRW (dl-de/zero-2.0)';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -145,7 +154,15 @@ async function main() {
     console.log(`model ${file} for ${ids.join(', ')}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid, lift ${lift.toFixed(2)} m`);
   }
 
-  const collision = buildCollision({ buildings, curb: streets.curb, sidewalk: streets.sidewalk, boundary: f.boundary, overrides, extra: modelCollision, terrain });
+  // collision: the 1 m drape would put millions of kerb triangles into the trimesh; a coarse terrain-following copy
+  // of the flat kerbs and sidewalks is enough (rendering keeps the draped meshes)
+  const curb = followTerrain(cropMesh(flatStreets.curb, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE);
+  const sidewalk = followTerrain(cropMesh(flatStreets.sidewalk, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE);
+  for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
+    const d = followDeviation(m, terrain);
+    console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm, p99 ${(d.p99 * 100).toFixed(2)} cm`);
+  }
+  const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: modelCollision, terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
   await writeFile(join(OUT_DIR, 'terrain.bin'), new Uint8Array(terrainBin));
