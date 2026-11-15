@@ -125,6 +125,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 - **Fremde Entitäten**: Interpolation zwischen Snapshots mit ~100 ms Puffer; kurze Extrapolation (≤ 150 ms) bei Paketverlust; danach einfrieren.
 - **Zündung/Radio/Licht**: Zustände kommen vom Server; die eigene Zündung startet beim Einsteigen sofort lokal (Ton), der Server bestätigt; Gas ist erst nach serverseitigem `running` wirksam (gleicher Zeitplan in `sim`, daher deckungsgleich).
 - **Ton** bleibt clientseitig: eigene Ereignisse lokal; fremde Autos bekommen positionsbezogene Motorstimmen (bestehende Per-Fahrzeug-Engine-Voice) für die nächsten **6** Autos, Aufprall-/Knockdown-Geräusche aus Server-Ereignissen.
+- **Radio fremder Autos (Nutzer):** hörbar, aber nur ein bisschen – leise und dumpf, wie aus einem geschlossenen Auto. Nur das nächste Auto mit laufendem Radio ≤ 25 m (ein zusätzlicher Stream höchstens); räumlich (Panner), Tiefpass ca. 800 Hz, Pegel deutlich unter dem eigenen Radio (Startwert −18 dB relativ), mit der Entfernung abfallend. Sender-ID kommt aus dem Autozustand (6.3).
 
 ## 8. Spielregeln im Mehrspieler
 
@@ -161,7 +162,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 ## 10. Betrieb
 
 - **Ein Docker-Image** (`apps/server/Dockerfile`, Multi-Stage): baut Client + Server, liefert den Client statisch aus (gzip/brotli vorkomprimiert, lange Cache-Header für Assets mit Hash) und Colyseus-WebSockets auf **einem Port**.
-- TLS über vorgeschalteten Reverse-Proxy (Beispielkonfiguration für Caddy im Repo). Anbieter frei (Nutzer stellt Server); Mindestgröße 2 vCPU / 2 GB RAM.
+- TLS über vorgeschalteten Reverse-Proxy (Beispielkonfiguration für Caddy im Repo). Anbieter frei (Nutzer stellt Server); Mindestgröße 2 vCPU / 2 GB RAM. **Nutzer: Docker-Image + Beispielkonfiguration genügen**; keine konkrete Plattform/Domain einrichten.
 - Konfiguration per Umgebungsvariablen: `PORT`, `MAX_PLAYERS` (100), `PUBLIC_URL`, `LOG_LEVEL`.
 - `/healthz` (200 + Spielerzahl, Tick-Dauer p95).
 - Logs: Join/Leave (ohne IP im Klartext), Tick-Überläufe, Fehler.
@@ -170,7 +171,8 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 
 ## 11. Einzelspieler / Offline
 
-- Vorschlag (offene Frage 2): Ist der Server nicht erreichbar, zeigt der Namensdialog „Server nicht erreichbar“ mit Knopf **„Allein spielen“** → lokale `WorldSim` wie heute. Mit `?offline=1` direkt allein.
+- **Kein Offline-Fallback für Spieler (Nutzer).** Ist der Server nicht erreichbar, zeigt der Namensdialog „Nippes ist gerade nicht erreichbar – versuch es später nochmal.“ mit automatischem Neuversuch alle 10 s.
+- (Claudes Entscheidung) Eine lokale `WorldSim` ohne Netz bleibt nur für Entwicklung und Tests erhalten (`?offline=1` nur mit Dev-Server bzw. `?debug=1`), damit `drive-check` und Einzeltests weiterlaufen.
 
 ## 12. Dev-Hooks
 
@@ -203,6 +205,6 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 ## 16. Offene Fragen an den Nutzer (vor der Umsetzung klären)
 
 0. **Auf die Gelände-Höhen warten oder flach starten?** Vorschlag: warten, bis die Gelände-Arbeit in `main` ist, und darauf aufbauen – sonst werden alle Höhen-Stellen (Requisiten, Autos, Aussteigen, Spawn) doppelt umgebaut und der Server/Client-Abgleich muss nach dem Gelände-Merge erneut geprüft werden. Falls doch flach begonnen wird: Höhe ausschließlich per Raycast gegen die statische Kollision (`surfaceY`) abfragen, keine eigenen Manifest-Felder einführen.
-1. **Radio für andere hörbar?** Vorschlag: Ja – wer neben einem Auto mit laufendem Radio steht, hört es leise und räumlich (nur das nächste Auto ≤ 25 m, damit nicht mehrere Streams gleichzeitig laden). Alternative: Radio bleibt privat.
-2. **Offline-Fallback „Allein spielen“**, wenn der Server nicht erreichbar ist (Vorschlag: ja).
-3. **Hosting:** Docker-Image + Caddy-Beispiel genügt, oder soll eine konkrete Zielplattform (Anbieter, Domain) mit eingerichtet werden?
+1. ~~Radio für andere hörbar?~~ **Entschieden:** ja, leise und dumpf (siehe 7).
+2. ~~Offline-Fallback?~~ **Entschieden:** nein (siehe 11).
+3. ~~Hosting?~~ **Entschieden:** Docker-Image + Caddy-Beispiel genügen (siehe 10).
