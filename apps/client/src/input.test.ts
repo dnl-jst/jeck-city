@@ -58,3 +58,12 @@ test('mouse movement accumulates until taken', () => {
   expect(i.takeMouse()).toEqual({ dx: 15, dy: -2 });
   expect(i.takeMouse()).toEqual({ dx: 0, dy: 0 });
 });
+
+test('takeWheel sums notches and resets', () => {
+  const i = new Input();
+  i.wheel(100);
+  i.wheel(50);
+  i.wheel(-30);
+  expect(i.takeWheel()).toBe(1);
+  expect(i.takeWheel()).toBe(0);
+});

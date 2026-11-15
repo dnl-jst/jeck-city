@@ -13,14 +13,23 @@ import { Props } from './props';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game, surfaceY } from './game';
+import { AudioMixer } from './audio/mixer';
+import { Radio } from './audio/radio';
+import { RadioTuner, type StationId } from './audio/stations';
+import { GameAudio } from './audio/game-audio';
 
 declare global {
   interface Window {
     __nnReady?: boolean | 'error';
     /** Dev: the renderer's per-frame statistics (draw calls, triangles). */
     __nnInfo?: () => { calls: number; triangles: number };
-    /** Dev/tests: what the player is doing, and the height of the first static surface below (x, 100, z). */
-    __nnState?: () => { mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number };
+    /**
+     * Dev/tests: what the player is doing (radio: the chosen station, null on foot), and the height of the first
+     * static surface below (x, 100, z).
+     */
+    __nnState?: () => {
+      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; radio: StationId | null;
+    };
     __nnSurfaceY?: (x: number, z: number) => number | null;
   }
 }
@@ -75,6 +84,19 @@ const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
 attachInput(input, canvas, (locked) => hud.setHint(locked ? '' : LOOK_HINT));
 const world = new WorldLoader(scene, '/world/');
+
+// sound: nothing plays before the first user gesture; the recordings load in parallel with the world
+const mixer = new AudioMixer();
+const radio = new Radio(() => new Audio(), {
+  onConnecting: () => gameAudio.radioEvents.onConnecting(),
+  onPlaying: () => gameAudio.radioEvents.onPlaying(),
+  onUnreachable: () => gameAudio.radioEvents.onUnreachable(),
+});
+const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
+void gameAudio.load();
+window.addEventListener('pointerdown', () => gameAudio.unlock(), { once: true });
+window.addEventListener('keydown', () => gameAudio.unlock(), { once: true });
+document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
 
 // courtyards, forecourts and gaps between buildings
 const ground = new Mesh(new PlaneGeometry(6000, 6000), world.street.ground);
@@ -154,7 +176,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   hud.setAttribution(m.attribution);
   props = new Props(scene, m);
   lighting = new Lighting(scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky);
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam });
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio });
   if (devCam && debug && devCam.y > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -163,7 +185,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   window.__nnState = () => {
     const f = game!.focus();
-    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed() };
+    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), radio: gameAudio.station };
   };
   window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
   hud.hideLoading();

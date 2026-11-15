@@ -2,6 +2,7 @@ import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
 import {
   Character, FixedStepper, staticWorldFilter, TUNING, VEHICLE_REST_Y, type PhysicsWorld, type Vehicle, type WorldManifest,
 } from '@nn/shared';
+import type { GameAudio } from './audio/game-audio';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
@@ -13,8 +14,10 @@ type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
 const DT = TUNING.world.dt;
 
-/** What the game needs from the page: scene and camera, input, HUD and the dev URL parameters. */
-export type GameContext = { scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null };
+/** What the game needs from the page: scene and camera, input, HUD, the dev URL parameters and (optionally) sound. */
+export type GameContext = {
+  scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null; audio?: GameAudio;
+};
 
 const STATIC_ONLY = staticWorldFilter();
 
@@ -46,11 +49,15 @@ export class Game {
   private proximityAge = Infinity;
   /** Space pressed on foot: jump in the next fixed step. */
   private jumpPending = false;
+  /** Seconds in the air on foot (for landing sounds). */
+  private airTime = 0;
+  private readonly tramStops: WorldManifest['tramStops'];
   private readonly qa = new Quaternion();
   private readonly qb = new Quaternion();
 
   constructor(readonly pw: PhysicsWorld, m: WorldManifest, private readonly ctx: GameContext) {
     const { scene, camera, input, devCam } = ctx;
+    this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
     this.driven = new DrivenCar(scene);
     this.fly = new FreeFly(camera, input);
@@ -79,9 +86,11 @@ export class Game {
 
   /** One rendered frame: input, fixed physics steps, poses for rendering. night 0..1 drives the car lights. */
   frame(dt: number, night: number): void {
-    const { input, debug } = this.ctx;
+    const { input, debug, audio } = this.ctx;
     const mouse = input.takeMouse();
+    const notches = input.takeWheel();
     if (debug && input.consume('KeyF')) this.toggleFly();
+    if (input.consume('KeyN')) audio?.toggleMute();
     if (this.flying) {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
@@ -92,6 +101,8 @@ export class Game {
         if (this.mode === 'walk') this.getIn();
         else this.getOut();
       }
+      if (input.consume('KeyR')) audio?.radioStep(1);
+      if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
     const steer = this.flying ? { forward: 0, right: 0 } : input.axes();
     this.stepper.advance(dt, () => {
@@ -120,13 +131,17 @@ export class Game {
   }
 
   private render(dt: number, night: number): void {
-    const input = this.ctx.input;
+    const { input, audio } = this.ctx;
     const a = this.stepper.alpha;
     if (this.mode === 'walk') {
       const p = lerp3(this.prevPos, this.currPos, a);
       const v = this.char.velocity();
       this.figure.update(p.x, p.y, p.z, v, dt);
       if (!this.flying) this.follow.update(p, 0, dt);
+      const grounded = this.char.isGrounded();
+      if (!grounded) this.airTime += dt;
+      audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
+      if (grounded) this.airTime = 0;
     } else if (this.currPose) {
       const prev = this.prevPose ?? this.currPose;
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
@@ -134,6 +149,19 @@ export class Game {
       const braking = input.brake() || (input.axes().forward < 0 && this.vehicle!.speed() > 1);
       this.driven.setLights(night, braking && !this.flying);
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
+      if (audio) {
+        // velocity along / across the car's heading (forward = (sin h, cos h))
+        const h = headingOf(pose), v = this.vehicle!.chassis.linvel();
+        const s = Math.sin(h), c = Math.cos(h);
+        audio.drive({
+          forward: v.x * s + v.z * c, lateral: v.x * c - v.z * s, vx: v.x, vz: v.z,
+          throttle: this.flying ? 0 : input.axes().forward, handbrake: input.brake() && !this.flying,
+        }, dt);
+      }
+    }
+    if (audio) {
+      const f = this.focus();
+      audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }
   }
 
@@ -157,6 +185,7 @@ export class Game {
     this.driven.show(this.carColor);
     this.follow.setDriving(true, headingOf(this.currPose));
     this.mode = 'drive';
+    this.ctx.audio?.enterCar();
   }
 
   private getOut(): void {
@@ -182,6 +211,8 @@ export class Game {
     this.figure.visible = true;
     this.follow.setDriving(false);
     this.mode = 'walk';
+    this.airTime = 0;
+    this.ctx.audio?.exitCar();
   }
 
   /**
@@ -202,6 +233,16 @@ export class Game {
     const centre = { x, y: car.y - VEHICLE_REST_Y + 0.3 + T.height / 2, z };
     return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, solid) === null;
   }
+}
+
+/** The tram stop closest to (x, z) and its distance, or null if there is none. */
+function nearestStop(stops: WorldManifest['tramStops'], x: number, z: number): { x: number; z: number; dist: number } | null {
+  let best: { x: number; z: number; dist: number } | null = null;
+  for (const st of stops) {
+    const dist = Math.hypot(st.x - x, st.z - z);
+    if (!best || dist < best.dist) best = { x: st.x, z: st.z, dist };
+  }
+  return best;
 }
 
 function lerp3(a: Vec3, b: Vec3, t: number): Vec3 {

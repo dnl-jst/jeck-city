@@ -7,7 +7,7 @@ export function bootErrorMessage(e: unknown): string {
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
-export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · Maus umsehen (klicken)';
+export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
 export const HUD_CSS = `

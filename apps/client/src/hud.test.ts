@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from 'vitest';
 import { FetchError, NoWebGLError } from './errors';
-import { bootErrorMessage, HUD_CSS } from './hud';
+import { bootErrorMessage, CONTROLS_HINT, HUD_CSS } from './hud';
 
 describe('bootErrorMessage', () => {
   it('names missing WebGL', () => {
@@ -22,4 +22,8 @@ test('the hidden loading box lets clicks through to the canvas (pointer lock)', 
   const rule = /\.nn-loading\.nn-hidden\s*\{([^}]*)\}/.exec(HUD_CSS)?.[1] ?? '';
   expect(rule).toMatch(/opacity:\s*0/);
   expect(rule).toMatch(/pointer-events:\s*none/);
+});
+
+test('controls hint names radio and mute keys', () => {
+  expect(CONTROLS_HINT).toBe('WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · Maus umsehen (klicken)');
 });

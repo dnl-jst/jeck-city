@@ -81,6 +81,11 @@ export class Character {
     return { ...this.vel };
   }
 
+  /** Standing on ground after the last applied step (false while airborne). */
+  isGrounded(): boolean {
+    return this.grounded;
+  }
+
   /** Puts the feet at pos immediately (getting out of a car, server corrections); clears velocity. */
   teleport(pos: Vec3): void {
     const t = { x: pos.x, y: pos.y + CENTRE, z: pos.z };
