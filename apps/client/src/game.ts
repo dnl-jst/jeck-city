@@ -36,6 +36,8 @@ export class Game {
   readonly follow: FollowCamera;
   readonly fly: FreeFly;
   private readonly stepper = new FixedStepper(DT, 5);
+  /** Fixed physics steps taken so far (tests wait on simulation time, not on the wall clock). */
+  steps = 0;
   private vehicle: Vehicle | null = null;
   private carColor = 0;
   /** Physics state before and after the last step, blended by stepper.alpha for rendering. */
@@ -102,6 +104,7 @@ export class Game {
         this.vehicle!.applyInput({ throttle: steer.forward, steer: steer.right, brake: input.brake() && !this.flying });
       }
       this.pw.step();
+      this.steps++;
       this.prevPos = this.currPos;
       this.currPos = this.char.position();
       if (this.vehicle) {

@@ -23,8 +23,11 @@ const COS15 = Math.cos((15 * Math.PI) / 180);
 const COS30 = Math.cos((30 * Math.PI) / 180);
 
 export type PieceKind = 'centre' | 'lane' | 'cycle' | 'park' | 'furt' | 'red' | 'bike';
-/** One emitted marking (for tests and stats): arc lengths on its road, side (+1 right, -1 left, 0 centre), centre position. */
-export type Piece = { kind: PieceKind; road: number; side: number; s0: number; s1: number; x: number; z: number };
+/**
+ * One emitted marking (for tests and stats): arc lengths on its road, side (+1 right, -1 left, 0 centre), centre
+ * position; bike pictograms also carry the direction they face (+1 along the way, -1 against it).
+ */
+export type Piece = { kind: PieceKind; road: number; side: number; s0: number; s1: number; x: number; z: number; travel?: number };
 
 type Arm = { dir: Pt; hw: number; road: Road; y: number };
 /** One arm of a road at a junction node: the other carriageways it crosses there, and whether the road goes straight on. */
@@ -95,10 +98,11 @@ const BIKE_SY = 2.0; // stretched along travel, as painted
 const BIKE_HALF_Y = 0.3 * BIKE_SY; // world half extent along (approx.)
 
 /**
- * Lane markings of all drivable roads: dashed centre line (3 m / 6 m) on two-way roads of CENTRE_KINDS, dashed lane
+ * Lane markings of all drivable roads: dashed centre line (3 m / 6 m) on two-way roads of CENTRE_KINDS (a solid
+ * double line, 2 × 0.12 m with 0.12 m between, with ≥ 2 lanes per direction), dashed lane
  * dividers with ≥ 2 lanes per direction, cycle lane boundaries (0.25 m Breitstrich towards the traffic lane, 0.12 m
  * line towards a parking strip), broken 1 m / 1 m and filled red (`mark` 1) where a through road's cycle lane crosses
- * a side street (≤ 12 m from the node), bike pictograms every 40 m. White markings keep 5 m from junction nodes and
+ * a side street (≤ 12 m from the node), bike pictograms every 40 m facing the lane's travel direction. White markings keep 5 m from junction nodes and
  * stop before crossing carriageways. Ribbons y = roadY(road) + 0.004; road rank is compared via roadY.
  */
 export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh: Mesh; pieces: Piece[] } {
@@ -222,7 +226,11 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
     const hw = r.width / 2;
     const lw = c.laneWidth;
     const centre = -hw + c.parkLeft + c.cycleLeft + c.lanesBackward * lw;
-    if (c.lanesForward > 0 && c.lanesBackward > 0 && CENTRE_KINDS.has(r.kind)) line('centre', 0, centre, LINE_W, DASH);
+    if (c.lanesForward > 0 && c.lanesBackward > 0 && CENTRE_KINDS.has(r.kind)) {
+      // ≥ 2 lanes per direction: solid double line (Doppellinie), otherwise a dashed Leitlinie
+      if (c.lanesForward >= 2 && c.lanesBackward >= 2) for (const k of [-1, 1]) line('centre', 0, centre + k * LINE_W, LINE_W, null);
+      else line('centre', 0, centre, LINE_W, DASH);
+    }
     for (let k = 1; k < c.lanesForward; k++) line('lane', 1, centre + k * lw, LINE_W, DASH);
     for (let k = 1; k < c.lanesBackward; k++) line('lane', -1, centre - k * lw, LINE_W, DASH);
 
@@ -255,7 +263,8 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
           }) && !furtNode(sa, mid));
         if (!clear) continue;
         const { p, dir } = pointAt(pts, cum, s);
-        const f = { x: dir.x * side, z: dir.z * side };
+        const travel = side > 0 ? c.cycleRightDir : c.cycleLeftDir;
+        const f = { x: dir.x * travel, z: dir.z * travel };
         const rt = { x: -f.z, z: f.x };
         const o = at(s, mid);
         const w = (x: number, yy: number): Pt => ({ x: o.x + rt.x * x * sx + f.x * yy * BIKE_SY, z: o.z + rt.z * x * sx + f.z * yy * BIKE_SY });
@@ -276,7 +285,7 @@ export function buildMarkings(roads: Road[], roadY: (r: Road) => number): { mesh
           }
         }
         for (const b of BIKE_BARS) bar(...b);
-        pieces.push({ kind: 'bike', road: r.id, side, s0: s, s1: s, x: p.x, z: p.z });
+        pieces.push({ kind: 'bike', road: r.id, side, s0: s, s1: s, x: p.x, z: p.z, travel });
       }
     }
   }

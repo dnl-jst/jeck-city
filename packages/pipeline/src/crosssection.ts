@@ -8,6 +8,9 @@ export type CrossSection = {
   laneWidth: number;
   cycleLeft: number;
   cycleRight: number;
+  /** Travel direction of each cycle lane relative to the way: +1 along it, -1 against it. */
+  cycleLeftDir: 1 | -1;
+  cycleRightDir: 1 | -1;
   parkLeft: number;
   parkRight: number;
   parkLeftOrientation: ParkOrientation | null;
@@ -43,6 +46,17 @@ function cycleOn(t: Tags, side: 'left' | 'right'): number {
   }
   if (v !== undefined) return 0; // track, separate, no, shared_lane, …
   return t[`cycleway:${side}:lane`] !== undefined || t['cycleway:both:lane'] !== undefined ? CYCLE_LANE : 0;
+}
+
+/**
+ * Travel direction of the cycle lane on one side, relative to the way: on two-way roads with the traffic of that
+ * side (left -1, right +1); on oneways with the traffic, except `opposite_lane` (contraflow).
+ */
+function cycleDir(t: Tags, side: 'left' | 'right', oneway: boolean): 1 | -1 {
+  if (!oneway) return side === 'left' ? -1 : 1;
+  const traffic = t.oneway === '-1' ? -1 : 1;
+  const v = t[`cycleway:${side}`] ?? t['cycleway:both'] ?? t.cycleway;
+  return (v === 'opposite_lane' ? -traffic : traffic) as 1 | -1;
 }
 
 /** Parking strip on the carriageway for one side: width and orientation (null without a strip). */
@@ -85,7 +99,7 @@ export function crossSectionFromTags(tags: Tags, kind: string, separate: Separat
   const width = Number.parseFloat(tags.width ?? '');
   if (kind in PATH_WIDTH) {
     const w = width > 0 ? width : PATH_WIDTH[kind]!;
-    return { lanesForward: 1, lanesBackward: 0, laneWidth: w, cycleLeft: 0, cycleRight: 0, parkLeft: 0, parkRight: 0, parkLeftOrientation: null, parkRightOrientation: null, carriageway: w };
+    return { lanesForward: 1, lanesBackward: 0, laneWidth: w, cycleLeft: 0, cycleRight: 0, cycleLeftDir: -1, cycleRightDir: 1, parkLeft: 0, parkRight: 0, parkLeftOrientation: null, parkRightOrientation: null, carriageway: w };
   }
   const oneway = isOneway(tags);
   const total = count(tags.lanes);
@@ -120,7 +134,8 @@ export function crossSectionFromTags(tags: Tags, kind: string, separate: Separat
   }
   const carriageway = (fwd! + bwd!) * laneWidth + cycleLeft + cycleRight + parkLeft + parkRight;
   return {
-    lanesForward: fwd!, lanesBackward: bwd!, laneWidth, cycleLeft, cycleRight, parkLeft, parkRight,
+    lanesForward: fwd!, lanesBackward: bwd!, laneWidth, cycleLeft, cycleRight,
+    cycleLeftDir: cycleDir(tags, 'left', oneway), cycleRightDir: cycleDir(tags, 'right', oneway), parkLeft, parkRight,
     parkLeftOrientation: parkLeft > 0 ? pl.orientation : null, parkRightOrientation: parkRight > 0 ? pr.orientation : null, carriageway,
   };
 }
@@ -129,6 +144,7 @@ export function crossSectionFromTags(tags: Tags, kind: string, separate: Separat
 export function reversed(c: CrossSection): CrossSection {
   return {
     ...c, lanesForward: c.lanesBackward, lanesBackward: c.lanesForward, cycleLeft: c.cycleRight, cycleRight: c.cycleLeft,
+    cycleLeftDir: (-c.cycleRightDir) as 1 | -1, cycleRightDir: (-c.cycleLeftDir) as 1 | -1,
     parkLeft: c.parkRight, parkRight: c.parkLeft, parkLeftOrientation: c.parkRightOrientation, parkRightOrientation: c.parkLeftOrientation,
   };
 }

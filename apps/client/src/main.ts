@@ -19,8 +19,8 @@ declare global {
     __nnReady?: boolean | 'error';
     /** Dev: the renderer's per-frame statistics (draw calls, triangles). */
     __nnInfo?: () => { calls: number; triangles: number };
-    /** Dev/tests: what the player is doing, and the height of the first static surface below (x, 100, z). */
-    __nnState?: () => { mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number };
+    /** Dev/tests: what the player is doing, physics steps so far, and the height of the first static surface below (x, 100, z). */
+    __nnState?: () => { mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number };
     __nnSurfaceY?: (x: number, z: number) => number | null;
   }
 }
@@ -163,7 +163,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   window.__nnState = () => {
     const f = game!.focus();
-    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed() };
+    return { mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps };
   };
   window.__nnSurfaceY = (x, z) => surfaceY(pw, x, z, 100);
   hud.hideLoading();

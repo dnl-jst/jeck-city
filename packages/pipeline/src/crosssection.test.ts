@@ -125,3 +125,15 @@ describe('parseOsm resolves parking:*=separate against street-side parking areas
     expect(r.cross.parkLeftOrientation).toBe('diagonal');
   });
 });
+
+test('cycle lane travel direction relative to the way: two-way left against, oneway with the traffic unless opposite_lane', () => {
+  const dirs = (tags: Record<string, string>) => {
+    const c = crossSectionFromTags(tags, 'secondary');
+    return [c.cycleLeftDir, c.cycleRightDir];
+  };
+  expect(dirs({ 'cycleway:both': 'lane' })).toEqual([-1, 1]);
+  expect(dirs({ oneway: 'yes', 'cycleway:left': 'lane', 'cycleway:right': 'lane' })).toEqual([1, 1]);
+  expect(dirs({ oneway: 'yes', 'cycleway:left': 'opposite_lane' })).toEqual([-1, 1]);
+  // oneway=-1: traffic runs against the way
+  expect(dirs({ oneway: '-1', 'cycleway:left': 'lane', 'cycleway:right': 'opposite_lane' })).toEqual([-1, 1]);
+});

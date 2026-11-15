@@ -146,10 +146,12 @@ async function main() {
       ...(s.sign ? { sign: { x: r2(s.sign.x), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
     models,
-    parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
+    parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings, spawn)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
+  const car0 = manifest.parked[0]!;
+  console.log(`spawn car: ${Math.hypot(car0.x - spawn.x, car0.z - spawn.z).toFixed(2)} m from the spawn`);
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;

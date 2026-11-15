@@ -107,3 +107,29 @@ test('a side street\'s markings stop at the through road\'s carriageway edge', (
   const hw = wide.width / 2;
   for (const p of centre) expect(Math.min(p.s0, p.s1)).toBeGreaterThanOrEqual(hw + 0.2 - 1e-6);
 });
+
+test('with ≥ 2 lanes per direction the centre is a solid double line (2 × 0.12 m, 0.12 m apart), not dashed', () => {
+  const m = buildMarkings([mk(3, 'secondary', [[0, 0], [90, 0]], { lanes: '4' })], roadY);
+  const centre = of(m.pieces, 'centre');
+  expect(centre.length).toBe(2);
+  for (const p of centre) expect(p.s1 - p.s0).toBeGreaterThan(85);
+  expect(centre.map((p) => p.z).sort((a, b) => a - b).map((z) => +z.toFixed(3))).toEqual([-0.12, 0.12]);
+  // nothing white between the two lines
+  const zs = verts(m.mesh).filter((p) => p.mark === 0 && Math.abs(p.z) < 1).map((p) => Math.abs(p.z));
+  expect(Math.min(...zs)).toBeCloseTo(0.06, 6);
+  expect(Math.max(...zs)).toBeCloseTo(0.18, 6);
+  // one lane per direction keeps the dashed centre line
+  expect(of(buildMarkings([mk(3, 'secondary', [[0, 0], [90, 0]])], roadY).pieces, 'centre').length).toBe(10);
+});
+
+test('bike pictograms face the travel direction of their lane; only opposite_lane runs against a oneway', () => {
+  const bikes = (tags: Record<string, string>) => of(buildMarkings([mk(5, 'secondary', [[0, 0], [200, 0]], tags)], roadY).pieces, 'bike');
+  const travel = (pieces: Piece[], side: number) => [...new Set(pieces.filter((p) => p.side === side).map((p) => p.travel))];
+  const two = bikes({ 'cycleway:both': 'lane' });
+  expect(travel(two, 1)).toEqual([1]);
+  expect(travel(two, -1)).toEqual([-1]);
+  expect(travel(bikes({ oneway: 'yes', 'cycleway:left': 'lane' }), -1)).toEqual([1]);
+  expect(travel(bikes({ oneway: 'yes', 'cycleway:left': 'opposite_lane' }), -1)).toEqual([-1]);
+  expect(travel(bikes({ oneway: 'yes', cycleway: 'opposite_lane' }), -1)).toEqual([-1]);
+  expect(travel(bikes({ oneway: 'yes', 'cycleway:right': 'lane' }), 1)).toEqual([1]);
+});

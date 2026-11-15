@@ -72,9 +72,9 @@ test('oneway: right side only; heading follows travel direction', () => {
   expect(two.some((p) => p.pos.z < 0 && Math.abs(Math.abs(p.heading) - Math.PI / 2) < 1e-6 && p.heading < 0)).toBe(true);
 });
 
-test('at most 300 spots', () => {
+test('at most 400 spots', () => {
   const long: Road = { id: 1, kind: 'tertiary', points: [{ x: 0, z: 0 }, { x: 20000, z: 0 }], width: 8, oneway: false, lanes: 1, cross: crossOf('tertiary', 8) };
-  expect(parkedCarSpots({ ...f, boundary: huge, roads: [long], tramTracks: [], tramStops: [] }, 3, [])).toHaveLength(300);
+  expect(parkedCarSpots({ ...f, boundary: huge, roads: [long], tramTracks: [], tramStops: [] }, 3, [])).toHaveLength(400);
 });
 
 test('T-junction with a primary road blocks parking within 10 m', () => {
