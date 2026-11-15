@@ -1,0 +1,143 @@
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { TUNING } from './tuning';
+import { onBeforeStep, type PhysicsWorld } from './world';
+
+/** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
+export type VehicleInput = { throttle: number; steer: number; brake: boolean };
+
+const T = TUNING.vehicle;
+const KMH = 1 / 3.6;
+/** Chassis centre height at rest (approx.: mount height + loaded suspension + wheel radius). */
+const REST_Y = -T.wheelY + T.suspensionRest - 9.81 / (4 * T.suspensionStiffness) + T.wheelRadius;
+
+/**
+ * Car: a dynamic box on Rapier's DynamicRayCastVehicleController (4 ray-cast wheels).
+ * The chassis' local +z is forward, so heading h faces (sin h, cos h) in x/z.
+ * Unoccupied cars start asleep with the parking brake on; the vehicle controller only
+ * runs while the chassis is awake, so ~300 parked cars cost almost nothing until hit.
+ */
+export class Vehicle {
+  readonly chassis: RAPIER.RigidBody;
+  private readonly ctrl: RAPIER.DynamicRayCastVehicleController;
+  private readonly unsubscribe: () => void;
+  private occupied = false;
+  private steerAngle = 0;
+
+  constructor(private readonly pw: PhysicsWorld, pose: { x: number; z: number; heading: number }) {
+    const { rapier: R, world } = pw;
+    const h = pose.heading;
+    this.chassis = world.createRigidBody(
+      R.RigidBodyDesc.dynamic()
+        .setTranslation(pose.x, REST_Y, pose.z)
+        .setRotation({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) })
+        .setLinearDamping(T.linearDamping)
+        .setAngularDamping(T.angularDamping)
+        .setCcdEnabled(true)
+        .setSleeping(true),
+    );
+    const [hx, hy, hz] = [T.width / 2, T.height / 2, T.length / 2];
+    const m = T.mass;
+    world.createCollider(
+      R.ColliderDesc.cuboid(hx, hy, hz).setMassProperties(
+        m,
+        { x: 0, y: -T.comDrop, z: 0 },
+        { x: (m / 3) * (hy * hy + hz * hz), y: (m / 3) * (hx * hx + hz * hz), z: (m / 3) * (hx * hx + hy * hy) },
+        { x: 0, y: 0, z: 0, w: 1 },
+      ),
+      this.chassis,
+    );
+
+    const c = world.createVehicleController(this.chassis);
+    c.indexUpAxis = 1;
+    c.setIndexForwardAxis = 2;
+    for (const [x, z] of [[-T.wheelX, T.wheelZ], [T.wheelX, T.wheelZ], [-T.wheelX, -T.wheelZ], [T.wheelX, -T.wheelZ]] as const) {
+      const i = c.numWheels();
+      c.addWheel({ x, y: T.wheelY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, T.suspensionRest, T.wheelRadius);
+      c.setWheelMaxSuspensionTravel(i, T.suspensionTravel);
+      c.setWheelSuspensionStiffness(i, T.suspensionStiffness);
+      c.setWheelSuspensionCompression(i, T.suspensionCompression);
+      c.setWheelSuspensionRelaxation(i, T.suspensionRelaxation);
+      c.setWheelMaxSuspensionForce(i, T.maxSuspensionForce);
+      c.setWheelFrictionSlip(i, T.frictionSlip);
+      c.setWheelSideFrictionStiffness(i, T.sideFrictionStiffness);
+      c.setWheelBrake(i, T.parkingBrake);
+    }
+    this.ctrl = c;
+
+    // Wheel rays ignore kinematic bodies (characters) and sensors.
+    const flags = R.QueryFilterFlags.EXCLUDE_KINEMATIC | R.QueryFilterFlags.EXCLUDE_SENSORS;
+    this.unsubscribe = onBeforeStep(pw, () => {
+      if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, flags);
+    });
+  }
+
+  /** Driver input; call once per fixed step before PhysicsWorld.step(). Ignored while unoccupied. */
+  applyInput(i: VehicleInput, dt: number): void {
+    if (!this.occupied) return;
+    const c = this.ctrl;
+    const v = this.speed();
+    const kmh = Math.abs(v) / KMH;
+    const throttle = Math.max(-1, Math.min(1, i.throttle));
+
+    // Speed-sensitive steering, eased towards the target angle.
+    const k = Math.max(0, Math.min(1, (kmh - T.steerLowKmh) / (T.steerHighKmh - T.steerLowKmh)));
+    const lock = T.steerLowLock + (T.steerHighLock - T.steerLowLock) * k;
+    const target = -Math.max(-1, Math.min(1, i.steer)) * lock; // positive wheel angle turns left
+    const maxDelta = T.steerRate * dt;
+    this.steerAngle += Math.max(-maxDelta, Math.min(maxDelta, target - this.steerAngle));
+
+    // Throttle against the direction of travel brakes first; only near standstill does it change gear.
+    let engine = 0;
+    let brake = i.brake ? T.brake : 0;
+    if ((throttle > 0 && v < -1) || (throttle < 0 && v > 1)) {
+      brake = T.brake;
+    } else if (throttle !== 0) {
+      const topKmh = throttle > 0 ? T.maxForwardKmh : T.maxReverseKmh;
+      const limiter = Math.max(0, Math.min(1, (topKmh - kmh) / T.limiterBandKmh));
+      engine = throttle * T.engineForce * limiter;
+    } else if (!i.brake) {
+      brake = T.coastBrake;
+    }
+
+    for (let w = 0; w < 4; w++) {
+      c.setWheelEngineForce(w, engine / 4);
+      c.setWheelBrake(w, brake);
+      c.setWheelSteering(w, w < 2 ? this.steerAngle : 0);
+    }
+    if (throttle !== 0 || i.steer !== 0) this.chassis.wakeUp();
+  }
+
+  /** Chassis centre and orientation. */
+  pose(): { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number } {
+    const p = this.chassis.translation();
+    const q = this.chassis.rotation();
+    return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+  }
+
+  /** Signed speed along the heading (m/s); negative when reversing. */
+  speed(): number {
+    return this.ctrl.currentVehicleSpeed();
+  }
+
+  /** Occupied: driver input is applied. Unoccupied: engine off, parking brake on, allowed to fall asleep. */
+  setOccupied(on: boolean): void {
+    this.occupied = on;
+    if (on) {
+      this.chassis.wakeUp();
+      return;
+    }
+    this.steerAngle = 0;
+    for (let w = 0; w < 4; w++) {
+      this.ctrl.setWheelEngineForce(w, 0);
+      this.ctrl.setWheelSteering(w, 0);
+      this.ctrl.setWheelBrake(w, T.parkingBrake);
+    }
+  }
+
+  /** Removes the car from the world. The instance must not be used afterwards. */
+  dispose(): void {
+    this.unsubscribe();
+    this.pw.world.removeVehicleController(this.ctrl);
+    this.pw.world.removeRigidBody(this.chassis);
+  }
+}

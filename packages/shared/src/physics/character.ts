@@ -1,0 +1,81 @@
+import type RAPIER from '@dimforge/rapier3d-compat';
+import { TUNING } from './tuning';
+import type { PhysicsWorld } from './world';
+
+/** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z. */
+export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number };
+
+type Vec3 = { x: number; y: number; z: number };
+
+const T = TUNING.character;
+/** Capsule centre above the feet (the controller keeps a skin gap below the capsule). */
+const CENTRE = T.height / 2 + T.skin;
+
+/**
+ * Walking person: a kinematic capsule moved by Rapier's KinematicCharacterController.
+ * All positions are at the feet. Call applyInput once per fixed step, before PhysicsWorld.step().
+ */
+export class Character {
+  private readonly body: RAPIER.RigidBody;
+  private readonly collider: RAPIER.Collider;
+  private readonly kcc: RAPIER.KinematicCharacterController;
+  private vy = 0;
+  private vel: Vec3 = { x: 0, y: 0, z: 0 };
+  private enabled = true;
+
+  constructor(private readonly pw: PhysicsWorld, spawn: Vec3) {
+    const { rapier: R, world } = pw;
+    this.body = world.createRigidBody(
+      R.RigidBodyDesc.kinematicPositionBased().setTranslation(spawn.x, spawn.y + CENTRE, spawn.z),
+    );
+    this.collider = world.createCollider(R.ColliderDesc.capsule(T.height / 2 - T.radius, T.radius), this.body);
+    this.kcc = world.createCharacterController(T.skin);
+    this.kcc.enableAutostep(T.stepMaxHeight, T.stepMinWidth, false);
+    this.kcc.enableSnapToGround(T.snapToGround);
+    this.kcc.setSlideEnabled(true);
+    this.kcc.setMaxSlopeClimbAngle(T.maxSlope);
+    this.kcc.setMinSlopeSlideAngle(T.maxSlope);
+  }
+
+  applyInput(i: CharacterInput, dt: number): void {
+    if (!this.enabled) return;
+    let f = i.forward, r = i.right;
+    const l = Math.hypot(f, r);
+    if (l > 1) { f /= l; r /= l; }
+    const speed = i.run ? T.runSpeed : T.walkSpeed;
+    const s = Math.sin(i.yaw), c = Math.cos(i.yaw);
+    // forward = (sin, cos), right = forward × up = (−cos, sin)
+    const vx = (f * s - r * c) * speed;
+    const vz = (f * c + r * s) * speed;
+    this.vy += T.gravity * dt;
+
+    this.kcc.computeColliderMovement(
+      this.collider,
+      { x: vx * dt, y: this.vy * dt, z: vz * dt },
+      this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS,
+    );
+    const m = this.kcc.computedMovement();
+    if (this.kcc.computedGrounded()) this.vy = 0;
+    const p = this.body.translation();
+    this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
+    this.vel = { x: m.x / dt, y: m.y / dt, z: m.z / dt };
+  }
+
+  /** Feet position. */
+  position(): Vec3 {
+    const p = this.body.translation();
+    return { x: p.x, y: p.y - CENTRE, z: p.z };
+  }
+
+  /** Velocity of the last applied step (m/s). */
+  velocity(): Vec3 {
+    return { ...this.vel };
+  }
+
+  /** Off: the capsule leaves all contacts and queries and ignores input (e.g. while sitting in a car). */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    this.collider.setEnabled(on);
+    if (!on) { this.vy = 0; this.vel = { x: 0, y: 0, z: 0 }; }
+  }
+}

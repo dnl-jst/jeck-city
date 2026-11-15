@@ -2,3 +2,8 @@ export * from './geo';
 export * from './assets/manifest';
 export * from './assets/collision';
 export * from './sun';
+export * from './physics/tuning';
+export * from './physics/world';
+export * from './physics/character';
+export * from './physics/vehicle';
+export * from './physics/step';
