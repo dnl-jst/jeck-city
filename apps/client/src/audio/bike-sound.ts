@@ -54,22 +54,26 @@ export function synthBell(rate: number): Float32Array {
 }
 
 /**
- * One freewheel pawl click: a hard transient, then the hub shell ringing briefly at a few inharmonic metallic modes
- * (3.3 / 4.9 / 6.6 kHz) – a bright, dry "tick" rather than a noise burst.
+ * One freewheel pawl click, crisp: a one-sample snap plus a bright noise burst (high-passed, 0.4 ms decay), very short
+ * metallic modes at 7.2 / 9.6 / 11.8 kHz and a small low knock at 1.9 kHz for body. Nearly all of it is over in 3 ms.
  */
 export function synthTick(rate: number): Float32Array {
-  const n = Math.round(rate * 0.022);
+  const n = Math.round(rate * 0.012);
   const out = new Float32Array(n);
   const r = noise(7);
-  const modes: [number, number, number][] = [[3300, 0.55, 0.0045], [4900, 0.3, 0.003], [6600, 0.15, 0.002]];
+  const modes: [number, number, number][] = [[7200, 0.45, 0.0009], [9600, 0.35, 0.0007], [11800, 0.25, 0.0005], [1900, 0.2, 0.0012]];
+  let prev = 0;
   for (let i = 0; i < n; i++) {
     const t = i / rate;
-    let v = r() * 0.5 * Math.exp(-t / 0.0003); // the pawl hitting the tooth
-    for (const [f, a, tau] of modes) v += a * Math.exp(-t / tau) * Math.sin(2 * Math.PI * f * t);
-    out[i] = v * Math.min(1, i / 4); // no step at the very start
+    const x = r();
+    const hp = x - prev; // first difference: a crude high-pass, keeps the burst bright
+    prev = x;
+    let v = (i === 0 ? 1 : 0) + hp * 0.6 * Math.exp(-t / 0.0004);
+    for (const [f, a, tau] of modes) v += a * Math.exp(-t / tau) * Math.sin(2 * Math.PI * f * t + 0.6);
+    out[i] = v;
   }
   const peak = out.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
-  for (let i = 0; i < n; i++) out[i] = (out[i]! / peak) * 0.8;
+  for (let i = 0; i < n; i++) out[i] = (out[i]! / peak) * 0.95;
   return out;
 }
 

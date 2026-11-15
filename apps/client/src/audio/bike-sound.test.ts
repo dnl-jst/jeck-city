@@ -29,17 +29,17 @@ describe('synthesised samples', () => {
     expect(early).toBeLessThanOrEqual(1);
     expect(late).toBeLessThan(early * 0.2);
   });
-  test('tick is a short metallic click: rings in the 3–7 kHz band, gone within 30 ms', () => {
-    const t = synthTick(48000);
-    expect(t.length).toBeLessThan(48000 * 0.03);
-    expect(peak(t, 0, 48)).toBeGreaterThan(0.3);
-    expect(peak(t, t.length - 48)).toBeLessThan(0.02);
-    // zero crossings in the first 5 ms ≈ 2 × dominant frequency × 5 ms
+  test('tick is crisp: a hard attack, almost all energy in the first 3 ms, bright, gone within 15 ms', () => {
+    const rate = 48000;
+    const t = synthTick(rate);
+    expect(t.length).toBeLessThanOrEqual(rate * 0.015);
+    expect(peak(t, 0, 24)).toBeGreaterThan(0.6); // peak within the first half millisecond
+    const energy = (from: number, to: number) => t.subarray(from, to).reduce((e, v) => e + v * v, 0);
+    expect(energy(0, rate * 0.003) / energy(0, t.length)).toBeGreaterThan(0.85);
+    // bright: zero crossings in the first 2 ms point at a dominant frequency above 5 kHz
     let zc = 0;
-    for (let i = 1; i < 240; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
-    const f = zc / 2 / 0.005;
-    expect(f).toBeGreaterThan(2500);
-    expect(f).toBeLessThan(8000);
+    for (let i = 1; i < rate * 0.002; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
+    expect(zc / 2 / 0.002).toBeGreaterThan(5000);
   });
   test('freewheel ticks stay below a buzz', () => {
     expect(freewheelTickRate(15, false)).toBeLessThanOrEqual(36);
