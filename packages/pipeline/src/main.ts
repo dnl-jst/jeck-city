@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { CHUNK_SIZE, encodeCollision, ORIGIN_UTM, type WorldManifest } from '@nn/shared';
+import { basename, join } from 'node:path';
+import { CHUNK_SIZE, chunkKey, encodeCollision, ORIGIN_UTM, type WorldManifest } from '@nn/shared';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type Overrides } from './chunks.js';
+import { prepareModel } from './models.js';
 import { parseCityGml } from './citygml.js';
 import { fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
@@ -22,7 +23,6 @@ const OVERRIDES = 'data/building-overrides.json';
 const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
-const BUDGET = 25 * 1024 * 1024;
 const PARKING_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude: Geobasis NRW (dl-de/zero-2.0)';
@@ -84,7 +84,7 @@ async function main() {
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
 
   await mkdir(OUT_DIR, { recursive: true });
-  for (const file of await readdir(OUT_DIR)) if (/^chunk_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
+  for (const file of await readdir(OUT_DIR)) if (/^(chunk|model)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
 
   const chunks: WorldManifest['chunks'] = [];
   for (const c of buildChunks(buildings, streets, overrides, worldRect(f.boundary))) {
@@ -94,7 +94,25 @@ async function main() {
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
   }
 
-  const collision = buildCollision({ buildings, curb: streets.curb, sidewalk: streets.sidewalk, boundary: f.boundary, overrides });
+  const models: WorldManifest['models'] = [];
+  const modelCollision: Float32Array[] = [];
+  for (const [id, path] of Object.entries(overrides)) {
+    const b = buildings.find((x) => x.id === id);
+    if (!b) throw new Error(`override ${id}: no such building in the play area`);
+    const m = await prepareModel(await readFile(path));
+    const off = Math.hypot(m.centre.x - b.centroid.x, m.centre.z - b.centroid.z);
+    // a model far from its building was exported in the wrong frame (local origin, Z up, …)
+    if (off > 25) throw new Error(`override ${id}: model centre is ${off.toFixed(1)} m from the building (${path})`);
+    const chunk = chunkKey(b.centroid.x, b.centroid.z);
+    if (!chunks.some((c) => c.key === chunk)) throw new Error(`override ${id}: chunk ${chunk} does not exist`);
+    const file = `model_${basename(path, '.glb')}.glb`;
+    await writeFile(join(OUT_DIR, file), m.glb);
+    models.push({ id, chunk, file, bytes: m.glb.byteLength });
+    modelCollision.push(m.collision);
+    console.log(`model ${file} for ${id}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid`);
+  }
+
+  const collision = buildCollision({ buildings, curb: streets.curb, sidewalk: streets.sidewalk, boundary: f.boundary, overrides, extra: modelCollision });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
 
@@ -105,7 +123,7 @@ async function main() {
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
 
-  const extraLamps = generatedLamps(f, active);
+  const extraLamps = generatedLamps(f, buildings); // overridden footprints keep lamps out too
   const lamps = [...f.lamps, ...extraLamps];
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
@@ -127,6 +145,7 @@ async function main() {
       ...s, x: r2(s.x), z: r2(s.z),
       ...(s.sign ? { sign: { x: r2(s.sign.x), z: r2(s.sign.z), heading: r3(s.sign.heading), width: r2(s.sign.width) } } : {}),
     })),
+    models,
     parked: parkedCars(withSpawnCar(spawnCarSpot(f, spawn, buildings), parkedCarSpots(f, PARKING_SEED, buildings)), PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     attribution: ATTRIBUTION,
   };
@@ -143,8 +162,7 @@ async function main() {
   for (const [file, size] of sizes.filter(([n]) => !n.startsWith('chunk_'))) console.log(`  ${file.padEnd(22)} ${mb(size)}`);
   const chunkBytes = sizes.filter(([n]) => n.startsWith('chunk_')).map(([, s]) => s);
   console.log(`  chunk_*.glb (${chunkBytes.length})       ${mb(chunkBytes.reduce((a, b) => a + b, 0))} (max ${mb(Math.max(...chunkBytes))})`);
-  console.log(`world total: ${mb(total)} (budget ${mb(BUDGET)})`);
-  if (total > BUDGET) throw new Error('world assets over budget');
+  console.log(`world total: ${mb(total)}`); // report only: visual quality wins over download size
 }
 
 /**

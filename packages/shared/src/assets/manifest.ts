@@ -38,6 +38,11 @@ export type WorldManifest = {
    */
   shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; z: number; heading: number; width: number } }[];
   parked: { x: number; z: number; heading: number; color: number }[];
+  /**
+   * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
+   * loaded and unloaded together with chunk `chunk` (the chunk of the replaced building's centroid).
+   */
+  models: { id: string; chunk: string; file: string; bytes: number }[];
   attribution: string;
 };
 
@@ -104,6 +109,10 @@ export function parseManifest(json: unknown): WorldManifest {
       return shop;
     }),
     parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),
+    models: o.models === undefined ? [] : arr(o.models, 'models', (v, p) => {
+      const x = obj(v, p);
+      return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };
+    }),
     attribution: str(o.attribution, 'attribution'),
   };
 }

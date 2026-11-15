@@ -9,7 +9,10 @@ import type { Mesh } from './streets.js';
 export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
 export type StreetMeshes = Record<StreetName, Mesh>;
-/** data/building-overrides.json: building id → replacement GLB path. Listed buildings are left out. */
+/**
+ * data/building-overrides.json: building id → replacement GLB path (see data/models/README.md). Listed
+ * buildings are left out of the chunks and collision; the pipeline ships the GLB as a model_*.glb instead.
+ */
 export type Overrides = Record<string, string>;
 
 export const FLAG_BACKDROP = 2;
@@ -207,11 +210,13 @@ class SoupBuilder {
 /**
  * collision.bin content: building walls/roofs, kerbs and sidewalks (raised street surfaces at y = 0.12,
  * inside the world area) and one ground rectangle at y = 0 covering the boundary bbox + 200 m.
- * Vertices are welded; zero-area triangles and overridden buildings are left out.
+ * Vertices are welded; zero-area triangles and overridden buildings are left out. `extra`: further world-space
+ * triangle soups (9 floats per triangle), e.g. the collision meshes of override models.
  * Not included: road, tram, green and squares — they lie at most 0.01 m above the ground, which covers them.
  */
-export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean }): CollisionAsset {
+export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[] }): CollisionAsset {
   const s = new SoupBuilder();
+  for (const t of o.extra ?? []) for (let v = 0; v < t.length / 3; v += 3) s.tri(t, v, v + 1, v + 2);
   for (const b of o.buildings) {
     if (o.overrides && b.id in o.overrides) continue;
     const skipRoofs = o.dropBackdropRoofs === true && (b.flags & FLAG_BACKDROP) !== 0;
