@@ -3,9 +3,12 @@ export type DriveControls = { forward: number; right: number; brake: boolean; ru
 /** Whether the big map is open; while it is, the game ignores steering input. */
 export class MapMode {
   open = false;
+  /** Set once the map UI exists; without it the toggle does nothing (no invisible, input-freezing map). */
+  enabled = false;
   private closed = false;
 
   toggle(): void {
+    if (!this.enabled) return;
     this.open = !this.open;
     if (!this.open) this.closed = true;
   }

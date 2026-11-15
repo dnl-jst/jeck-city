@@ -227,8 +227,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     game.flying = true;
   }
   if (mapData) {
-    const grid = new MapGrid(mapData);
-    maps = { minimap: new Minimap(document.body, mapData, grid), bigMap: new BigMap(document.body, mapData, grid), tracker: new StreetTracker(mapData, grid) };
+    try {
+      const grid = new MapGrid(mapData);
+      maps = { minimap: new Minimap(document.body, mapData, grid), bigMap: new BigMap(document.body, mapData, grid), tracker: new StreetTracker(mapData, grid) };
+      game.map.enabled = true;
+    } catch (err) {
+      console.error(err);
+    }
   }
   if (params.get('map') === 'open') game.map.toggle();
   window.__nnState = () => {

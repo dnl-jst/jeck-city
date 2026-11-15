@@ -134,19 +134,18 @@ export class Game {
     }
     const raw = this.flying ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
-    const steer = ctl;
     for (const e of this.ignition.update(dt)) {
       if (e === 'doorClose') audio?.doorClosed();
       else if (e === 'crank') audio?.crank();
       else audio?.engineRunning();
     }
-    const throttle = this.ignition.state === 'running' ? steer.forward : 0;
+    const throttle = this.ignition.state === 'running' ? ctl.forward : 0;
     this.stepper.advance(dt, () => {
       if (this.mode === 'walk') {
-        this.char.applyInput({ forward: steer.forward, right: steer.right, run: ctl.run, yaw: this.follow.yaw, jump: this.jumpPending });
+        this.char.applyInput({ forward: ctl.forward, right: ctl.right, run: ctl.run, yaw: this.follow.yaw, jump: this.jumpPending });
         this.jumpPending = false;
       } else {
-        this.vehicle!.applyInput({ throttle, steer: steer.right, brake: ctl.brake });
+        this.vehicle!.applyInput({ throttle, steer: ctl.right, brake: ctl.brake });
       }
       this.pw.step();
       this.prevPos = this.currPos;
