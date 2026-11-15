@@ -29,7 +29,7 @@ describe('synthesised samples', () => {
     expect(early).toBeLessThanOrEqual(1);
     expect(late).toBeLessThan(early * 0.2);
   });
-  test('tick is crisp but dull: a hard attack, nearly all energy in the first 4 ms, its body around 1.5–4.5 kHz', () => {
+  test('tick is crisp but dull: a hard attack, nearly all energy in the first 4 ms, its body around 2–4.5 kHz', () => {
     const rate = 48000;
     const t = synthTick(rate);
     expect(t.length).toBeLessThanOrEqual(rate * 0.015);
@@ -40,7 +40,7 @@ describe('synthesised samples', () => {
     let zc = 0;
     for (let i = 1; i < rate * 0.003; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
     const f = zc / 2 / 0.003;
-    expect(f).toBeGreaterThan(1500);
+    expect(f).toBeGreaterThan(2000);
     expect(f).toBeLessThan(4500);
   });
   test('freewheel ticks stay below a buzz', () => {
