@@ -1,11 +1,13 @@
 import earcut from 'earcut';
 import type { BuildingMesh } from './buildings.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, ptKey, subPolyline } from './polyline.js';
+import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, offsetLine, ptKey, subPolyline } from './polyline.js';
+import { buildMarkings } from './markings.js';
 import { buildingGrid, sidewalkWidths } from './sidewalkwidth.js';
 
 /** uv: u = metres along the ribbon, v = metres across (polygons: world x/z metres). */
-export type Mesh = { positions: Float32Array; indices: Uint32Array; uv: Float32Array };
+/** `mark` (markings only): 0 white, 1 red cycle crossing. */
+export type Mesh = { positions: Float32Array; indices: Uint32Array; uv: Float32Array; mark?: Float32Array };
 
 const ROAD_Y = 0.01;
 const CURB_H = 0.12;
@@ -18,11 +20,13 @@ const RAIL_W = 0.07;
 const RAIL_Y = 0.02;
 const GREEN_Y = 0.005;
 const SQUARE_Y = 0.0095;
+const PARK_DY = 0.002; // parking strips above their road ribbon (markings: +0.004)
 const RANK_STEP = 0.0005; // per road class, keeps overlapping ribbons from z-fighting (max 8 * 0.0005 = 0.004)
 const RANK: Record<string, number> = {
   footway: 0, path: 0, cycleway: 0, pedestrian: 1, service: 2, living_street: 3, unclassified: 4,
   residential: 5, tertiary: 6, secondary: 7, primary: 8,
 };
+const roadY = (r: Road): number => ROAD_Y + (RANK[r.kind] ?? 0) * RANK_STEP;
 
 type V3 = [number, number, number];
 
@@ -61,28 +65,6 @@ class MeshBuilder {
   build(): Mesh {
     return { positions: Float32Array.from(this.pos), indices: Uint32Array.from(this.idx), uv: Float32Array.from(this.uvs) };
   }
-}
-
-/** Offsets a polyline sideways with mitred corners; positive d is the right-hand side of travel (x east, z south). d may vary per point. */
-function offsetLine(pts: Pt[], d: number | number[]): Pt[] {
-  const normals = (i: number): Pt => {
-    const a = pts[i]!;
-    const b = pts[i + 1]!;
-    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
-    return { x: -(b.z - a.z) / l, z: (b.x - a.x) / l };
-  };
-  return pts.map((p, i) => {
-    const n0 = normals(Math.max(0, i - 1));
-    const n1 = normals(Math.min(pts.length - 2, i));
-    const sx = n0.x + n1.x;
-    const sz = n0.z + n1.z;
-    const sl = Math.hypot(sx, sz) || 1;
-    const nx = sx / sl;
-    const nz = sz / sl;
-    const k = 1 / Math.max(0.5, nx * n0.x + nz * n0.z);
-    const di = typeof d === 'number' ? d : d[i]!;
-    return { x: p.x + nx * di * k, z: p.z + nz * di * k };
-  });
 }
 
 const lift = (pts: Pt[], y: number): V3[] => pts.map((p) => [p.x, y, p.z]);
@@ -177,14 +159,15 @@ function medianInfo(r: Road, pts: Pt[], all: Prepared[]): MedianInfo[] {
   });
 }
 
-function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; curb: MeshBuilder; green: MeshBuilder }, junc: Map<string, Pt>, arms: Map<string, (Arm & { road: Road })[]>): void {
+function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; curb: MeshBuilder; green: MeshBuilder; parking: MeshBuilder }, junc: Map<string, Pt>, arms: Map<string, (Arm & { road: Road })[]>): void {
   const { r, pts, cum, hw } = pr;
-  const y = ROAD_Y + (RANK[r.kind] ?? 0) * RANK_STEP;
+  const y = roadY(r);
   addRibbon(b.road, pts, offsetLine(pts, -hw), offsetLine(pts, hw), y, y, 0, r.width);
   if (!DRIVABLE.has(r.kind)) return;
   const total = cum[cum.length - 1]!;
   for (const side of [1, -1]) {
     const widths = side > 0 ? pr.widths.right : pr.widths.left;
+    const park = side > 0 ? r.cross.parkRight : r.cross.parkLeft;
     const cuts: [number, number][] = [];
     pts.forEach((p, i) => {
       const key = ptKey(p);
@@ -220,6 +203,12 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
       const [c0, c1] = side > 0 ? [inner, outer] : [outer, inner];
       const [s0l, s1l] = side > 0 ? [outer, far] : [far, outer];
       addRibbon(b.curb, seg, c0, c1, CURB_H, CURB_H, 0, CURB_W);
+      if (park > 0) {
+        // parking strip along the kerb, v = metres from the kerb
+        const lane = offsetLine(seg, side * (hw - park));
+        if (side > 0) addRibbon(b.parking, seg, lane, inner, y + PARK_DY, y + PARK_DY, park, 0);
+        else addRibbon(b.parking, seg, inner, lane, y + PARK_DY, y + PARK_DY, 0, park);
+      }
       b.sidewalk.strip(lift(s0l, CURB_H), lift(s1l, CURB_H), cumulative(seg), side > 0 ? 0 : w, side > 0 ? w : 0);
       // vertical face towards the road
       const u = cumulative(seg);
@@ -234,15 +223,17 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
 /**
  * Street meshes. Road ribbons are as wide as the carriageway; kerbs at its edge; sidewalks from the kerb to the
  * building line (`sidewalkWidths`, 2.5 m without buildings), ending before junctions where they would reach into
- * another carriageway; the inner sides of dual carriageways get a green median instead.
+ * another carriageway; the inner sides of dual carriageways get a green median instead. Parking strips (cross-section)
+ * are a surface along the kerb wherever the kerb runs (uv.y = metres from the kerb); `markings` see markings.ts.
  */
-export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = []): { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh } {
+export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = []): { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh; markings: Mesh; parking: Mesh } {
   const road = new MeshBuilder();
   const sidewalk = new MeshBuilder();
   const curb = new MeshBuilder();
   const tram = new MeshBuilder();
   const green = new MeshBuilder();
   const squares = new MeshBuilder();
+  const parking = new MeshBuilder();
 
   const net = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = junctions(net.map((r) => dedupe(r.points)));
@@ -269,7 +260,7 @@ export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = 
       arms.set(key, list);
     });
   }
-  for (const p of prepared) roadSides(p, { road, sidewalk, curb, green }, junc, arms);
+  for (const p of prepared) roadSides(p, { road, sidewalk, curb, green, parking }, junc, arms);
 
   for (const track of f.tramTracks) {
     const pts = dedupe(track);
@@ -282,5 +273,9 @@ export function buildStreetGeometry(f: OsmFeatures, buildings: BuildingMesh[] = 
   for (const g of f.greens) green.polygon(g, GREEN_Y);
   for (const s of f.squares) squares.polygon(s.outline, SQUARE_Y);
 
-  return { road: road.build(), sidewalk: sidewalk.build(), curb: curb.build(), tram: tram.build(), green: green.build(), squares: squares.build() };
+  const markings = buildMarkings(f.roads, roadY).mesh;
+  return {
+    road: road.build(), sidewalk: sidewalk.build(), curb: curb.build(), tram: tram.build(), green: green.build(), squares: squares.build(),
+    markings, parking: parking.build(),
+  };
 }

@@ -12,11 +12,11 @@ const verts = (m: Mesh) => Array.from({ length: m.positions.length / 3 }, (_, i)
 const crossing = wgs84ToLocal(50.9631, 6.952);
 
 test('every mesh is consistent: indices in range, uv per vertex', () => {
-  for (const m of Object.values(g)) {
+  for (const [name, m] of Object.entries(g)) {
     expect(m.positions.length % 3).toBe(0);
     expect(m.uv.length / 2).toBe(m.positions.length / 3);
     expect(m.indices.length % 3).toBe(0);
-    expect(m.indices.length).toBeGreaterThan(0);
+    if (name !== 'parking') expect(m.indices.length).toBeGreaterThan(0); // the fixture has no parking strips
     expect(Math.max(...m.indices)).toBeLessThan(m.positions.length / 3);
   }
 });
@@ -29,7 +29,7 @@ test('road ribbons lie at y=0.01 plus at most 0.005', () => {
 });
 
 test('all ribbon/polygon triangles face up (horizontal meshes)', () => {
-  for (const m of [g.road, g.sidewalk, g.tram, g.green, g.squares]) {
+  for (const m of [g.road, g.sidewalk, g.tram, g.green, g.squares, g.markings]) {
     for (let i = 0; i < m.indices.length; i += 3) {
       const [a, b, c] = [0, 1, 2].map((k) => m.indices[i + k]! * 3);
       const ux = m.positions[b!]! - m.positions[a!]!, uz = m.positions[b! + 2]! - m.positions[a! + 2]!;
@@ -127,4 +127,26 @@ test('sidewalks of a side street stop before a wide crossing carriageway', () =>
   for (const v of verts(geo.sidewalk)) {
     if (Math.abs(v.z) > hw + 0.2) expect(Math.abs(v.x)).toBeGreaterThanOrEqual(3 + 0.15 - 1e-3); // wide road's sidewalks clear the side street
   }
+});
+
+test('parking strip: own surface along the kerb, v = metres from the kerb, just above the road', () => {
+  const cross = crossSectionFromTags({ 'parking:right': 'lane' }, 'residential'); // 6.0 + 2.0 → kerbs at ±4
+  const r: Road = { id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 100, z: 0 }], width: cross.carriageway, oneway: false, lanes: 2, cross };
+  const geo = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] });
+  const v = verts(geo.parking);
+  expect(v.length).toBeGreaterThan(0);
+  const roadY = verts(geo.road)[0]!.y;
+  v.forEach((p, i) => {
+    expect(p.z).toBeGreaterThanOrEqual(2 - 1e-4); // right of travel (east) is +z
+    expect(p.z).toBeLessThanOrEqual(4 + 1e-4);
+    expect(geo.parking.uv[i * 2 + 1]).toBeCloseTo(4 - p.z, 4);
+    expect(p.y).toBeCloseTo(roadY + 0.002, 6);
+  });
+  expect(v.some((p) => Math.abs(p.z - 2) < 1e-4)).toBe(true);
+  expect(geo.markings.indices.length).toBe(0); // residential, no cycle lanes: no markings
+});
+
+test('markings come out of buildStreetGeometry with a mark per vertex', () => {
+  expect(g.markings.mark!.length).toBe(g.markings.positions.length / 3);
+  expect(g.markings.indices.length).toBeGreaterThan(0); // Doppelstraße: lane dividers
 });

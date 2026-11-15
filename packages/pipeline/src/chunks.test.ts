@@ -14,7 +14,7 @@ const twoTris = (y: number): Mesh => ({
   indices: new Uint32Array([0, 2, 1, 3, 5, 4]),
   uv: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
 });
-const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), tram: empty(), green: empty(), squares: empty() });
+const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty() });
 const buildings = () => [boxBuilding('A', 10, 10, 30, 30, 10, 1), boxBuilding('B', 50, 50, 60, 70, 12), boxBuilding('C', -30, 10, -10, 30, 8, 2)];
 const boundary = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 300, z: 300 }, { x: 0, z: 300 }];
 
@@ -123,4 +123,16 @@ test('chunk GLB is meshopt-compressed and keeps custom attributes and building r
   expect(doc.getRoot().listScenes()[0]!.getExtras()).toEqual({ buildings: chunk.buildings!.ranges });
   const road = meshes.find((m) => m.getName() === 'road')!.listPrimitives()[0]!;
   expect(road.listSemantics().sort()).toEqual(['POSITION', 'TEXCOORD_0']);
+});
+
+test('markings keep their per-vertex _MARK through chunk split and GLB', async () => {
+  const markings = { ...twoTris(0.014), mark: new Float32Array([0, 1, 0, 1, 1, 0]) };
+  const c = buildChunks([], { ...streets(), markings }).find((k) => k.key === '1_0')!;
+  expect(Array.from(c.streets.markings!.mark!)).toEqual([1, 0, 1]); // first-use order 3, 5, 4
+  await MeshoptDecoder.ready;
+  const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
+  const doc = await io.readBinary(await encodeChunkGlb(c));
+  const prim = doc.getRoot().listMeshes().find((m) => m.getName() === 'markings')!.listPrimitives()[0]!;
+  expect(prim.listSemantics().sort()).toEqual(['POSITION', 'TEXCOORD_0', '_MARK']);
+  expect(Array.from(prim.getAttribute('_MARK')!.getArray()!)).toEqual([1, 0, 1]);
 });

@@ -81,3 +81,25 @@ export function pointInPolygon(p: Pt, ring: Pt[]): boolean {
   }
   return inside;
 }
+
+/** Offsets a polyline sideways with mitred corners; positive d is the right-hand side of travel (x east, z south). d may vary per point. */
+export function offsetLine(pts: Pt[], d: number | number[]): Pt[] {
+  const normals = (i: number): Pt => {
+    const a = pts[i]!;
+    const b = pts[i + 1]!;
+    const l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+    return { x: -(b.z - a.z) / l, z: (b.x - a.x) / l };
+  };
+  return pts.map((p, i) => {
+    const n0 = normals(Math.max(0, i - 1));
+    const n1 = normals(Math.min(pts.length - 2, i));
+    const sx = n0.x + n1.x;
+    const sz = n0.z + n1.z;
+    const sl = Math.hypot(sx, sz) || 1;
+    const nx = sx / sl;
+    const nz = sz / sl;
+    const k = 1 / Math.max(0.5, nx * n0.x + nz * n0.z);
+    const di = typeof d === 'number' ? d : d[i]!;
+    return { x: p.x + nx * di * k, z: p.z + nz * di * k };
+  });
+}
