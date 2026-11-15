@@ -7,7 +7,7 @@ export function bootErrorMessage(e: unknown): string {
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
-export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · Maus umsehen (klicken)';
+export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
 export const HUD_CSS = `
@@ -26,6 +26,34 @@ export const HUD_CSS = `
   .nn-hint { bottom: 22px; padding: 4px 10px; border-radius: 12px; background: rgba(10,12,20,0.45); }
   .nn-hint:empty, .nn-note:empty { display: none; }
   .nn-note { bottom: 56px; color: #f2c46b; }
+  .nn-wheel { position: fixed; left: 50%; top: 50%; width: min(340px, 80vmin); aspect-ratio: 1; pointer-events: none;
+    transform: translate(-50%, -50%) scale(0.86); opacity: 0; visibility: hidden;
+    transition: opacity 0.14s ease-out, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.25), visibility 0s 0.18s;
+    font: 600 clamp(10px, 3.4vmin, 13px)/1.2 system-ui, sans-serif; color: #fff; letter-spacing: 0.02em; }
+  .nn-wheel.nn-open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); transition-delay: 0s; }
+  .nn-wheel-disc { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgba(242,196,107,0.35);
+    background: repeating-conic-gradient(from 45deg, rgba(255,255,255,0.16) 0 0.5deg, transparent 0.5deg 90deg),
+      radial-gradient(circle, rgba(24,28,44,0.72) 0 30%, rgba(10,12,20,0.6) 31% 100%);
+    backdrop-filter: blur(6px); box-shadow: 0 10px 40px rgba(0,0,0,0.55), inset 0 0 30px rgba(0,0,0,0.5); }
+  .nn-wheel-sector { position: absolute; inset: 0; border-radius: 50%; transform: rotate(var(--nn-sector, 0deg));
+    background: conic-gradient(from -45deg, rgba(242,196,107,0.32), rgba(242,196,107,0.14) 90deg, transparent 90deg);
+    -webkit-mask: radial-gradient(circle, transparent 30%, #000 30.5%); mask: radial-gradient(circle, transparent 30%, #000 30.5%); }
+  .nn-wheel-slot { position: absolute; width: 34%; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    transform: translate(-50%, -50%); opacity: 0.72; transition: transform 0.12s, opacity 0.12s; text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .nn-wheel-slot-0 { left: 50%; top: 19%; } .nn-wheel-slot-1 { left: 80%; top: 50%; }
+  .nn-wheel-slot-2 { left: 50%; top: 81%; } .nn-wheel-slot-3 { left: 20%; top: 50%; }
+  .nn-wheel-logo { width: 62%; aspect-ratio: 1; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6)); transition: filter 0.12s; }
+  .nn-wheel-logo svg { display: block; width: 100%; height: 100%; }
+  .nn-wheel-name { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .nn-wheel-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: #f2c46b; box-shadow: 0 0 6px #f2c46b; }
+  .nn-wheel-slot.nn-on .nn-wheel-dot { display: block; }
+  .nn-wheel-slot.nn-hl { opacity: 1; transform: translate(-50%, -50%) scale(1.14); color: #f2c46b; }
+  .nn-wheel-slot.nn-hl .nn-wheel-logo { filter: drop-shadow(0 0 4px rgba(242,196,107,0.9)) drop-shadow(0 0 14px rgba(242,196,107,0.55)); }
+  .nn-wheel-hub { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; transform: translate(-50%, -50%);
+    border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+    background: rgba(10,12,20,0.75); border: 1px solid rgba(242,196,107,0.3); text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .nn-wheel-title { font-size: 0.72em; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.6; }
+  .nn-wheel-hub-name { margin-top: 2px; padding: 0 6px; color: #f2c46b; font-size: 0.92em; }
 `;
 
 /** Minimal HUD: loading bar while the world streams in, permanent data attribution, control hints. */

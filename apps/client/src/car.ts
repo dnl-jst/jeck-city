@@ -382,15 +382,16 @@ export class DrivenCar {
     }
   }
 
-  /** night 0..1; braking lights the tail lamps fully by day too. */
-  setLights(night: number, braking: boolean): void {
-    this.headMat.emissiveIntensity = 0.15 + 2.2 * night;
-    this.tailMat.emissiveIntensity = braking ? 2.5 : 0.08 + 1.1 * night;
-    this.setBeams(this.shown ? night : 0);
-    const tail = !this.shown ? 0 : braking ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
-    for (const l of this.tails) l.intensity = tail;
-    this.headK = night;
-    this.tailK = braking ? 1 : 0.3 * night;
+  /** night 0..1; braking lights the tail lamps fully by day too; power 0..1 (ignition: off, flickering, on) scales everything. */
+  setLights(night: number, braking: boolean, power: number): void {
+    const brake = braking && power > 0.5;
+    this.headMat.emissiveIntensity = (0.15 + 2.2 * night) * power;
+    this.tailMat.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+    this.setBeams(this.shown && power > 0.5 ? night * power : 0);
+    const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
+    for (const l of this.tails) l.intensity = tail * power;
+    this.headK = night * power;
+    this.tailK = (brake ? 1 : 0.3 * night) * power;
   }
 
   private setBeams(k: number): void {
