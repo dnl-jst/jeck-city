@@ -12,3 +12,4 @@ export * from './physics/step';
 export * from './physics/props';
 export * from './physics/biketypes';
 export * from './physics/bike';
+export * from './physics/parkedbikes';

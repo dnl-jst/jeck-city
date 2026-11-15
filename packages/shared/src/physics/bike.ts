@@ -37,6 +37,8 @@ const FOOT_HALF = 0.12;
 const FRAME_BOTTOM = 0.3;
 const FRAME_TOP = 1.2;
 const OFFSET = 0.02;
+/** Dynamic bodies lighter than this are shoved, not stopped at (kg). */
+const LIGHT_BODY_KG = 100;
 
 /**
  * Ridden bike (approach A of the bike design): a kinematic body with arcade bike logic on top.
@@ -70,7 +72,12 @@ export class RiddenBike {
     this.frameShape = new R.Cuboid(hx, hy, hz);
     this.frame = world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(0, this.frameY, 0).setCollisionGroups(BIKE_GROUPS), this.body);
     const me = this.body.handle;
-    this.notMe = (c) => !c.isSensor() && c.parent()?.handle !== me;
+    // light dynamic bodies (parked bikes) are not obstacles for the frame cast: the kinematic frame shoves them
+    this.notMe = (c) => {
+      if (c.isSensor()) return false;
+      const b = c.parent();
+      return !b || (b.handle !== me && !(b.isDynamic() && b.mass() < LIGHT_BODY_KG));
+    };
     this.kcc = world.createCharacterController(OFFSET);
     this.kcc.enableAutostep(T.stepMaxHeight, T.stepMinWidth, true);
     this.kcc.enableSnapToGround(T.snapToGround);
