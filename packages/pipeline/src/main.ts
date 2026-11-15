@@ -16,6 +16,7 @@ import { findSpawn } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
 import { buildStreetGeometry } from './streets.js';
+import { streetTrees } from './streettrees.js';
 
 const RAW_DIR = 'data/raw';
 const OVERRIDES = 'data/building-overrides.json';
@@ -24,6 +25,7 @@ const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
+const TREE_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude: Geobasis NRW (dl-de/zero-2.0)';
 
@@ -127,6 +129,10 @@ async function main() {
   const lamps = [...f.lamps, ...extraLamps];
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
+  const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps);
+  const trees = [...f.trees, ...extraTrees];
+  const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
+  console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 
   const manifest: WorldManifest = {
     version: 1,
@@ -136,7 +142,7 @@ async function main() {
     spawn: { x: r2(spawn.x), y: spawn.y, z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
     lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
-    trees: f.trees.map((p) => [r2(p.x), r2(p.z)]),
+    trees: trees.map((p) => [r2(p.x), r2(p.z)]),
     tramStops: graph.stops.map((s) => {
       const p = placeShelter(s.pos, f);
       return { name: s.name, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) };

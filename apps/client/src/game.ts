@@ -113,6 +113,7 @@ export class Game {
       }
     });
     this.cars.sync();
+    this.cars.updateVisibility(this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.proximityAge += dt;
     if (this.proximityAge > 0.5) {
       this.proximityAge = 0;

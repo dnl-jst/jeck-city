@@ -5,6 +5,7 @@ import {
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { chunkKey, type WorldManifest } from '@nn/shared';
+import { SHOP } from './materials/storeys';
 
 /** Height of the lamp's light source above ground (m). */
 export const LAMP_LIGHT_Y = 5.55;
@@ -122,9 +123,10 @@ function stopGroup(stop: WorldManifest['tramStops'][number], frameMat: MeshStand
   return group;
 }
 
-/** Sign board centre height (m): the shopfront sign band of the facade shader spans 3.15–3.88 m. */
-export const SIGN_Y = 3.52;
-const SIGN_H = 0.6;
+/** Sign board centre height (m): the middle of the shopfront sign band of the facade shader (storeys.ts SHOP). */
+export const SIGN_Y = (SHOP.signBottom + SHOP.signTop) / 2;
+/** Sign board height (m); fits inside the sign band. */
+export const SIGN_H = 0.6;
 /** Sign atlas: boards 64 px high, at most 416 px wide, shelf-packed into rows 2048 px wide with 4 px gaps (mipmaps). */
 const ATLAS_W = 2048, CELL_H = 64, CELL_MAX_W = 416, GAP = 4;
 

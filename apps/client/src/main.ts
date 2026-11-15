@@ -10,6 +10,7 @@ import { fetchOk, WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
+import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game, surfaceY } from './game';
@@ -62,7 +63,7 @@ window.__nnInfo = () => ({ calls: renderer.info.render.calls, triangles: rendere
 
 const scene = new Scene();
 
-const camera = new PerspectiveCamera(60, 1, 0.3, 2000);
+const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.3, 2000);
 function resize(): void {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;

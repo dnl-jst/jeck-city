@@ -189,9 +189,29 @@ export class DrivenCar {
 export const CAR_PHYSICS_NEAR = 150;
 /** …and are removed again beyond this distance (hysteresis). */
 export const CAR_PHYSICS_FAR = 200;
+/** Parked cars are drawn only within this distance of the camera (m)… */
+export const CAR_RENDER_RADIUS = 250;
+/** …and that set is rebuilt only after the camera moved more than this since the last rebuild (m). */
+export const CAR_REBUILD_MOVE = 20;
+
+/** Indices (ascending) of the cars within `radius` of (x, z). */
+export function visibleCars(poses: readonly XZ[], x: number, z: number, radius = CAR_RENDER_RADIUS): number[] {
+  const out: number[] = [];
+  const r2 = radius * radius;
+  for (let i = 0; i < poses.length; i++) {
+    const dx = poses[i]!.x - x, dz = poses[i]!.z - z;
+    if (dx * dx + dz * dz <= r2) out.push(i);
+  }
+  return out;
+}
+
+/** Whether the visible car set must be rebuilt: never built, or the camera moved more than CAR_REBUILD_MOVE since. */
+export const needsCarRebuild = (last: XZ | null, x: number, z: number): boolean =>
+  !last || Math.hypot(x - last.x, z - last.z) > CAR_REBUILD_MOVE;
 
 /**
- * All manifest cars. Unoccupied ones render as two InstancedMeshes (paint coloured per instance, trim);
+ * All manifest cars. Unoccupied ones within CAR_RENDER_RADIUS of the camera render as two InstancedMeshes (paint
+ * coloured per instance, trim; updateVisibility packs them into the first instance slots);
  * a sleeping Rapier Vehicle exists only near the player. Poses of pushed cars live in `poses`, so a car
  * re-created after being disposed appears where it was left, not at its original spot.
  */
@@ -202,6 +222,9 @@ export class ParkedCars {
   private readonly paint: InstancedMesh;
   private readonly trim: InstancedMesh;
   private occupied: number | null = null;
+  /** Instance slot of each car, −1 while it is not drawn. */
+  private readonly slots: Int32Array;
+  private lastRebuild: XZ | null = null;
   private readonly m = new Matrix4();
   private readonly q = new Quaternion();
   private readonly p = new Vector3();
@@ -214,17 +237,34 @@ export class ParkedCars {
     const g = carGeometries();
     this.paint = new InstancedMesh(g.paint, paintMaterial(), parked.length);
     this.trim = new InstancedMesh(merged([g.trim, g.head, g.tail]), trimMaterial(), parked.length);
-    const col = new Color();
-    for (let i = 0; i < parked.length; i++) {
-      this.paint.setColorAt(i, col.setHex(this.colors[i]!));
-      this.writeMatrix(i);
-    }
+    this.slots = new Int32Array(parked.length).fill(-1);
+    this.paint.setColorAt(0, new Color()); // allocate instanceColor
     for (const im of [this.paint, this.trim]) {
+      im.count = 0;
       im.castShadow = true;
       im.receiveShadow = true;
-      im.computeBoundingSphere();
       scene.add(im);
     }
+  }
+
+  /** Draws only the cars within CAR_RENDER_RADIUS of the camera at (x, z); rebuilt after CAR_REBUILD_MOVE of movement. */
+  updateVisibility(x: number, z: number): void {
+    if (!needsCarRebuild(this.lastRebuild, x, z)) return;
+    this.lastRebuild = { x, z };
+    const shown = visibleCars(this.poses, x, z);
+    this.slots.fill(-1);
+    const col = new Color();
+    shown.forEach((i, k) => {
+      this.slots[i] = k;
+      this.paint.setColorAt(k, col.setHex(this.colors[i]!));
+      this.writeMatrix(i);
+    });
+    for (const im of [this.paint, this.trim]) {
+      im.count = shown.length;
+      im.computeBoundingSphere();
+    }
+    this.paint.instanceColor!.needsUpdate = true;
+    this.flush();
   }
 
   get count(): number {
@@ -232,10 +272,12 @@ export class ParkedCars {
   }
 
   private writeMatrix(i: number): void {
+    const k = this.slots[i]!;
+    if (k < 0) return;
     const s = this.poses[i]!;
     this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.occupied ? this.zero : this.one);
-    this.paint.setMatrixAt(i, this.m);
-    this.trim.setMatrixAt(i, this.m);
+    this.paint.setMatrixAt(k, this.m);
+    this.trim.setMatrixAt(k, this.m);
   }
 
   private flush(): void {
