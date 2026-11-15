@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { SIGN_Y } from '@nn/shared';
 import { boxBuilding } from './fixture.js';
 import type { Road } from './osm.js';
 import { assignShops, classifyBuildings, PARKED_PALETTE, parkedCars, shopSign } from './placements.js';
@@ -54,6 +55,12 @@ test('shop sign goes on the wall facing the street, centred on the shop, reading
   expect(north.z).toBeLessThan(10);
   expect(Math.abs(north.heading)).toBeCloseTo(Math.PI); // faces −z
   expect(shopSign(b, { x: 20, z: 12 }, [])).toBeUndefined();
+});
+
+test('shop sign height: board centre SIGN_Y above the LoD2 base of its building', () => {
+  const b = { ...boxBuilding('A', 10, 10, 30, 30, 10), base: 4.25 };
+  expect(shopSign(b, { x: 25, z: 16 }, [road([[40, -50], [40, 80]])])!.y).toBeCloseTo(4.25 + SIGN_Y);
+  expect(shopSign(boxBuilding('B', 10, 10, 30, 30, 10), { x: 25, z: 16 }, [road([[40, -50], [40, 80]])])!.y).toBeCloseTo(SIGN_Y);
 });
 
 test('assignShops keeps a given label and adds the sign when roads are passed', () => {

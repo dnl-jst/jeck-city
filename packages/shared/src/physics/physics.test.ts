@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
-import { heightAt, type TerrainGrid } from '../assets/terrain';
+import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
 import { FixedStepper } from './step';
 import { TUNING } from './tuning';
@@ -511,21 +511,24 @@ test('tuning holds the brief values', () => {
 
 const COLLISION_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/collision.bin', import.meta.url));
 const MANIFEST = fileURLToPath(new URL('../../../../apps/client/public/world/manifest.json', import.meta.url));
-const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST);
+const TERRAIN_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/terrain.bin', import.meta.url));
+const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST) && existsSync(TERRAIN_BIN);
 
 test.skipIf(!haveReal)(
-  haveReal ? 'real collision.bin: world builds, character at spawn stands on the sidewalk (y ≈ 0.12)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/collision.bin not found — run the pipeline]',
+  haveReal ? 'real collision.bin + terrain.bin: world builds, character at spawn stands on the sidewalk (y ≈ spawn.y)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
   async () => {
     const file = readFileSync(COLLISION_BIN);
     const asset = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
+    const tf = readFileSync(TERRAIN_BIN);
+    const terrain = decodeTerrain(tf.buffer.slice(tf.byteOffset, tf.byteOffset + tf.byteLength));
     const spawn = JSON.parse(readFileSync(MANIFEST, 'utf8')).spawn as { x: number; y: number; z: number };
     const t0 = performance.now();
-    const pw = await createPhysicsWorld(asset);
+    const pw = await createPhysicsWorld(asset, terrain);
     // a generous bound: the budget (< 3 s) is measured in the browser; a loaded CI box must not flake here
     expect(performance.now() - t0).toBeLessThan(15_000);
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
-    expect(Math.abs(c.position().y - 0.12)).toBeLessThanOrEqual(0.03);
+    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = terrain + sidewalk 0.12
   },
   15_000,
 );

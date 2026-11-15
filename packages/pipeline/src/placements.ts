@@ -1,4 +1,4 @@
-import type { WorldManifest } from '@nn/shared';
+import { SIGN_Y, type WorldManifest } from '@nn/shared';
 import type { BuildingMesh } from './buildings.js';
 import { FLAG_BACKDROP } from './chunks.js';
 import { footprintDistance } from './footprint.js';
@@ -100,7 +100,7 @@ function roadInFront(p: Pt, nx: number, nz: number, roads: Road[]): number {
 
 /**
  * Sign board for a shop: on the building wall that faces a street (drivable or pedestrian road in front
- * within 40 m) and lies nearest the shop point. x/z = board centre just in front of the wall, heading =
+ * within 40 m) and lies nearest the shop point. x/z = board centre just in front of the wall, y = LoD2 base + SIGN_Y, heading =
  * outward wall normal (forward = (sin h, cos h)), width ≤ 6 m and fitting the wall. undefined without such a wall.
  */
 export function shopSign(b: BuildingMesh, shop: Pt, roads: Road[]): ShopSign | undefined {
@@ -123,7 +123,7 @@ export function shopSign(b: BuildingMesh, shop: Pt, roads: Road[]): ShopSign | u
   const width = Math.min(SIGN_MAX_WIDTH, w.s1 - w.s0 - 0.4);
   const s = Math.min(w.s1 - width / 2 - 0.2, Math.max(w.s0 + width / 2 + 0.2, best.s));
   const d = w.d + SIGN_OFFSET;
-  return { x: w.nx * d - w.nz * s, z: w.nz * d + w.nx * s, heading: Math.atan2(w.nx, w.nz), width };
+  return { x: w.nx * d - w.nz * s, y: b.base + SIGN_Y, z: w.nz * d + w.nx * s, heading: Math.atan2(w.nx, w.nz), width };
 }
 
 /** Everyday car colours: white, black, silver, grey, dark blue, red, VW-ish blue, beige. */

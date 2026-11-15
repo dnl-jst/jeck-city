@@ -20,11 +20,18 @@
  */
 export const CHUNK_SIZE = 200;
 
+/**
+ * Height of a shop sign's board centre above its building's LoD2 base (m): the shopfront sign band of the facade
+ * shader spans 3.15–3.88 m. Manifest sign.y = base + SIGN_Y.
+ */
+export const SIGN_Y = 3.52;
+
 export type WorldManifest = {
-  version: 1;
+  version: 2;
   origin: { e: number; n: number };
   chunkSize: 200;
   chunks: { key: string; x: number; z: number; file: string; bytes: number }[];
+  /** Spawn point; y = terrain height at the spawn + sidewalk height. */
   spawn: { x: number; y: number; z: number; heading: number };
   boundary: [number, number][];
   lamps: [number, number][];
@@ -36,9 +43,10 @@ export type WorldManifest = {
   tramStops: { name: string; x: number; z: number; heading: number }[];
   /**
    * Shops: label = invented name shown on the sign; sign = board centre in front of the street-facing wall of
-   * the building, heading = outward wall normal (the side it is read from), width in m.
+   * the building, y = board centre height (LoD2 base of the building + SIGN_Y), heading = outward wall normal
+   * (the side it is read from), width in m.
    */
-  shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; z: number; heading: number; width: number } }[];
+  shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
   parked: { x: number; z: number; heading: number; color: number }[];
   /**
    * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
@@ -46,6 +54,12 @@ export type WorldManifest = {
    * Several buildings may share one model; `id` is the first of them.
    */
   models: { id: string; chunk: string; file: string; bytes: number }[];
+  /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
+  terrain: { file: 'terrain.bin'; bytes: number };
+  /** NHN height (m) of local y = 0: world y = NHN − datum. */
+  datum: number;
+  /** Height for the flat ground beyond the terrain grid: lowest grid-border height − 0.5 m. */
+  farGroundY: number;
   attribution: string;
 };
 
@@ -89,10 +103,12 @@ function nums<K extends string>(v: unknown, p: string, keys: K[]): Record<K, num
 /** Validates parsed JSON against the manifest schema; throws on any mismatch. */
 export function parseManifest(json: unknown): WorldManifest {
   const o = obj(json, 'manifest');
-  if (o.version !== 1) fail('version', 'must be 1');
+  if (o.version !== 2) fail('version', 'must be 2');
   if (o.chunkSize !== CHUNK_SIZE) fail('chunkSize', `must be ${CHUNK_SIZE}`);
+  const t = obj(o.terrain, 'terrain');
+  if (t.file !== 'terrain.bin') fail('terrain.file', "must be 'terrain.bin'");
   return {
-    version: 1,
+    version: 2,
     origin: nums(o.origin, 'origin', ['e', 'n']),
     chunkSize: CHUNK_SIZE,
     chunks: arr(o.chunks, 'chunks', (v, p) => {
@@ -108,7 +124,7 @@ export function parseManifest(json: unknown): WorldManifest {
       const s = obj(v, p);
       const shop: WorldManifest['shops'][number] = { ...nums(s, p, ['x', 'z']), label: str(s.label, `${p}.label`), type: str(s.type, `${p}.type`) };
       if (s.buildingId !== undefined) shop.buildingId = str(s.buildingId, `${p}.buildingId`);
-      if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'z', 'heading', 'width']);
+      if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'y', 'z', 'heading', 'width']);
       return shop;
     }),
     parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),
@@ -116,6 +132,9 @@ export function parseManifest(json: unknown): WorldManifest {
       const x = obj(v, p);
       return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };
     }),
+    terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
+    datum: num(o.datum, 'datum'),
+    farGroundY: num(o.farGroundY, 'farGroundY'),
     attribution: str(o.attribution, 'attribution'),
   };
 }
