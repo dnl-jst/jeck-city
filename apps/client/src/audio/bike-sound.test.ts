@@ -29,17 +29,19 @@ describe('synthesised samples', () => {
     expect(early).toBeLessThanOrEqual(1);
     expect(late).toBeLessThan(early * 0.2);
   });
-  test('tick is crisp: a hard attack, almost all energy in the first 3 ms, bright, gone within 15 ms', () => {
+  test('tick is crisp but dull: a hard attack, nearly all energy in the first 4 ms, its body around 1.5–4.5 kHz', () => {
     const rate = 48000;
     const t = synthTick(rate);
     expect(t.length).toBeLessThanOrEqual(rate * 0.015);
     expect(peak(t, 0, 24)).toBeGreaterThan(0.6); // peak within the first half millisecond
     const energy = (from: number, to: number) => t.subarray(from, to).reduce((e, v) => e + v * v, 0);
-    expect(energy(0, rate * 0.003) / energy(0, t.length)).toBeGreaterThan(0.85);
-    // bright: zero crossings in the first 2 ms point at a dominant frequency above 5 kHz
+    expect(energy(0, rate * 0.004) / energy(0, t.length)).toBeGreaterThan(0.85);
+    // dull, not shrill: zero crossings in the first 3 ms point at a dominant frequency in the low kHz
     let zc = 0;
-    for (let i = 1; i < rate * 0.002; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
-    expect(zc / 2 / 0.002).toBeGreaterThan(5000);
+    for (let i = 1; i < rate * 0.003; i++) if (Math.sign(t[i]!) !== Math.sign(t[i - 1]!)) zc++;
+    const f = zc / 2 / 0.003;
+    expect(f).toBeGreaterThan(1500);
+    expect(f).toBeLessThan(4500);
   });
   test('freewheel ticks stay below a buzz', () => {
     expect(freewheelTickRate(15, false)).toBeLessThanOrEqual(36);

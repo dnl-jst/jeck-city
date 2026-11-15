@@ -14,7 +14,7 @@ export const MIX = {
   static: 0.25,
   bikeRoll: 0.35,
   bikeChain: 0.18,
-  bikeTick: 0.55,
+  bikeTick: 0.8,
   bikeBell: 0.7,
 } as const;
 
