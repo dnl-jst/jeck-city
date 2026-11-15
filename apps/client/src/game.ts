@@ -373,7 +373,7 @@ export class Game {
   /** E on the bike: step off to the side (slow) or jump off and let the bike roll on (fast). */
   private getOffBike(): void {
     const s = this.ridden!.state();
-    const spot = dismountSpot(s, (x, z) => this.bikes.standFree(x, z, s.y));
+    const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z));
     if (!spot) {
       this.ctx.hud.flash('Hier kannst du nicht absteigen');
       return;
@@ -387,7 +387,8 @@ export class Game {
     this.crashed = false;
     const s = this.ridden!.state();
     this.ridden!.restore({ ...s, speed: 0 });
-    const spot = dismountSpot(s, (x, z) => this.bikes.standFree(x, z, s.y)) ?? { x: s.x - Math.sin(s.heading) * 1.2, z: s.z - Math.cos(s.heading) * 1.2 };
+    // nowhere free to the side or behind (squeezed against a wall): fall where the bike is, never through the wall
+    const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
     this.leaveBike(spot, s);
     this.figure.fall(s.heading);
     this.ctx.audio?.crashBike();

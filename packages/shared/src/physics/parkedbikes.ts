@@ -126,6 +126,30 @@ export class ParkedBikes {
     return w.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, staticWorldFilter(true, undefined, true)) === null;
   }
 
+  /**
+   * The rider can step off the bike at `bike` to (x, z): the way there is clear at hip height (no wall, car or post in
+   * between – a spot inside a closed building touches nothing, so standFree alone would accept it) and a standing
+   * capsule fits at the spot.
+   */
+  canStepOff(bike: { x: number; y: number; z: number }, x: number, z: number): boolean {
+    const { rapier: R, world: w } = this.pw;
+    const dx = x - bike.x, dz = z - bike.z, d = Math.hypot(dx, dz);
+    if (d > 1e-6) {
+      const solid = staticWorldFilter(true, undefined, true);
+      const hit = w.castRay(new R.Ray({ x: bike.x, y: bike.y + 0.9, z: bike.z }, { x: dx / d, y: 0, z: dz / d }), d + TUNING.character.radius, true,
+        undefined, undefined, undefined, undefined, (c) => solid(c) && !this.isParkedBike(c));
+      if (hit) return false;
+    }
+    return this.standFree(x, z, bike.y);
+  }
+
+  private isParkedBike(c: RAPIER.Collider): boolean {
+    const b = c.parent();
+    if (!b) return false;
+    for (const body of this.bodies.values()) if (body.handle === b.handle) return true;
+    return false;
+  }
+
   private surface(x: number, z: number, fromY: number): number | null {
     return surfaceBelow(this.pw, x, z, fromY);
   }

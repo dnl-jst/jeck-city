@@ -121,6 +121,21 @@ describe('ridden bike', () => {
     expect(maxJump).toBeLessThanOrEqual(0.13);
   });
 
+  test('climbs a steep ramp at speed without crashing', async () => {
+    for (const [type, deg] of [['longjohn', 15], ['dutch', 22]] as const) {
+      const a = (deg * Math.PI) / 180, top = 20 * Math.tan(a);
+      const g = flat();
+      const v = [...g.vertices, -50, 0, 3, 50, 0, 3, 50, top, 23, -50, top, 23];
+      const idx = [...g.indices, 4, 6, 5, 4, 7, 6];
+      const pw = await createPhysicsWorld({ vertices: new Float32Array(v), indices: new Uint32Array(idx), boundary: g.boundary });
+      const b = new RiddenBike(pw, type, { x: 0, y: 0, z: 0, heading: 0 }, 25 * KMH);
+      let crashes = 0;
+      ride(pw, b, go({ sprint: true }), 2, (c) => { if (c) crashes++; });
+      expect(crashes, `${type} ${deg}°`).toBe(0);
+      expect(b.state().y, `${type} ${deg}°`).toBeGreaterThan(1);
+    }
+  });
+
   test('stops at a 0.4 m step', async () => {
     const pw = await createPhysicsWorld(flat());
     block(pw, 3, 60, 0.4);

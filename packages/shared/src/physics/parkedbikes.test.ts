@@ -163,6 +163,27 @@ describe('dismount spot', () => {
   });
 });
 
+/** Flat ground plus a closed trimesh box (a house) from x0..x1, z0..z1, 6 m high: inside it nothing touches. */
+function withHouse(x0: number, x1: number, z0: number, z1: number): CollisionAsset {
+  const g = flat();
+  const v = [...g.vertices];
+  const base = v.length / 3;
+  for (const y of [0, 6]) for (const [x, z] of [[x0, z0], [x1, z0], [x1, z1], [x0, z1]]) v.push(x!, y, z!);
+  const q = (a: number, b: number, c: number, d: number) => [base + a, base + b, base + c, base + a, base + c, base + d];
+  const idx = [...g.indices, ...q(0, 1, 5, 4), ...q(1, 2, 6, 5), ...q(2, 3, 7, 6), ...q(3, 0, 4, 7), ...q(4, 5, 6, 7)];
+  return { vertices: new Float32Array(v), indices: new Uint32Array(idx), boundary: g.boundary };
+}
+
+describe('stepping off next to a house', () => {
+  test('a spot inside a building is not free, so the rider steps off on the street side', async () => {
+    const pw = await createPhysicsWorld(withHouse(0.4, 10, -10, 10)); // facade 0.4 m left (+x) of the bike
+    const bikes = new ParkedBikes(pw, []);
+    const pose = { x: 0, y: 0, z: 0, heading: 0 };
+    expect(bikes.canStepOff(pose, 5, 0)).toBe(false); // deep inside
+    expect(dismountSpot(pose, (x, z) => bikes.canStepOff(pose, x, z))).toEqual({ x: -1, z: 0 });
+  });
+});
+
 describe('bike racks', () => {
   test('racks block a ridden bike', async () => {
     const pw = await createPhysicsWorld(flat());

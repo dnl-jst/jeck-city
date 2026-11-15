@@ -37,6 +37,8 @@ const FOOT_HALF = 0.12;
 const FRAME_BOTTOM = 0.3;
 const FRAME_TOP = 1.2;
 const OFFSET = 0.02;
+/** Surfaces whose normal points up more than this (slope ≤ maxSlope) are ground, not obstacles for the frame. */
+const WALKABLE_NY = Math.cos(T.maxSlope);
 /** Dynamic bodies lighter than this are shoved, not stopped at (kg). */
 const LIGHT_BODY_KG = 100;
 
@@ -150,15 +152,16 @@ export class RiddenBike {
       const origin = { x: s.x, y: s.y + this.centre + this.frameY, z: s.z };
       const hit = this.pw.world.castShape(origin, q, { x: ux, y: 0, z: uz }, this.frameShape, 0.01, len, false,
         undefined, undefined, undefined, undefined, this.notMe);
-      if (hit) {
+      // normal1: the hit collider's outward normal (Rapier 0.21 castShape; normal2 is the cast box's). A surface that is
+      // walkable (a ramp the level frame box runs into) is no obstacle: the wheel capsule climbs it.
+      if (hit && hit.normal1.y < WALKABLE_NY && !this.groundAhead(hit.witness1, s)) {
         const toi = hit.time_of_impact;
-        // normal1: the hit collider's outward normal (Rapier 0.21 castShape; normal2 is the cast box's)
         const n = hit.normal1, nl = Math.hypot(n.x, n.z);
         const rx = dx - ux * toi, rz = dz - uz * toi; // the part of the move behind the obstacle
         let sx = 0, sz = 0;
         if (nl > 1e-6) {
           const nx = n.x / nl, nz = n.z / nl, d = rx * nx + rz * nz;
-          frontal = Math.max(0, -(ux * nx + uz * nz));
+          frontal = Math.max(0, -(ux * n.x + uz * n.z)); // full 3D normal: a sloped face is less head-on
           if (d < 0) { sx = rx - d * nx; sz = rz - d * nz; } else { sx = rx; sz = rz; }
         }
         dx = ux * toi + sx;
@@ -190,6 +193,19 @@ export class RiddenBike {
     this.body.setNextKinematicTranslation({ x: s.x, y: s.y + this.centre, z: s.z });
     this.body.setNextKinematicRotation(q);
     return { crashed, landed: !wasGrounded && s.grounded };
+  }
+
+  /**
+   * A frame-cast hit that is really ground: the level frame box cuts into a ramp it rides up, and Rapier then reports a
+   * bogus sideways normal. A horizontal ray from the bike at the hit's height towards it shows what is there.
+   */
+  private groundAhead(w: { x: number; y: number; z: number }, s: BikeState): boolean {
+    const { rapier: R, world } = this.pw;
+    const dx = w.x - s.x, dz = w.z - s.z, d = Math.hypot(dx, dz);
+    if (d < 1e-3) return false;
+    const hit = world.castRayAndGetNormal(new R.Ray({ x: s.x, y: w.y, z: s.z }, { x: dx / d, y: 0, z: dz / d }), d + 0.1, true,
+      undefined, undefined, undefined, undefined, this.notMe);
+    return hit !== null && hit.normal.y >= WALKABLE_NY;
   }
 
   state(): BikeState {
