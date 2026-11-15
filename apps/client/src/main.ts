@@ -148,6 +148,11 @@ renderer.setAnimationLoop((t: number) => {
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
     game.frame(dt, nightFactor);
+    for (const i of game.props.takeFallen()) {
+      props.knockDown(i);
+      lighting.lampOut(i);
+    }
+    props.syncFallen((i) => game!.props.lampPose(i));
     radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     world.update(camera.position);
     if (world.revision !== propsRevision) {

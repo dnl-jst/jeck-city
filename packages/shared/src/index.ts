@@ -7,3 +7,4 @@ export * from './physics/world';
 export * from './physics/character';
 export * from './physics/vehicle';
 export * from './physics/step';
+export * from './physics/props';

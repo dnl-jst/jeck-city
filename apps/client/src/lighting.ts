@@ -42,10 +42,11 @@ export function moodAt(altDeg: number): Mood {
   };
 }
 
-/** Indices of the `n` lamps nearest to (x, z), nearest first. */
-export function nearestLamps(lamps: readonly (readonly [number, number])[], x: number, z: number, n: number): number[] {
+/** Indices of the `n` lamps nearest to (x, z), nearest first, leaving out those in `skip`. */
+export function nearestLamps(lamps: readonly (readonly [number, number])[], x: number, z: number, n: number, skip?: ReadonlySet<number>): number[] {
   return lamps
     .map(([lx, lz], i) => ({ i, d: (lx - x) ** 2 + (lz - z) ** 2 }))
+    .filter((e) => !skip?.has(e.i))
     .sort((a, b) => a.d - b.d)
     .slice(0, n)
     .map((e) => e.i);
@@ -104,6 +105,8 @@ export class Lighting {
   private readonly sky: Mesh<SphereGeometry, ShaderMaterial>;
   private readonly pool: PointLight[] = [];
   private poolAt: { x: number; z: number } | null = null;
+  /** Knocked-down lamps: no light. */
+  private readonly out = new Set<number>();
   private readonly sunDir = new Vector3();
 
   constructor(
@@ -151,6 +154,12 @@ export class Lighting {
     }
   }
 
+  /** Lamp i was knocked over: it no longer gets a light. */
+  lampOut(i: number): void {
+    this.out.add(i);
+    this.poolAt = null; // reassign the pool on the next update
+  }
+
   update(sun: SunState, cameraPos: Vector3): void {
     const night = sun.nightFactor;
     const mood = moodAt((sun.altitude * 180) / Math.PI);
@@ -192,7 +201,7 @@ export class Lighting {
     const at = this.poolAt;
     if (!at || Math.hypot(cameraPos.x - at.x, cameraPos.z - at.z) > LAMP_REASSIGN) {
       this.poolAt = { x: cameraPos.x, z: cameraPos.z };
-      const idx = nearestLamps(this.lamps, cameraPos.x, cameraPos.z, LAMP_LIGHTS);
+      const idx = nearestLamps(this.lamps, cameraPos.x, cameraPos.z, LAMP_LIGHTS, this.out);
       this.pool.forEach((l, i) => {
         const lamp = idx[i] !== undefined ? this.lamps[idx[i]!] : undefined;
         if (lamp) l.position.set(lamp[0], LAMP_LIGHT_Y - 0.25, lamp[1]);
