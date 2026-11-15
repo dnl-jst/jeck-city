@@ -53,3 +53,15 @@ test('cafés, restaurants, bars and pharmacies (amenity) count as shops; address
   expect(f.shops.map((s) => s.type)).toEqual(['cafe', 'pharmacy', 'kiosk']);
   expect(f.shops[0]).toMatchObject({ name: 'Café X', street: 'Neusser Straße', housenumber: '12' });
 });
+
+test('railway and embankment land is green', () => {
+  const sq = (landuse: string, id: number) => ({
+    type: 'way' as const, id, tags: { landuse },
+    geometry: [{ lat: 50.96, lon: 6.95 }, { lat: 50.96, lon: 6.951 }, { lat: 50.961, lon: 6.951 }, { lat: 50.96, lon: 6.95 }],
+  });
+  const g = (landuse: string) => parseOsm({ elements: [sq(landuse, 1)] }).greens.length;
+  expect(g('railway')).toBe(1);
+  expect(g('allotments')).toBe(1);
+  for (const l of ['meadow', 'forest', 'flowerbed', 'brownfield']) expect(g(l)).toBe(1);
+  expect(g('residential')).toBe(0);
+});

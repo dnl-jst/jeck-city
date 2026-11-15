@@ -28,7 +28,7 @@ const KIND_WIDTH: Record<string, number> = {
   service: 4, footway: 2.5, path: 2.5, cycleway: 2.5, pedestrian: 6,
 };
 const GREEN = (t: Tags) =>
-  ['grass', 'village_green', 'recreation_ground'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
+  ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
 
 /** amenity values that are shops for the game (they get a sign and a shop name). */
 const SHOP_AMENITIES = new Set(['cafe', 'restaurant', 'fast_food', 'pub', 'bar', 'biergarten', 'ice_cream', 'pharmacy']);
