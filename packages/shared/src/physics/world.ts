@@ -28,12 +28,18 @@ export function initRapier(): Promise<void> {
 
 /**
  * Interaction groups (membership << 16 | filter). The city keeps the default (all bits). Street furniture (trees,
- * lamps; see StreetProps) is bit 1, car chassis bit 2. A knocked-down lamp no longer collides with car bodies (the
+ * lamps; see StreetProps) is bit 1, car chassis bit 2, people bit 3 (see CAR_GROUPS). A knocked-down lamp no longer collides with car bodies (the
  * chassis would bulldoze it along); the wheel rays still roll over it.
  */
 export const PROP_GROUPS = 0x0002_ffff;
 export const LYING_PROP_GROUPS = 0x0002_0003;
-export const CAR_GROUPS = 0x0004_ffff;
+/**
+ * Car chassis: bit 2, ignores bit 3 (people), so a car never gets stopped by a person in the solver; the character
+ * controller query still sees cars (it passes no groups), so a person cannot walk through one.
+ */
+export const CAR_GROUPS = 0x0004_fff7;
+/** People (capsules and their kinematic stand-ins): bit 3, ignore cars (bit 2). */
+export const CHARACTER_GROUPS = 0x0008_fffb;
 
 /**
  * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars,

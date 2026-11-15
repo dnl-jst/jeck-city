@@ -17,6 +17,8 @@ export function treeScale(x: number, z: number): number {
   return 0.75 + 0.55 * propHash(x, z, 1);
 }
 
+type Vec3 = { x: number; y: number; z: number };
+
 export type PropPose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
 
 /**
@@ -30,6 +32,8 @@ export type PropPose = { x: number; y: number; z: number; qx: number; qy: number
  */
 export class StreetProps {
   private readonly lamps: RAPIER.RigidBody[] = [];
+  /** Manifest spot of every lamp (the foot of the post, on the ground). */
+  private readonly home: Vec3[] = [];
   /** Collider handle → lamp index, for standing lamps only. */
   private readonly standing = new Map<number, number>();
   private readonly fallen: number[] = [];
@@ -56,6 +60,7 @@ export class StreetProps {
         body,
       );
       this.lamps.push(body);
+      this.home.push({ x, y: groundY(x, z), z });
       this.standing.set(c.handle, i);
     });
     this.unsubscribe = onBeforeStep(pw, () => this.checkHits());
@@ -68,7 +73,48 @@ export class StreetProps {
 
   /** Whether lamp i is still standing. */
   isStanding(i: number): boolean {
-    return !this.lamps[i]!.isDynamic();
+    return this.standing.has(this.lamps[i]!.collider(0).handle);
+  }
+
+  /** Whether lamp i lies on the ground simulated (dynamic) and asleep: nothing more to stream. */
+  isResting(i: number): boolean {
+    const b = this.lamps[i]!;
+    return b.isDynamic() && b.isSleeping();
+  }
+
+  /** Puts lamp i back on its manifest spot: fixed, upright, solid for cars again. */
+  standUp(i: number): void {
+    const b = this.lamps[i]!;
+    const R = this.pw.rapier;
+    const c = b.collider(0);
+    b.setBodyType(R.RigidBodyType.Fixed, true);
+    const h = this.home[i]!;
+    b.setTranslation(h, true);
+    b.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, false);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    c.setCollisionGroups(PROP_GROUPS);
+    this.standing.set(c.handle, i);
+  }
+
+  /** Lamp i as a kinematic body on `pose` (a lamp the server streams); lying groups, never breaks by itself. */
+  follow(i: number, pose: PropPose): void {
+    const b = this.lamps[i]!;
+    const R = this.pw.rapier;
+    const c = b.collider(0);
+    const t = { x: pose.x, y: pose.y, z: pose.z }, q = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw };
+    if (b.bodyType() === R.RigidBodyType.KinematicPositionBased) {
+      b.setNextKinematicTranslation(t);
+      b.setNextKinematicRotation(q);
+      return;
+    }
+    this.standing.delete(c.handle);
+    c.setCollisionGroups(LYING_PROP_GROUPS);
+    b.setBodyType(R.RigidBodyType.KinematicPositionBased, true);
+    b.setTranslation(t, true);
+    b.setRotation(q, true);
+    b.setNextKinematicTranslation(t);
+    b.setNextKinematicRotation(q);
   }
 
   /** Pose of lamp i (origin at the foot of the post). */

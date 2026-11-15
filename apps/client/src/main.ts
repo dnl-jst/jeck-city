@@ -2,7 +2,7 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  createPhysicsWorld, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseMapData, parseTimeOverride, sunState,
+  createPhysicsWorld, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseMapData, parseTimeOverride, sunState, surfaceY,
   type MapData, type PhysicsWorld, type SunState, type TerrainGrid,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
@@ -14,7 +14,7 @@ import { Props } from './props';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
-import { Game, surfaceY } from './game';
+import { Game } from './game';
 import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
