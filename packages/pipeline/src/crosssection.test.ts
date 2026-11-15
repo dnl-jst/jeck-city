@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { crossSectionFromTags } from './crosssection.js';
+import { crossSectionFromTags, reversed } from './crosssection.js';
 import { parseOsm } from './osm.js';
 
 test('Neusser-Straße-like tags: 2 lanes, cycle lanes both sides, parallel parking left → 11.7 m', () => {
@@ -27,6 +27,18 @@ test('cycleway:*:lane alone marks a lane; opposite_lane lies against a oneway (l
   expect([c.cycleLeft, c.cycleRight]).toEqual([1.6, 0]);
   expect(c.lanesForward + c.lanesBackward).toBe(1);
   expect(c.carriageway).toBeCloseTo(3.0 + 1.6, 6);
+});
+
+test('plain opposite_lane on oneway=-1: after the reversal (way along the car traffic) the lane lies left of it, against it', () => {
+  const tagged = crossSectionFromTags({ oneway: '-1', cycleway: 'opposite_lane' }, 'residential');
+  expect([tagged.cycleLeft, tagged.cycleRight]).toEqual([0, 1.6]); // against the OSM way: right of it
+  const c = reversed(tagged); // as parseOsm stores the way
+  expect([c.cycleLeft, c.cycleRight]).toEqual([1.6, 0]);
+  expect(c.cycleLeftDir).toBe(-1);
+  expect([c.lanesForward, c.lanesBackward]).toEqual([1, 0]);
+  const geometry = [{ lat: 50.963, lon: 6.95 }, { lat: 50.963, lon: 6.951 }];
+  const road = parseOsm({ elements: [{ type: 'way', id: 9, tags: { highway: 'residential', oneway: '-1', cycleway: 'opposite_lane' }, geometry }] }).roads[0]!;
+  expect([road.cross.cycleLeft, road.cross.cycleRight]).toEqual([1.6, 0]);
 });
 
 test('legacy parking:lane:both=diagonal → 4.5 m each side', () => {

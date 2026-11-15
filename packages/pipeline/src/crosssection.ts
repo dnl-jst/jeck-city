@@ -40,8 +40,10 @@ const isOneway = (t: Tags) => ['yes', '1', '-1'].includes(t.oneway ?? '') || t.j
 function cycleOn(t: Tags, side: 'left' | 'right'): number {
   const v = t[`cycleway:${side}`] ?? t['cycleway:both'] ?? t.cycleway;
   if (v === 'lane' || v === 'opposite_lane') {
-    // a plain cycleway=opposite_lane only runs against the oneway, i.e. on the left
-    if (v === 'opposite_lane' && t[`cycleway:${side}`] === undefined && t['cycleway:both'] === undefined && side === 'right') return 0;
+    // a plain cycleway=opposite_lane only runs against the oneway, i.e. left of the car traffic: left of the way,
+    // right of it on oneway=-1 (the traffic runs against the way)
+    const contra = t.oneway === '-1' ? 'right' : 'left';
+    if (v === 'opposite_lane' && t[`cycleway:${side}`] === undefined && t['cycleway:both'] === undefined && side !== contra) return 0;
     return CYCLE_LANE;
   }
   if (v !== undefined) return 0; // track, separate, no, shared_lane, …
@@ -59,11 +61,11 @@ function cycleDir(t: Tags, side: 'left' | 'right', oneway: boolean): 1 | -1 {
   return (v === 'opposite_lane' ? -traffic : traffic) as 1 | -1;
 }
 
-/** Parking strip on the carriageway for one side: width and orientation (null without a strip). */
 /** A separately mapped parking area alongside one side of the way (amenity=parking, street_side/lane/layby). */
 export type SeparateParking = { width?: number; orientation?: string };
 export type SeparateSides = { left?: SeparateParking; right?: SeparateParking };
 
+/** Parking strip on the carriageway for one side: width and orientation (null without a strip). */
 function parkOn(t: Tags, side: 'left' | 'right', sep?: SeparateParking): { width: number; orientation: ParkOrientation | null } {
   const none = { width: 0, orientation: null };
   const v = t[`parking:${side}`] ?? t['parking:both'];
