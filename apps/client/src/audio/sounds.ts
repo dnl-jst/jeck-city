@@ -1,10 +1,13 @@
 /** Catalogue of the game's CC0 recordings in `public/audio/` (sources and licences: `public/audio/CREDITS.md`). */
-export type SoundId =
+export type FileSoundId =
   | 'step1' | 'step2' | 'step3' | 'step4' | 'land'
   | 'doorOpen' | 'doorClose' | 'engineStart' | 'engineStop'
   | 'engineIdle' | 'engineMid' | 'engineHigh'
   | 'skid' | 'impact1' | 'impact2' | 'impact3'
   | 'ambience' | 'tramBell' | 'static';
+/** Sounds synthesised in the browser (bike, see bike-sound.ts); the mixer generates them on unlock. */
+export type SynthSoundId = 'bikeTick' | 'bikeRoll' | 'bikeChain' | 'bikeBell';
+export type SoundId = FileSoundId | SynthSoundId;
 
 export interface SoundDef {
   /** File name inside `public/audio/` (served at `/audio/<file>`). */
@@ -15,7 +18,7 @@ export interface SoundDef {
   rpm?: number;
 }
 
-export const SOUNDS: Record<SoundId, SoundDef> = {
+export const SOUNDS: Record<FileSoundId, SoundDef> = {
   step1: { file: 'step-1.ogg', loop: false },
   step2: { file: 'step-2.ogg', loop: false },
   step3: { file: 'step-3.ogg', loop: false },
@@ -38,4 +41,4 @@ export const SOUNDS: Record<SoundId, SoundDef> = {
 };
 
 /** Engine loops present in the set, ascending by `rpm` (all from the same car). */
-export const ENGINE_LOOPS: SoundId[] = ['engineIdle', 'engineMid', 'engineHigh'];
+export const ENGINE_LOOPS: FileSoundId[] = ['engineIdle', 'engineMid', 'engineHigh'];

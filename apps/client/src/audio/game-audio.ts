@@ -4,6 +4,7 @@ import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
 import { VehicleSound } from './vehicle-sound';
+import { BikeSound } from './bike-sound';
 
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
@@ -37,7 +38,10 @@ export class GameAudio {
   private readonly rand: () => number;
   private readonly vehicle: VehicleSound;
   private readonly steps = new StepClock();
-  private readonly bell: TramBell;
+  private readonly tramBell: TramBell;
+  private readonly bike: BikeSound;
+  /** On a bike: its loops run (once loaded + unlocked). */
+  private riding = false;
   private impacts = new ImpactDetector();
   private staticVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
@@ -55,7 +59,8 @@ export class GameAudio {
   constructor(private readonly d: { mixer: AudioMixerLike; radio: RadioLike; tuner: RadioTuner; flash(text: string): void; rand?: () => number }) {
     this.rand = d.rand ?? Math.random;
     this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'sfx') });
-    this.bell = new TramBell(this.rand);
+    this.tramBell = new TramBell(this.rand);
+    this.bike = new BikeSound({ loop: (id) => d.mixer.loop(id, 'sfx'), oneShot: (id, o) => d.mixer.oneShot(id, o) });
   }
 
   /** Chosen station while in a car, null on foot. */
@@ -178,10 +183,36 @@ export class GameAudio {
     this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, cueDt);
   }
 
+  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked). */
+  mountBike(): void {
+    this.riding = true;
+    this.startLoops();
+  }
+
+  dismountBike(): void {
+    this.riding = false;
+    this.bike.stop();
+  }
+
+  /** On a bike, every frame: rolling, chain and freewheel. Speed in m/s. */
+  ride(s: { speed: number; pedalling: boolean; grounded: boolean }, dt: number): void {
+    this.bike.update(s, Math.min(dt, MAX_DT));
+  }
+
+  /** H on the bike. */
+  bell(): void {
+    this.bike.bell();
+  }
+
+  /** Fell off the bike. */
+  crashBike(): void {
+    this.d.mixer.oneShot('impact2', { gain: MIX.impact * 0.7 });
+  }
+
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
-    if (nearestTramStop && this.bell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
+    if (nearestTramStop && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
       this.d.mixer.oneShot('tramBell', { gain: MIX.tramBell, at: { x: nearestTramStop.x, z: nearestTramStop.z } });
     }
   }
@@ -205,5 +236,6 @@ export class GameAudio {
       this.ambience.setGain(MIX.ambience);
     }
     if (this.inCar && this.engineOn) this.vehicle.start();
+    if (this.riding) this.bike.start();
   }
 }
