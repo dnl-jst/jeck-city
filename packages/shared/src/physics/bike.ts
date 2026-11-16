@@ -39,6 +39,10 @@ const FRAME_TOP = 1.2;
 const OFFSET = 0.02;
 /** Surfaces whose normal points up more than this (slope ≤ maxSlope) are ground, not obstacles for the frame. */
 const WALKABLE_NY = Math.cos(T.maxSlope);
+/** Wheel ground probes look this far above and below the bike's ground height (m). */
+const WHEEL_PROBE = 0.5;
+/** Most the shown bike pitches on uneven ground (rad). */
+const MAX_PITCH = 0.4;
 /** Dynamic bodies lighter than this are shoved, not stopped at (kg). */
 const LIGHT_BODY_KG = 100;
 
@@ -224,6 +228,31 @@ export class RiddenBike {
     const curv = Math.tan(this.s.steer) / this.spec.wheelbase;
     const a = Math.atan((this.s.speed * this.s.speed * curv) / G);
     return Math.max(-max, Math.min(max, a));
+  }
+
+  /**
+   * How the (always level) physics bike should be shown on uneven ground: pitch (rad, + = nose up) from the ground
+   * under the front and rear wheel, and dy (m) to lift or lower the model so both wheels touch it. Zero in the air or
+   * where a wheel finds no ground near the bike's height. Pass the (interpolated) state that is shown.
+   */
+  groundPose(s: BikeState = this.s): { pitch: number; dy: number } {
+    if (!s.grounded) return { pitch: 0, dy: 0 };
+    const half = this.spec.wheelbase / 2, fx = Math.sin(s.heading), fz = Math.cos(s.heading);
+    const front = this.groundAt(s.x + fx * half, s.y, s.z + fz * half);
+    const rear = this.groundAt(s.x - fx * half, s.y, s.z - fz * half);
+    if (front === null || rear === null) return { pitch: 0, dy: 0 };
+    const pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, Math.atan2(front - rear, this.spec.wheelbase)));
+    const dy = Math.max(-WHEEL_PROBE / 2, Math.min(WHEEL_PROBE / 2, (front + rear) / 2 - s.y));
+    return { pitch, dy };
+  }
+
+  /** Ground height under (x, z) within WHEEL_PROBE of y, or null. */
+  private groundAt(x: number, y: number, z: number): number | null {
+    const { rapier: R, world } = this.pw;
+    const hit = world.castRayAndGetNormal(new R.Ray({ x, y: y + WHEEL_PROBE, z }, { x: 0, y: -1, z: 0 }), 2 * WHEEL_PROBE, true,
+      undefined, undefined, undefined, undefined, this.notMe);
+    if (!hit || hit.normal.y < WALKABLE_NY) return null;
+    return y + WHEEL_PROBE - hit.timeOfImpact;
   }
 
   /** Removes the bike from the world. The instance must not be used afterwards. */
