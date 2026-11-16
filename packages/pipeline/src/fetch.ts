@@ -6,7 +6,20 @@ import { pipeline } from 'node:stream/promises';
 
 const LOD2_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod2_gml/lod2_gml/';
 const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/';
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
+/**
+ * Overpass instances tried in turn (main instance first, then public mirrors in Germany). The main instance is often
+ * overloaded or unreachable from CI runners, so one server is not enough.
+ */
+export const OVERPASS_URLS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+];
+/** Attempts over all instances (round robin) before giving up, and the pause between two attempts. */
+const OVERPASS_ATTEMPTS = 9;
+const OVERPASS_RETRY_MS = 20_000;
+/** Longest one Overpass request may take (the query itself allows 180 s on the server). */
+const OVERPASS_REQUEST_MS = 240_000;
 const USER_AGENT = 'nippes-nights-pipeline/0.1';
 
 // Play area bbox (UTM 32N): Nippes + Neustadt-Nord (Agnesviertel), + 250 m: covers the 150 m backdrop and the
@@ -121,33 +134,48 @@ out geom;
 );
 out geom;`;
 
-/** Fetches OSM data via Overpass into `dir/osm.json`; returns the path. Cached if present. */
-export async function fetchOsm(dir: string): Promise<string> {
+/**
+ * Fetches OSM data via Overpass into `dir/osm.json`; returns the path. Cached if present. Network errors, timeouts,
+ * overload answers (429/5xx) and broken JSON move on to the next instance in OVERPASS_URLS after a pause; other HTTP
+ * errors (e.g. 400, a broken query) fail at once.
+ */
+export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number } = {}): Promise<string> {
+  const { urls = OVERPASS_URLS, attempts = OVERPASS_ATTEMPTS, retryMs = OVERPASS_RETRY_MS } = o;
   await mkdir(dir, { recursive: true });
   const path = join(dir, 'osm.json');
   if (await exists(path)) {
     console.log('skip osm.json (cached)');
     return path;
   }
-  for (let attempt = 0; ; attempt++) {
-    const res = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ data: OVERPASS_QUERY }),
-    });
-    if (res.ok) {
-      const text = await res.text();
-      JSON.parse(text); // reject truncated/invalid responses
-      const tmp = `${path}.part`;
-      await writeFile(tmp, text);
-      await rename(tmp, path);
-      return path;
+  const failures: string[] = [];
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const url = urls[attempt % urls.length]!;
+    if (attempt > 0) await sleep(retryMs);
+    console.log(`overpass ${url} (attempt ${attempt + 1}/${attempts})`);
+    let why: string;
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ data: OVERPASS_QUERY }),
+        signal: AbortSignal.timeout(OVERPASS_REQUEST_MS),
+      });
+      if (res.ok) {
+        const text = await res.text();
+        JSON.parse(text); // reject truncated/invalid responses (throws → next instance)
+        const tmp = `${path}.part`;
+        await writeFile(tmp, text);
+        await rename(tmp, path);
+        return path;
+      }
+      if (res.status !== 429 && res.status < 500) throw new Error(`Overpass ${url}: HTTP ${res.status}`);
+      why = `HTTP ${res.status}`;
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('Overpass ')) throw err;
+      why = err instanceof Error ? `${err.name}: ${err.message}${err.cause instanceof Error ? ` (${err.cause.message || err.cause.name})` : ''}` : String(err);
     }
-    if (([429, 502, 503, 504].includes(res.status)) && attempt < 3) {
-      console.log(`overpass HTTP ${res.status}, retry in 30 s`);
-      await sleep(30_000);
-      continue;
-    }
-    throw new Error(`Overpass: HTTP ${res.status}`);
+    console.log(`overpass ${url}: ${why}`);
+    failures.push(`${url}: ${why}`);
   }
+  throw new Error(`Overpass: all ${attempts} attempts failed:\n  ${failures.join('\n  ')}`);
 }

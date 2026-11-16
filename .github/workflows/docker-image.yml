@@ -39,15 +39,36 @@ jobs:
 
       # Raw open data (OSM, LoD2, DGM1; ~400 MB). The pipeline only downloads what is missing, so a cache hit skips
       # the download. One cache per month: OSM changes over time, but builds within a month use the same snapshot.
+      # An older month is restored as a fallback; it is only refreshed when this month's download works (Overpass
+      # is often overloaded), see the "Refresh OSM" step.
       - id: month
         run: echo "m=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
+      - id: raw
+        uses: actions/cache/restore@v6
         with:
           path: data/raw
           key: pipeline-raw-${{ steps.month.outputs.m }}
+          restore-keys: pipeline-raw-
+
+      - name: Refresh OSM for a new month (keep the old snapshot if Overpass is down)
+        if: steps.raw.outputs.cache-hit != 'true' && steps.raw.outputs.cache-matched-key != ''
+        run: |
+          mv data/raw/osm.json data/raw/osm.previous.json
+          if ! npx tsx -e "import('./packages/pipeline/src/fetch.ts').then((f) => f.fetchOsm('data/raw'))"; then
+            echo "::warning::Overpass unreachable, building with last month's OSM snapshot"
+            mv data/raw/osm.previous.json data/raw/osm.json
+          fi
+          rm -f data/raw/osm.previous.json
 
       - name: Build the world (apps/client/public/world)
         run: npm run pipeline
+
+      # saved right away, so a later failing step (tests, image) does not throw the downloads away
+      - if: steps.raw.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: data/raw
+          key: pipeline-raw-${{ steps.month.outputs.m }}
 
       - run: npm run typecheck
       - run: npm test
