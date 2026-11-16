@@ -7,11 +7,10 @@ import { fixtureAssets } from '../../../../packages/shared/src/sim/fixture.test-
 import { ServerClock } from './clock';
 import type { NetState } from './connection';
 import { OnlineSession, remoteList, type NetLink } from './online-session';
+import { InputQueue } from '../../../server/src/inputs';
 
 const ME = 1, OTHER = 2;
 const TICK_MS = 1000 / 60;
-/** Most inputs the server holds per player (as apps/server InputQueue). */
-const QUEUE_MAX = 6;
 const N = NEUTRAL_INPUT(0);
 
 /** Seeded PRNG (mulberry32): frame-time jitter, the same every run. */
@@ -31,20 +30,26 @@ type Pose = Record<'x' | 'y' | 'z' | 'qx' | 'qy' | 'qz' | 'qw', number>;
 
 /**
  * A server WorldSim behind a fake connection: inputs and snapshots travel through the codec with `oneWayMs` delay each
- * way; the server steps at 60 Hz in simulated time, takes one queued input per player and tick (neutral if none), and
+ * way; the server steps at 60 Hz in simulated time, takes ME's input from the server's InputQueue each tick, and
  * sends a snapshot plus the slow-state mirror every 3rd tick.
  */
 class FakeNet {
   t = 0;
   /** Link stalled: inputs and snapshots sent meanwhile are lost. */
   hold = false;
+  /**
+   * A busy main thread (slow frames): the browser runs the next frame before the message tasks queued meanwhile, so a
+   * snapshot reaches the session one frame later than it arrived. play() releases them.
+   */
+  starved = false;
+  private held: { at: number; deliver: () => void }[] = [];
+  /** Whether the next message in direction `dir` is stalled (lost and resent, as NN_FAKE_LAG's stall percentage). */
+  stall: ((dir: 'up' | 'down') => boolean) | null = null;
+  private readonly lastDue = { up: 0, down: 0 };
   /** Inputs of the server-side players other than ME, per tick. */
   others: (tick: number) => Map<number, PlayerInput> = () => new Map();
   readonly link: NetLink;
-  private readonly queue: { seq: number; input: PlayerInput }[] = [];
-  private lastQueued = -1;
-  private ackSeq = 0;
-  private lastYaw = 0;
+  private readonly queue = new InputQueue(0);
   private nextTick = TICK_MS;
   private events: SimEvent[] = [];
   private readonly interest = new Interest();
@@ -62,7 +67,7 @@ class FakeNet {
       sendInputs: (p: InputPacket) => {
         if (this.hold) return;
         const bytes = encodeInputs(p);
-        this.post(() => this.receive(decodeInputs(bytes)!));
+        this.post(() => this.receive(decodeInputs(bytes)!), 'up');
       },
       sendRadio: () => undefined,
       onSnapshot: (cb) => { this.listeners.add(cb); return () => this.listeners.delete(cb); },
@@ -88,37 +93,44 @@ class FakeNet {
     this.t = ms;
   }
 
-  private post(run: () => void): void {
-    this.mail.push({ at: this.t + this.oneWayMs, run });
+  private post(run: () => void, dir: 'up' | 'down'): void {
+    // as the server's fake lag: a stalled message waits 200 ms more, and nothing overtakes it (TCP)
+    const at = Math.max(this.t + this.oneWayMs + (this.stall?.(dir) ? 200 : 0), this.lastDue[dir]);
+    this.lastDue[dir] = at;
+    this.mail.push({ at, run });
   }
 
   private receive(p: InputPacket): void {
-    p.inputs.forEach((input, k) => {
-      if (p.seq + k <= this.lastQueued) return;
-      this.lastQueued = p.seq + k;
-      this.queue.push({ seq: p.seq + k, input });
-      if (this.queue.length > QUEUE_MAX) this.queue.shift();
-    });
+    this.queue.push(p, this.t);
   }
 
   private tick(): void {
     const s = this.server;
     const inputs = this.others(s.tick);
-    const e = this.queue.shift();
-    if (e) { this.ackSeq = e.seq; this.lastYaw = e.input.yaw; }
-    inputs.set(ME, e ? e.input : NEUTRAL_INPUT(this.lastYaw));
+    inputs.set(ME, this.queue.next());
     this.events.push(...s.step(inputs));
     if (s.tick % 3 !== 0) return;
-    const bytes = encodeSnapshot(buildSnapshot(s, ME, this.interest, this.ackSeq, this.events, (id) => id));
+    const bytes = encodeSnapshot(buildSnapshot(s, ME, this.interest, this.queue.ackSeq, this.events, (id) => id));
     this.events = [];
     const mirror = this.slowState();
     if (this.hold) return;
     this.post(() => {
       const snap = decodeSnapshot(bytes)!;
       this.link.clock.onSnapshot(snap.serverTick, this.t);
-      this.mirror = mirror;
-      for (const cb of this.listeners) cb(snap);
-    });
+      const deliver = () => {
+        this.mirror = mirror;
+        for (const cb of this.listeners) cb(snap);
+      };
+      if (this.starved) this.held.push({ at: this.t, deliver });
+      else deliver();
+    }, 'down');
+  }
+
+  /** Starved: hands the session the snapshots that arrived up to `ms`. */
+  release(ms: number): void {
+    const due = this.held.filter((h) => h.at <= ms);
+    this.held = this.held.filter((h) => h.at > ms);
+    for (const h of due) h.deliver();
   }
 
   /** What the Colyseus state would hold (as the room's syncState). */
@@ -165,19 +177,26 @@ async function setup(a: WorldAssets, at: { x: number; z: number }, oneWayMs: num
   return { server, client, net, session };
 }
 
-type Frame = { t: number; events: SimEvent[]; correction: number; predErrorM: number; probe: boolean };
+type Frame = { t: number; events: SimEvent[]; correction: number; predErrorM: number; probe: boolean; steps: number };
 
-/** Plays `ms` of frames with 12–21 ms frame times (60 fps on average); input(t) is the input of the frame at t. */
+/**
+ * Plays `ms` of frames with 12–21 ms frame times (60 fps on average; `frameMs` sets other bounds); input(t) is the
+ * input of the frame at t.
+ */
 function play(
   net: FakeNet, session: OnlineSession, ms: number, input: (t: number) => PlayerInput, rnd: () => number, probe = () => false,
+  frameMs: [number, number] = [12, 21.33],
 ): Frame[] {
   const out: Frame[] = [];
   const end = net.t + ms;
   while (net.t < end) {
-    const dt = 12 + rnd() * 9.33;
+    const dt = frameMs[0] + rnd() * (frameMs[1] - frameMs[0]);
+    const prev = net.t;
     net.advanceTo(net.t + dt);
-    const events = session.frame(dt / 1000, input(net.t));
-    out.push({ t: net.t, events, correction: session.correction, predErrorM: session.stats().predErrorM, probe: probe() });
+    net.release(prev);
+    const steps = session.steps;
+    const events = session.frame(Math.min(dt, 100) / 1000, input(net.t)); // main.ts clamps frame time to 0.1 s
+    out.push({ t: net.t, events, correction: session.correction, predErrorM: session.stats().predErrorM, probe: probe(), steps: session.steps - steps });
   }
   return out;
 }
@@ -224,6 +243,50 @@ describe('OnlineSession', () => {
     expect(p95(frames.map((f) => f.predErrorM))).toBeLessThan(0.2);
     const p = client.player(ME).pos;
     expect(Math.hypot(p.x + 60, p.z + 80)).toBeGreaterThan(10);
+  }, 60_000);
+
+  test('slow renderer (9–11 fps, steps sent bunched, snapshots seen a frame late) at 150 ms RTT: correction per step p95 ≤ 0.2 m, driving', async () => {
+    const { net, session, client } = await setup(openRoad(), { x: -57.5, z: -80 }, 75);
+    const rnd = prng(9);
+    const slow: [number, number] = [90, 133];
+    net.starved = true;
+
+    play(net, session, 500, () => N, rnd, undefined, slow);
+    const ev = play(net, session, 1, () => ({ ...N, use: true }), rnd, undefined, slow).flatMap((f) => f.events); // one frame
+    expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0 });
+    play(net, session, 1500, () => N, rnd, undefined, slow);
+    const replay = vi.spyOn(client, 'replay');
+    const frames = play(net, session, 20_000, () => {
+      const p = client.player(ME);
+      return { ...N, forward: 1, right: -0.6, yaw: p.car ? headingOf(p.car) : 0 };
+    }, rnd, undefined, slow);
+    expect(client.player(ME).mode).toBe('drive');
+    // every snapshot is reconciled by replaying (inputs sent, still queued at the server, and in flight exceed 20)
+    expect(replay.mock.calls.filter((c) => c[2].length === 0)).toEqual([]);
+    expect(p95(frames.map((f) => f.correction / Math.max(1, f.steps)))).toBeLessThan(0.2);
+    const p = client.player(ME).pos;
+    expect(Math.hypot(p.x + 60, p.z + 80)).toBeGreaterThan(10);
+  }, 60_000);
+
+  test('slow renderer at 150 ms RTT: a stalled input packet does not throw the prediction away', async () => {
+    const { net, session, client } = await setup(fixtureAssets(), { x: -70, z: -70 }, 75);
+    const rnd = prng(11);
+    const slow: [number, number] = [90, 110];
+    net.starved = true;
+    const run = () => ({ ...N, forward: 1, run: true });
+    play(net, session, 2000, run, rnd, undefined, slow);
+    const replay = vi.spyOn(client, 'replay');
+    // one input packet waits 200 ms longer (a lost TCP segment), the ones after it queue up behind it
+    let stalled = false;
+    net.stall = (dir) => dir === 'up' && !stalled && (stalled = true);
+    const frames = play(net, session, 5000, run, rnd, undefined, slow);
+    // inputs in flight, held at the server, and sent while the snapshot waited: more than 20, still replayed
+    const lens = replay.mock.calls.map((c) => c[2].length);
+    expect(lens.every((n) => n > 0)).toBe(true);
+    expect(Math.max(...lens)).toBeGreaterThan(20);
+    expect(Math.max(...frames.map((f) => f.correction))).toBeLessThan(1);
+    // the backlog the late packet left at the server is trimmed again
+    expect(lens.at(-1)).toBeLessThan(20);
   }, 60_000);
 
   test('more than MAX_REPLAY_STEPS pending → hard set', async () => {

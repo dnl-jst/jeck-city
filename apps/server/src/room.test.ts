@@ -8,6 +8,7 @@ import {
   type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
+import { INPUT_BURST, QUEUE_MAX } from './inputs';
 import { startServer, type RunningServer } from './server';
 
 const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
@@ -142,7 +143,9 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await sleep(100);
     const q = srv.room.queueOf(a.sessionId)!;
     // MAX_INPUTS_PER_S over the time the flood really took (longer than 1.1 s on a loaded machine), plus the burst
-    expect(q.accepted).toBeLessThanOrEqual(Math.ceil((90 * (Date.now() - t0)) / 1000) + 6);
+    expect(q.accepted).toBeLessThanOrEqual(Math.ceil((90 * (Date.now() - t0)) / 1000) + INPUT_BURST);
+    // the backlog stays bounded (one input per tick is taken from it, so the flood does not speed the player up)
+    expect(q.size).toBeLessThanOrEqual(QUEUE_MAX);
     // the simulation kept ticking at about 60 Hz throughout
     expect(srv.room.sim.tick - tick0).toBeGreaterThan(50);
     const p = srv.room.sim.player(srv.room.slotOf(a.sessionId)!);

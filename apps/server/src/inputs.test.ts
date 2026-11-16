@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_INPUTS_PER_S, NEUTRAL_INPUT, type InputPacket, type PlayerInput } from '@nn/shared';
-import { InputQueue } from './inputs';
+import { INPUT_BURST, InputQueue, QUEUE_MAX, TRIM_TO, TRIM_WINDOW } from './inputs';
 
 const input = (over: Partial<PlayerInput> = {}): PlayerInput => ({ ...NEUTRAL_INPUT(0.5), ...over });
 const packet = (seq: number, inputs: PlayerInput[]): InputPacket => ({ seq, tick: 0, inputs });
@@ -55,17 +55,73 @@ describe('InputQueue', () => {
         accepted++;
       }
     }
-    expect(accepted).toBeLessThanOrEqual(MAX_INPUTS_PER_S + 6);
+    expect(accepted).toBeLessThanOrEqual(MAX_INPUTS_PER_S + INPUT_BURST);
     expect(accepted).toBeGreaterThanOrEqual(MAX_INPUTS_PER_S - 1);
   });
 
-  it('queue keeps newest 6', () => {
+  it(`queue keeps newest ${QUEUE_MAX}`, () => {
     const q = new InputQueue(0);
-    for (let n = 1; n <= 9; n++) q.push(packet(n, [input({ forward: n / 10 })]), n * 20);
-    expect(q.size).toBe(6);
+    const n = QUEUE_MAX + 3;
+    for (let k = 1; k <= n; k++) q.push(packet(k, [input({ forward: k / 100 })]), k * 20);
+    expect(q.size).toBe(QUEUE_MAX);
     const got: number[] = [];
-    while (q.size > 0) got.push(Math.round(q.next().forward * 10));
-    expect(got).toEqual([4, 5, 6, 7, 8, 9]);
-    expect(q.ackSeq).toBe(9);
+    while (q.size > 0) got.push(Math.round(q.next().forward * 100));
+    expect(got).toEqual(Array.from({ length: QUEUE_MAX }, (_, k) => k + 4));
+    expect(q.ackSeq).toBe(n);
+  });
+
+  it('a slow client\'s bunched frame (8 steps in packets of 3) is queued whole', () => {
+    const q = new InputQueue(0);
+    for (let frame = 0; frame < 20; frame++) {
+      // 7.5 fps: 8 steps every 133 ms, 3 packets at once; the server ticks 8 times until the next frame
+      const seq = frame * 8 + 1;
+      const all = Array.from({ length: 8 }, (_, k) => input({ forward: (seq + k) / 1000 }));
+      for (const at of [0, 3, 6]) q.push(packet(seq + at, all.slice(at, at + 3)), frame * 133);
+      expect(q.size).toBe(8);
+      for (let k = 0; k < 8; k++) {
+        expect(q.next().forward).toBeCloseTo((seq + k) / 1000);
+        expect(q.ackSeq).toBe(seq + k);
+      }
+    }
+  });
+
+  it('a standing backlog (late burst after a stall) is trimmed one input per tick; pulses survive', () => {
+    const q = new InputQueue(0);
+    let seq = 1;
+    const send = (over: Partial<PlayerInput> = {}) => q.push(packet(seq++, [input({ forward: 1, ...over })]), seq * 16);
+    // a 60 Hz client one input ahead: it arrives each tick before the server takes one
+    for (let t = 0; t < 2 * TRIM_WINDOW; t++) {
+      send();
+      q.next();
+    }
+    expect(q.size).toBe(0);
+    // a stall: 12 inputs arrive at once (the server ran dry meanwhile); one of the oldest is an E press
+    for (let k = 0; k < 12; k++) send(k === 1 ? { use: true } : {});
+    const sizes: number[] = [];
+    let uses = 0;
+    for (let t = 0; t < 3 * TRIM_WINDOW; t++) {
+      send();
+      sizes.push(q.size); // what the tick finds queued
+      if (q.next().use) uses++;
+    }
+    // one window with the backlog standing, then trimmed down to TRIM_TO, and it stays there
+    expect(sizes[TRIM_WINDOW - 2]).toBe(13);
+    expect(sizes.at(-1)).toBe(TRIM_TO);
+    expect(Math.max(...sizes.slice(2 * TRIM_WINDOW))).toBe(TRIM_TO);
+    expect(uses).toBe(1);
+  });
+
+  it('a slow client\'s bunched frames are never trimmed (the queue runs empty each frame)', () => {
+    const q = new InputQueue(0);
+    const got: number[] = [];
+    for (let frame = 0; frame < 30; frame++) {
+      const seq = frame * 7 + 1;
+      // 7 steps per frame (8.6 fps), at once; the server ticks 7 times in between
+      q.push(packet(seq, Array.from({ length: 3 }, (_, k) => input({ forward: (seq + k) / 1000 }))), frame * 117);
+      q.push(packet(seq + 3, Array.from({ length: 3 }, (_, k) => input({ forward: (seq + 3 + k) / 1000 }))), frame * 117);
+      q.push(packet(seq + 6, [input({ forward: (seq + 6) / 1000 })]), frame * 117);
+      for (let k = 0; k < 7; k++) got.push(Math.round(q.next().forward * 1000));
+    }
+    expect(got).toEqual(Array.from({ length: 210 }, (_, k) => k + 1));
   });
 });
