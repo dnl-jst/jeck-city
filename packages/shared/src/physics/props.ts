@@ -110,6 +110,8 @@ export class StreetProps {
     const b = this.bodies.get(i);
     if (!b) return; // standing
     this.bodies.delete(i);
+    // (rapier.js rescans every collider wrapper on removeRigidBody, ~15k here: about a millisecond, fine for a rare
+    // stand-up)
     this.pw.world.removeRigidBody(b);
     this.placePost(i);
   }
