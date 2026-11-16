@@ -46,10 +46,9 @@ export class BikeRig {
   lampRear: MeshStandardMaterial | null = null;
   private readonly nodes = new Map<string, Object3D>();
   private readonly radius = new Map<string, number>();
-  private spot: SpotLight | null = null;
+  private lights: BikeLights | null = null;
   private disco: Object3D | null = null;
   private discoMirror: MeshStandardMaterial | null = null;
-  private readonly discoDots: SpotLight[] = [];
   private discoT = 0;
   /** Disco ball spinning with its light dots (only bikes with a `disco` node). */
   discoOn = false;
@@ -99,29 +98,26 @@ export class BikeRig {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     });
+    this.disco = this.nodes.get('disco') ?? null;
+  }
+
+  /**
+   * Borrows the scene's bike lights while ridden: the front spot moves to `light_front`, the dots to `disco`. Call after
+   * adding root to the scene (and detachLights before removing it), so the scene's light count never changes.
+   */
+  attachLights(lights: BikeLights): void {
+    this.lights = lights;
     const front = this.nodes.get('light_front');
-    if (front) {
-      const spot = new SpotLight(0xfff1dc, 0, SPOT_DISTANCE, 0.45, 0.6, 1.6);
-      spot.position.set(0, 0, 0.05);
-      spot.target.position.set(0, -0.6, 8);
-      front.add(spot, spot.target);
-      spot.visible = false;
-      this.spot = spot;
-    }
-    const disco = this.nodes.get('disco');
-    if (disco) {
-      this.disco = disco;
-      DISCO_COLORS.forEach((col, k) => {
-        const az = (2 * Math.PI * k) / DISCO_COLORS.length;
-        const el = DISCO_ELEVATION[k % DISCO_ELEVATION.length]!;
-        const d = DISCO_DOT;
-        const s = new SpotLight(col, d.intensity, d.distance, d.angle, d.penumbra, d.decay);
-        s.target.position.set(Math.cos(az) * Math.cos(el) * 5, Math.sin(el) * 5, Math.sin(az) * Math.cos(el) * 5);
-        disco.add(s, s.target);
-        s.visible = false;
-        this.discoDots.push(s);
-      });
-    }
+    if (front) front.add(lights.front, lights.front.target);
+    if (this.disco) for (const s of lights.dots) this.disco.add(s, s.target);
+  }
+
+  /** Hands the lights back to their holder, dark. */
+  detachLights(): void {
+    this.setLights(0);
+    this.setDisco(false);
+    this.lights?.park();
+    this.lights = null;
   }
 
   /** Whether this bike carries a disco ball. */
@@ -132,7 +128,7 @@ export class BikeRig {
   /** Disco ball on (spins, shimmers, throws coloured dots) or off. */
   setDisco(on: boolean): void {
     this.discoOn = on && this.hasDisco;
-    for (const s of this.discoDots) s.visible = this.discoOn;
+    if (this.lights) for (const s of this.lights.dots) s.intensity = this.discoOn ? DISCO_DOT.intensity : 0;
     if (this.discoMirror) this.discoMirror.emissiveIntensity = this.discoOn ? DISCO_GLOW : 0;
   }
 
@@ -188,10 +184,7 @@ export class BikeRig {
   setLights(night: number): void {
     if (this.lampFront) this.lampFront.emissiveIntensity = night * LAMP_GLOW;
     if (this.lampRear) this.lampRear.emissiveIntensity = night * LAMP_GLOW;
-    if (this.spot) {
-      this.spot.visible = night > 0.3;
-      this.spot.intensity = night * SPOT_INTENSITY;
-    }
+    if (this.lights) this.lights.front.intensity = night > 0.3 ? night * SPOT_INTENSITY : 0;
   }
 
   /** Position of node `name` in the lean group's frame (where the rider figure hangs while riding). */
@@ -213,6 +206,42 @@ export class BikeRig {
   private world(name: string): Vector3 {
     const o = this.nodes.get(name);
     return o ? o.getWorldPosition(new Vector3()) : this.root.position.clone();
+  }
+}
+
+/**
+ * The ridden bike's real lights (front lamp spot, disco ball dots): created once, always in the scene and always
+ * visible, only dimmed to zero when unused. three.js recompiles every material in the scene when the number of
+ * lights changes, which froze the client for seconds on getting on a bike at night or switching the disco ball.
+ */
+export class BikeLights {
+  readonly front: SpotLight;
+  readonly dots: SpotLight[] = [];
+  private readonly holder = new Group();
+
+  constructor(scene: Object3D) {
+    this.front = new SpotLight(0xfff1dc, 0, SPOT_DISTANCE, 0.45, 0.6, 1.6);
+    this.front.position.set(0, 0, 0.05);
+    this.front.target.position.set(0, -0.6, 8);
+    DISCO_COLORS.forEach((col, k) => {
+      const az = (2 * Math.PI * k) / DISCO_COLORS.length;
+      const el = DISCO_ELEVATION[k % DISCO_ELEVATION.length]!;
+      const d = DISCO_DOT;
+      const s = new SpotLight(col, 0, d.distance, d.angle, d.penumbra, d.decay);
+      s.target.position.set(Math.cos(az) * Math.cos(el) * 5, Math.sin(el) * 5, Math.sin(az) * Math.cos(el) * 5);
+      this.dots.push(s);
+    });
+    this.holder.name = 'bike-lights';
+    scene.add(this.holder);
+    this.park();
+  }
+
+  /** Back into the holder, dark (nobody riding). */
+  park(): void {
+    for (const l of [this.front, ...this.dots]) {
+      l.intensity = 0;
+      this.holder.add(l, l.target);
+    }
   }
 }
 

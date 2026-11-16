@@ -3,7 +3,7 @@ import {
   BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
 } from '@nn/shared';
-import { BikeRig, RIDER_POSTURE } from './bikes/rig';
+import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
 import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
@@ -53,6 +53,8 @@ export class Game {
   private readonly bikeView: BikeView | null = null;
   private readonly rigs = new Map<BikeType, BikeRig>();
   private rig: BikeRig | null = null;
+  /** The ridden bike's spotlights: always in the scene (constant light count), lent to the rig while riding. */
+  private readonly bikeLights: BikeLights;
   /** Player character shown (CHARACTER_VARIANTS); C switches to the next one that has a model. */
   character: CharacterVariant;
   readonly follow: FollowCamera;
@@ -107,6 +109,7 @@ export class Game {
     this.character = storedCharacter();
     this.figure.setModel(ctx.character ?? null);
     this.driven = new DrivenCar(scene, ctx.carModels);
+    this.bikeLights = new BikeLights(scene);
     this.fly = new FreeFly(camera, input);
     const heading = devCam ? devCam.yawDeg * DEG : m.spawn.heading;
     this.figure.heading = heading;
@@ -398,6 +401,7 @@ export class Game {
       this.rig.setColor(sim.bikes.colors[id]!);
       this.rig.snapLean();
       this.ctx.scene.add(this.rig.root);
+      this.rig.attachLights(this.bikeLights);
       this.rig.leanGroup.add(this.figure.group);
     }
     this.follow.setDriving(true, s.heading, 'bike');
@@ -410,9 +414,8 @@ export class Game {
   private leftBike(heading: number, crash: boolean): void {
     this.currBike = this.prevBike = null;
     if (this.rig) {
+      this.rig.detachLights();
       this.ctx.scene.remove(this.rig.root);
-      this.rig.setLights(0);
-      this.rig.setDisco(false);
     }
     this.rig = null;
     this.ctx.scene.add(this.figure.group);

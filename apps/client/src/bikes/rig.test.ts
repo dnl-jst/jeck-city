@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
-import { BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D } from 'three';
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial, Object3D, Scene, type SpotLight } from 'three';
 import type { BikeState } from '@nn/shared';
-import { BikeRig, visibleBikes, wheelSpin } from './rig';
+import { BikeLights, BikeRig, visibleBikes, wheelSpin } from './rig';
 
 /** Minimal bike model with the README node contract; wheels are 0.7 m boxes (radius 0.35). */
 function model(trike = false): { root: Object3D; paint: MeshStandardMaterial } {
@@ -122,9 +122,10 @@ describe('disco ball', () => {
     ball.name = 'disco';
     root.getObjectByName('frame')!.add(ball);
     const rig = new BikeRig(root, 'soundjohn');
+    rig.attachLights(new BikeLights(new Scene()));
     expect(rig.hasDisco).toBe(true);
     const disco = rig.node('disco')!;
-    const dots = () => disco.children.filter((c) => (c as { isSpotLight?: boolean }).isSpotLight && c.visible).length;
+    const dots = () => disco.children.filter((c) => (c as SpotLight).isSpotLight && (c as SpotLight).intensity > 0).length;
     rig.update(state(), 0, 0.5);
     expect(disco.rotation.y).toBe(0);
     expect(dots()).toBe(0);
@@ -139,5 +140,36 @@ describe('disco ball', () => {
     rig.update(state(), 0, 0.5);
     expect(disco.rotation.y).toBe(y);
     expect(dots()).toBe(0);
+  });
+});
+
+describe('bike lights', () => {
+  const lit = (scene: Scene) => {
+    let n = 0;
+    scene.traverseVisible((o) => { if ((o as SpotLight).isSpotLight) n++; });
+    return n;
+  };
+
+  test('getting on and off, night and disco never change the number of visible lights in the scene', () => {
+    const scene = new Scene();
+    const lights = new BikeLights(scene);
+    const n = lit(scene);
+    expect(n).toBeGreaterThan(1);
+    const { root } = model();
+    const ball = new Mesh(new BoxGeometry(0.2, 0.2, 0.2), new MeshStandardMaterial({ name: 'mirror' }));
+    ball.name = 'disco';
+    root.getObjectByName('frame')!.add(ball);
+    const rig = new BikeRig(root, 'soundjohn');
+    scene.add(rig.root);
+    rig.attachLights(lights);
+    rig.setLights(1);
+    rig.setDisco(true);
+    expect(lit(scene)).toBe(n);
+    expect(lights.front.intensity).toBeGreaterThan(0);
+    expect(rig.node('light_front')!.children).toContain(lights.front);
+    rig.detachLights();
+    scene.remove(rig.root);
+    expect(lit(scene)).toBe(n);
+    expect([lights.front, ...lights.dots].every((l) => l.intensity === 0)).toBe(true);
   });
 });
