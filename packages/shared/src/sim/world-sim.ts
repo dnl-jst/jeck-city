@@ -635,6 +635,5 @@ export class WorldSim {
     this.ignitions[i]!.stop();
     this.brakes[i] = false;
     this.horns[i] = false;
-
   }
 }

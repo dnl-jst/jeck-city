@@ -525,7 +525,6 @@ export class OnlineSession implements Session {
     const p = this.sim.player(this.me);
     return { pos: p.pos, car: p.carId, bike: p.bikeId, ign: p.carId !== null ? this.sim.ignition(p.carId).save() : null, state: p };
   }
-
 }
 
 export type RemotePlayerInfo = { slot: number; name: string; x: number; z: number; mode: 'walk' | 'drive' | 'ride' | 'down' };

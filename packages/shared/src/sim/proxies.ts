@@ -66,5 +66,4 @@ export class Proxies {
     }
     for (const [i, pose] of poses) if (!skip(i)) this.bikes.follow(i, pose);
   }
-
 }
