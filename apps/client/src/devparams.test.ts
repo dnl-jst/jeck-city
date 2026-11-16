@@ -36,6 +36,7 @@ describe('devAllowed', () => {
   it('offline keeps today: cam always, fly and write hooks with debug', () => {
     expect(devAllowed('offline', null, false)).toEqual({ cam: true, fly: false, writeHooks: false });
     expect(devAllowed('offline', null, true)).toEqual(all);
+    expect(devAllowed('offline', null, false, true)).toEqual({ cam: true, fly: false, writeHooks: true });
   });
   it('online everything needs devMode, debug does not matter', () => {
     expect(devAllowed('online', on, false)).toEqual(all);
@@ -43,5 +44,6 @@ describe('devAllowed', () => {
     expect(devAllowed('online', off, false)).toEqual(none);
     expect(devAllowed('online', off, true)).toEqual(none);
     expect(devAllowed('online', null, true)).toEqual(none);
+    expect(devAllowed('online', off, false, true)).toEqual(none);
   });
 });

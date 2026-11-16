@@ -22,11 +22,13 @@ export function withDateParam(now: Date, s: string | null): Date {
 export type DevAllowed = { cam: boolean; fly: boolean; writeHooks: boolean };
 
 /**
- * Which dev hooks apply. Offline: as before (`?cam` always, fly and write hooks with `?debug=1`). Online: everything
+ * Which dev hooks apply. Offline: as before (`?cam` always, fly with `?debug=1`, write hooks in a dev build or with `?debug=1`). Online: everything
  * only when the server runs in dev mode (`?cam` then teleports the player there with `devTeleport`).
  */
-export function devAllowed(mode: 'offline' | 'online', welcome: { devMode: boolean } | null, debug: boolean): DevAllowed {
-  if (mode === 'offline') return { cam: true, fly: debug, writeHooks: debug };
+export function devAllowed(
+  mode: 'offline' | 'online', welcome: { devMode: boolean } | null, debug: boolean, devBuild = false,
+): DevAllowed {
+  if (mode === 'offline') return { cam: true, fly: debug, writeHooks: devBuild || debug };
   const dev = welcome?.devMode === true;
   return { cam: dev, fly: dev, writeHooks: dev };
 }

@@ -326,11 +326,11 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     (x, z) => heightAt(terrain, x, z),
   );
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
-  // online, ?cam / fly / write hooks need a dev-mode server (?cam then teleports once)
-  const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug);
+  const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug, import.meta.env.DEV);
   const devCam = allowed.cam ? devCamParam : null;
   let session: Session;
   if (conn) {
+    // online, ?cam / fly / write hooks need a dev-mode server (?cam then teleports once)
     sim.addPlayer(conn.welcome.slot, devCam ? start : undefined);
     if (devCam) conn.sendTeleport(devCam.x, devCam.z);
     session = onlineSession = new OnlineSession(sim, conn);
@@ -368,7 +368,11 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   // write hooks (they change state) only where dev tools are allowed; the read-only getters always exist
   if (import.meta.env.DEV && allowed.writeHooks) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   if (allowed.writeHooks) window.__nnConn = () => connection;
-  window.__nnRemote = () => (onlineSession ? remoteList(onlineSession.remote(), onlineSession.roster().names, onlineSession.roster().cars, onlineSession.me) : []);
+  window.__nnRemote = () => {
+    if (!onlineSession) return [];
+    const roster = onlineSession.roster();
+    return remoteList(onlineSession.remote(), roster.names, roster.cars, onlineSession.me);
+  };
   window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
