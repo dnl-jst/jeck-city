@@ -9,7 +9,8 @@
 // B must see A in mode 'ride'. All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
 // B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
-// figure's per-frame step must not change by more than 1 m between frames (speed itself is no jump). Per-frame
+// figure must not move more than 1 m between two frames (spec 13.4), and its per-frame step must not change by more
+// than 1 m between frames (speed itself is no jump). Per-frame
 // numbers are printed too: a slow headless renderer puts several steps into one frame. Every recorded phase (also the
 // drive without --lag) prints A's frame rate, inputs sent per second (= physics steps), its reconciliations (replayed,
 // skipped because the prediction matched, set hard) and B's frame rate.
@@ -262,6 +263,7 @@ try {
   if (lag) {
     for (const [k, r] of Object.entries(results)) {
       if (r.stepP95 > P95_MAX) { console.error(`FAIL: ${k} correction per step p95 ${r.stepP95.toFixed(4)} m > ${P95_MAX}`); failed = true; }
+      if (r.jump > JUMP_MAX) { console.error(`FAIL: ${k} remote frame jump ${r.jump.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
       if (r.excess > JUMP_MAX) { console.error(`FAIL: ${k} remote step change ${r.excess.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
     }
   }
