@@ -6,6 +6,12 @@ import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { availableParallelism } from 'node:os';
+
+// zlib's async functions run on libuv's thread pool (4 threads by default). Size it to the machine before the first
+// async fs/zlib call starts the pool, so every core compresses.
+const THREADS = availableParallelism();
+process.env.UV_THREADPOOL_SIZE ??= String(THREADS);
 
 const EXT = new Set(['.js', '.css', '.html', '.json', '.bin', '.glb']);
 const brotli = promisify(brotliCompress);
@@ -25,10 +31,12 @@ if (!(await stat(root).catch(() => null))?.isDirectory()) {
   process.exit(1);
 }
 const files = [];
-for await (const f of walk(root)) files.push(f);
+for await (const f of walk(root)) files.push({ f, size: (await stat(f)).size });
+// biggest first: a large file started last would leave all other threads idle at the end
+files.sort((a, b) => b.size - a.size);
 
 let before = 0, br = 0, gzSize = 0;
-const next = (async function* () { yield* files; })();
+const next = (async function* () { for (const x of files) yield x.f; })();
 async function worker() {
   for await (const f of next) {
     const data = await readFile(f);
@@ -45,6 +53,7 @@ async function worker() {
     gzSize += Math.min(g.length, data.length);
   }
 }
-await Promise.all(Array.from({ length: 4 }, worker));
+// each worker runs brotli and gzip at once, so half as many workers as threads keeps every thread busy
+await Promise.all(Array.from({ length: Math.max(1, Math.ceil(THREADS / 2)) }, worker));
 const mb = (n) => (n / 1048576).toFixed(1);
 console.log(`precompress: ${files.length} files, ${mb(before)} MB -> br ${mb(br)} MB, gz ${mb(gzSize)} MB`);
