@@ -12,7 +12,7 @@ import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
-import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedCars, type CarPose } from './car';
+import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedCars, type CarModels, type CarPose } from './car';
 import { angleDelta, PlayerFigure, type Posture } from './player';
 import { FollowCamera, FreeFly } from './camera';
 import { Ignition } from './ignition';
@@ -31,6 +31,8 @@ export type GameContext = {
   audio?: GameAudio;
   /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
   bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
+  /** Car model templates (WorldLoader.loadCarModels); without them cars still drive, just unseen. */
+  carModels?: CarModels;
 };
 
 /** Upper-body posture per bike type. */
@@ -108,7 +110,7 @@ export class Game {
     const { scene, camera, input, devCam, terrain } = ctx;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
-    this.driven = new DrivenCar(scene);
+    this.driven = new DrivenCar(scene, ctx.carModels);
     this.fly = new FreeFly(camera, input);
     const spawn = devCam ? { x: devCam.x, z: devCam.z, heading: devCam.yawDeg * DEG } : m.spawn;
     // first surface below a point 3 m above the terrain (sidewalk, kerb or the ground itself)
@@ -118,7 +120,7 @@ export class Game {
     this.prevPos = this.currPos = this.char.position();
     this.figure.heading = spawn.heading;
     this.props = new StreetProps(pw, m.lamps, m.trees, terrain);
-    this.cars = new ParkedCars(scene, pw, m.parked, terrain);
+    this.cars = new ParkedCars(scene, pw, m.parked, terrain, ctx.carModels);
     this.racks = new BikeRacks(pw, m.bikeRacks, terrain);
     this.bikes = new ParkedBikes(pw, m.bikes, terrain);
     if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, this.bikes, m.bikeRacks, this.racks.ys);
@@ -260,6 +262,7 @@ export class Game {
       const prev = this.prevPose ?? this.currPose;
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
       this.driven.setPose(pose);
+      this.driven.setWheels(this.vehicle!, dt);
       const braking = this.ctl.brake || (this.ctl.forward < 0 && this.vehicle!.speed() > 1);
       this.driven.setLights(night, braking, this.ignition.lightPower(Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
@@ -313,7 +316,7 @@ export class Game {
     this.char.setEnabled(false);
     this.figure.visible = false;
     this.driven.setPose(this.currPose);
-    this.driven.show(this.carColor);
+    this.driven.show(this.cars.types[id]!, this.carColor);
     this.follow.setDriving(true, headingOf(this.currPose));
     this.mode = 'drive';
     this.ignition.start();
@@ -327,7 +330,7 @@ export class Game {
     }
     const pose = this.vehicle!.pose();
     const heading = headingOf(pose);
-    const spot = exitSpot({ x: pose.x, z: pose.z, heading }, (x, z) => this.exitFree(pose, x, z));
+    const spot = exitSpot({ x: pose.x, z: pose.z, heading }, (x, z) => this.exitFree(pose, x, z), this.vehicle!.spec.length);
     if (!spot) {
       this.ctx.hud.flash('Hier kannst du nicht aussteigen');
       return;

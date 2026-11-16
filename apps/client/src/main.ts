@@ -232,6 +232,10 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     console.error(err);
     return undefined;
   });
+  const carModels = await world.loadCarModels(m).catch((err: unknown) => {
+    console.error(err);
+    return undefined;
+  });
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -240,7 +244,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio, bikeModels });
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio, bikeModels, carModels });
   if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);

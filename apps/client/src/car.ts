@@ -1,11 +1,11 @@
 import {
-  BoxGeometry, BufferAttribute, type BufferGeometry, CanvasTexture, Color, CylinderGeometry, Group,
-  AdditiveBlending, type Camera, DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, Mesh, MeshStandardMaterial, Quaternion, SpotLight, Sprite, SpriteMaterial,
-  SRGBColorSpace, Vector3, type Scene,
+  type BufferGeometry, CanvasTexture, Color, Group, type Material, type Object3D,
+  AdditiveBlending, type Camera, DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight, Sprite, SpriteMaterial,
+  Vector3, type Scene,
 } from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
-  heightAt, terrainNormal, TUNING, Vehicle, VEHICLE_REST_Y, type PhysicsWorld, type TerrainGrid, type WorldManifest,
+  CAR_SPECS, carTypeOf, heightAt, SUSPENSION_REST_LENGTH, terrainNormal, TUNING, Vehicle, VEHICLE_REST_Y, type CarType, type PhysicsWorld,
+  type TerrainGrid, type WorldManifest,
 } from '@nn/shared';
 
 type XZ = { x: number; z: number };
@@ -43,19 +43,21 @@ export const canGetOut = (speed: number): boolean => Math.abs(speed) < EXIT_MAX_
 
 /** Lateral distance of the exit spot from the car's centre line (m): 0.6 m clear of the 1.8 m wide body. */
 export const EXIT_SIDE = 1.5;
-/** Distance of the fallback exit spot behind the car's centre (m): 0.9 m clear of the 4.2 m long body. */
-export const EXIT_BEHIND = TUNING.vehicle.length / 2 + 0.9;
+/** Clearance of the fallback exit spot behind the car's body (m). */
+export const EXIT_BEHIND_CLEAR = 0.9;
 
 /**
  * Where the driver gets out: 1.5 m to the left of the car; if that spot is blocked, to the right;
- * else behind the car. null when all three are blocked. Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
+ * else behind the car (half the body `length` + 0.9 m). null when all three are blocked.
+ * Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
  */
-export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean): XZ | null {
+export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean, length: number = TUNING.vehicle.length): XZ | null {
   const s = Math.sin(car.heading), c = Math.cos(car.heading);
+  const behind = length / 2 + EXIT_BEHIND_CLEAR;
   const spots = [
     { x: car.x + c * EXIT_SIDE, z: car.z - s * EXIT_SIDE },
     { x: car.x - c * EXIT_SIDE, z: car.z + s * EXIT_SIDE },
-    { x: car.x - s * EXIT_BEHIND, z: car.z - c * EXIT_BEHIND },
+    { x: car.x - s * behind, z: car.z - c * behind },
   ];
   return spots.find((p) => isFree(p.x, p.z)) ?? null;
 }
@@ -70,76 +72,37 @@ export function headingOf(q: { qx: number; qy: number; qz: number; qw: number })
 
 // ---------------------------------------------------------------- model
 
-/** Ground level in the chassis frame (the physics chassis centre rests VEHICLE_REST_Y above the road). */
+/** Car model templates per type (WorldLoader.loadCarModels): full detail and the distance version. */
+export type CarModels = ReadonlyMap<CarType, { full: Object3D; lod: Object3D }>;
+
+/** The models stand on the ground at their origin; the chassis frame origin is VEHICLE_REST_Y above it. */
+const MODEL_TO_CHASSIS = new Matrix4().makeTranslation(0, -VEHICLE_REST_Y, 0);
+/** Ground level in the chassis frame. */
 const G = -VEHICLE_REST_Y;
-const V = TUNING.vehicle;
 
-function painted(g: BufferGeometry, hex: number): BufferGeometry {
-  const ng = g.index ? g.toNonIndexed() : g;
-  ng.deleteAttribute('uv');
-  const c = new Color(hex);
-  const n = ng.getAttribute('position').count;
-  const col = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
-  ng.setAttribute('color', new BufferAttribute(col, 3));
-  return ng;
+type Part = { geometry: BufferGeometry; material: Material; local: Matrix4 };
+
+/** Every mesh of a model with its matrix in the chassis frame (one instanced mesh each). */
+function modelParts(model: Object3D): Part[] {
+  model.updateMatrixWorld(true);
+  const inv = model.matrixWorld.clone().invert();
+  const out: Part[] = [];
+  model.traverse((o) => {
+    const m = o as Mesh;
+    if (!m.isMesh) return;
+    const local = MODEL_TO_CHASSIS.clone().multiply(inv.clone().multiply(m.matrixWorld));
+    for (const mat of [m.material].flat()) out.push({ geometry: m.geometry, material: mat, local });
+  });
+  return out;
 }
 
-function merged(parts: BufferGeometry[]): BufferGeometry {
-  const g = mergeGeometries(parts);
-  if (!g) throw new Error('car: geometry merge failed');
-  return g;
+/** Paint is white in the instanced copy: instanceColor carries each car's colour. */
+function instanceMaterial(m: Material): Material {
+  if (!(m instanceof MeshStandardMaterial) || m.name !== 'paint') return m;
+  const c = m.clone();
+  c.color.set(0xffffff);
+  return c;
 }
-
-/** Box whose top face is narrowed by `inset` (x) and shifted/shortened by `front`/`back` (z): a cabin with sloped screens. */
-function cabin(w: number, h: number, l: number, inset: number, front: number, back: number): BufferGeometry {
-  const g = new BoxGeometry(w, h, l);
-  const p = g.getAttribute('position') as BufferAttribute;
-  for (let i = 0; i < p.count; i++) {
-    if (p.getY(i) <= 0) continue;
-    p.setX(i, p.getX(i) - Math.sign(p.getX(i)) * inset);
-    p.setZ(i, p.getZ(i) > 0 ? p.getZ(i) - front : p.getZ(i) + back);
-  }
-  g.computeVertexNormals();
-  return g;
-}
-
-/**
- * Low-poly compact estate car in the chassis frame (+z forward, +x left, ground at y = G), split into
- * paint (body colour), trim (glass, tyres, bumpers, plates: vertex colours), head- and taillights.
- */
-export function carGeometries(): { paint: BufferGeometry; trim: BufferGeometry; head: BufferGeometry; tail: BufferGeometry } {
-  const L = 4.1, W = 1.76;
-  const sill = G + 0.3, belt = G + 0.92, roof = G + 1.47;
-  const box = (w: number, h: number, l: number, x: number, y: number, z: number) => new BoxGeometry(w, h, l).translate(x, y, z);
-  const paint = merged([
-    painted(box(W, belt - sill, L, 0, (belt + sill) / 2, 0), 0xffffff),
-    // bonnet slightly lower than the belt line at the front
-    painted(cabin(W - 0.04, 0.06, 1.2, 0.05, 0.2, 0).translate(0, belt + 0.01, L / 2 - 0.62), 0xffffff),
-    painted(box(1.42, 0.07, 2.05, 0, roof - 0.035, -0.55), 0xffffff),
-    ...[1, -1].map((s) => painted(box(0.12, 0.1, 0.18, s * (W / 2 + 0.04), belt + 0.1, 0.55), 0xffffff)), // mirrors
-  ]);
-  const glassH = roof - 0.07 - belt;
-  const trim = merged([
-    painted(cabin(W - 0.12, glassH, 2.75, 0.13, 0.62, 0.08).translate(0, belt + glassH / 2, -0.38), 0x1a2229),
-    painted(box(W + 0.02, 0.2, 0.18, 0, sill + 0.08, L / 2 + 0.02), 0x2a2c2e), // bumpers
-    painted(box(W + 0.02, 0.22, 0.18, 0, sill + 0.09, -L / 2 - 0.02), 0x2a2c2e),
-    painted(box(W - 0.02, 0.14, L - 0.3, 0, sill - 0.04, 0), 0x202224), // sills / underbody
-    painted(box(0.52, 0.12, 0.02, 0, sill + 0.1, L / 2 + 0.12), 0xf2f2ec), // number plates
-    painted(box(0.52, 0.12, 0.02, 0, sill + 0.3, -L / 2 - 0.01), 0xf2f2ec),
-    ...[[1, 1], [-1, 1], [1, -1], [-1, -1]].flatMap(([sx, sz]) => {
-      const at = (g: BufferGeometry) => g.rotateZ(Math.PI / 2).translate(sx! * V.wheelX, G + V.wheelRadius, sz! * V.wheelZ);
-      return [painted(at(new CylinderGeometry(V.wheelRadius, V.wheelRadius, 0.22, 14)), 0x141414),
-        painted(at(new CylinderGeometry(0.2, 0.2, 0.235, 10)), 0x8d9296)];
-    }),
-  ]);
-  const head = merged([1, -1].map((s) => painted(box(0.36, 0.13, 0.04, s * 0.6, belt - 0.12, L / 2 + 0.005), 0xe8e6dc)));
-  const tail = merged([1, -1].map((s) => painted(box(0.18, 0.26, 0.04, s * 0.74, belt - 0.16, -L / 2 - 0.005), 0x7a0e0e)));
-  return { paint, trim, head, tail };
-}
-
-const paintMaterial = (): MeshStandardMaterial => new MeshStandardMaterial({ color: 0xffffff, roughness: 0.32, metalness: 0.35 });
-const trimMaterial = (): MeshStandardMaterial => new MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.1 });
 
 /** Peak luminous intensity of one headlight at night (cd, three.js physical units). */
 export const HEADLIGHT_INTENSITY = 60000;
@@ -262,7 +225,7 @@ class Glare {
   private shown = 0;
 
   constructor(
-    parent: Group, private readonly at: Vector3, private readonly forward: Vector3,
+    parent: Group, readonly at: Vector3, private readonly forward: Vector3,
     color: number, private readonly size: number, private readonly sharpness: number, private readonly streakGain: number, maps: { halo: CanvasTexture; streak: CanvasTexture },
   ) {
     const mat = (map: CanvasTexture) => new SpriteMaterial({
@@ -277,6 +240,13 @@ class Glare {
       sp.visible = false;
       parent.add(sp);
     }
+  }
+
+  /** Moves the lamp (chassis frame). */
+  place(at: Vector3): void {
+    this.at.copy(at);
+    this.halo.position.copy(at);
+    this.streak.position.copy(at);
   }
 
   /** k = lamp brightness 0..1 (night, brake…); dt smooths the occlusion fade. */
@@ -309,9 +279,63 @@ class Glare {
   }
 }
 
+/** Wheel nodes in Vehicle wheel order (0 front right, 1 front left, 2 rear right, 3 rear left). */
+const WHEEL_NODES = ['wheel_fr', 'wheel_fl', 'wheel_rr', 'wheel_rl'] as const;
+/** How far the suspension may visibly move a wheel from its rest position (m). */
+const WHEEL_TRAVEL = 0.12;
+
+/** One driveable copy of a car model: its own paint and lamp materials, wheel nodes, lamp positions. */
+type Rig = {
+  root: Object3D;
+  paint: MeshStandardMaterial[];
+  head: MeshStandardMaterial[];
+  tail: MeshStandardMaterial[];
+  wheels: { node: Object3D; rest: Vector3 }[];
+  /** Lamp centres in the chassis frame: front left/right, rear left/right. */
+  lamps: { fl: Vector3; fr: Vector3; rl: Vector3; rr: Vector3 };
+};
+
+function makeRig(model: Object3D, type: CarType): Rig {
+  const root = model.clone(true);
+  root.position.set(0, -VEHICLE_REST_Y, 0);
+  const paint: MeshStandardMaterial[] = [], head: MeshStandardMaterial[] = [], tail: MeshStandardMaterial[] = [];
+  root.traverse((o) => {
+    const m = o as Mesh;
+    if (!m.isMesh) return;
+    m.castShadow = m.receiveShadow = true;
+    const own = (mat: Material): Material => {
+      if (!(mat instanceof MeshStandardMaterial)) return mat;
+      if (mat.name === 'paint') { const c = mat.clone(); paint.push(c); return c; }
+      if (mat.name === 'lamp_front') { const c = mat.clone(); c.emissive.set(0xfff1d6); head.push(c); return c; }
+      if (mat.name === 'lamp_rear') { const c = mat.clone(); c.emissive.set(0xff1a0a); tail.push(c); return c; }
+      return mat;
+    };
+    m.material = Array.isArray(m.material) ? m.material.map(own) : own(m.material);
+  });
+  const wheels = WHEEL_NODES.map((n) => {
+    const node = root.getObjectByName(n);
+    if (!node) throw new Error(`car model ${type}: node ${n} missing`);
+    return { node, rest: node.position.clone() };
+  });
+  const lamp = (n: string, fallback: Vector3): Vector3 => {
+    const e = root.getObjectByName(n);
+    return e ? e.position.clone().add(new Vector3(0, -VEHICLE_REST_Y, 0)) : fallback;
+  };
+  const sp = CAR_SPECS[type];
+  const fz = sp.bodyZ + sp.length / 2, rz = sp.bodyZ - sp.length / 2;
+  return {
+    root, paint, head, tail, wheels,
+    lamps: {
+      fl: lamp('light_fl', new Vector3(0.6, G + 0.75, fz)), fr: lamp('light_fr', new Vector3(-0.6, G + 0.75, fz)),
+      rl: lamp('tail_l', new Vector3(0.7, G + 0.85, rz)), rr: lamp('tail_r', new Vector3(-0.7, G + 0.85, rz)),
+    },
+  };
+}
+
 /**
- * The car being driven: a regular mesh group with emissive head- and taillights (× nightFactor) and brake lights,
- * plus two real, shadow-casting spotlights so the beams light the road, cars and facades.
+ * The car being driven: a clone of its type's model with its own paint and emissive head- and taillights
+ * (× nightFactor) and brake lights, wheels that spin, steer and follow the suspension, plus two real,
+ * shadow-casting spotlights so the beams light the road, cars and facades.
  * The spotlights live in their own always-visible rig: three.js recompiles every material when the number of
  * lights changes, so they are never removed, only dimmed to zero (with their shadow maps frozen) when unused.
  */
@@ -320,29 +344,27 @@ export class DrivenCar {
   private readonly rig = new Group();
   private readonly beams: SpotLight[] = [];
   private readonly tails: SpotLight[] = [];
-  private readonly glares: { glare: Glare; head: boolean }[] = [];
+  private readonly glares: { glare: Glare; head: boolean; side: 'l' | 'r' }[] = [];
+  private readonly rigs = new Map<CarType, Rig>();
+  private current: Rig | null = null;
+  private spin = 0;
+  private radius: number = TUNING.vehicle.wheelRadius;
   private headK = 0;
   private tailK = 0;
   private shown = false;
-  private readonly paint = paintMaterial();
-  private readonly headMat = new MeshStandardMaterial({ color: 0xe8e6dc, emissive: 0xfff1d6, roughness: 0.2 });
-  private readonly tailMat = new MeshStandardMaterial({ color: 0x7a0e0e, emissive: 0xff1a0a, roughness: 0.3 });
+  private readonly qSteer = new Quaternion();
+  private readonly qSpin = new Quaternion();
+  private readonly axisX = new Vector3(1, 0, 0);
+  private readonly axisY = new Vector3(0, 1, 0);
 
-  constructor(scene: Scene) {
-    const g = carGeometries();
-    const parts = [new Mesh(g.paint, this.paint), new Mesh(g.trim, trimMaterial()), new Mesh(g.head, this.headMat), new Mesh(g.tail, this.tailMat)];
-    for (const m of parts) { m.castShadow = true; m.receiveShadow = true; }
-    this.group.add(...parts);
+  constructor(scene: Scene, private readonly models?: CarModels) {
     this.group.visible = false;
     scene.add(this.group);
 
     const map = beamTexture();
-    for (const s of [1, -1]) {
+    for (let k = 0; k < 2; k++) {
       const l = new SpotLight(0xffffff, 0, BEAM_RANGE, BEAM_ANGLE, 0, 2);
       l.map = map;
-      // just ahead of the lamp glass, so the car's own body never shadows its beam
-      l.position.set(s * 0.6, G + 0.8, 2.2);
-      l.target.position.set(s * 0.6 + s * 0.6, G + 0.8 - Math.tan(BEAM_TILT) * 30, 2.2 + 30); // toe out a little
       l.castShadow = true;
       l.shadow.mapSize.set(1024, 1024);
       l.shadow.camera.near = 0.3;
@@ -355,19 +377,34 @@ export class DrivenCar {
       this.beams.push(l);
     }
     // tail lamps: wide, soft red cones onto the road and whatever stands behind (no shadows, they are dim)
-    for (const s of [1, -1]) {
+    for (let k = 0; k < 2; k++) {
       const l = new SpotLight(0xff2a14, 0, 18, 1.15, 1, 2);
-      l.position.set(s * 0.74, G + 0.76, -2.2);
-      l.target.position.set(s * 0.9, G - 0.6, -10);
       this.rig.add(l, l.target);
       this.tails.push(l);
     }
     const maps = { halo: haloTexture(), streak: streakTexture() };
-    for (const s of [1, -1]) {
-      this.glares.push({ head: true, glare: new Glare(this.group, new Vector3(s * 0.6, G + 0.8, 2.13), new Vector3(0, 0, 1), 0xfff2dc, 0.55, 3, 1, maps) });
-      this.glares.push({ head: false, glare: new Glare(this.group, new Vector3(s * 0.74, G + 0.76, -2.13), new Vector3(0, 0, -1), 0xff2a14, 0.22, 2, 0.35, maps) });
+    for (const side of ['l', 'r'] as const) {
+      this.glares.push({ head: true, side, glare: new Glare(this.group, new Vector3(), new Vector3(0, 0, 1), 0xfff2dc, 0.55, 3, 1, maps) });
+      this.glares.push({ head: false, side, glare: new Glare(this.group, new Vector3(), new Vector3(0, 0, -1), 0xff2a14, 0.22, 2, 0.35, maps) });
     }
+    this.placeLamps({ fl: new Vector3(0.6, G + 0.8, 2.1), fr: new Vector3(-0.6, G + 0.8, 2.1), rl: new Vector3(0.74, G + 0.76, -2.1), rr: new Vector3(-0.74, G + 0.76, -2.1) });
     scene.add(this.rig);
+  }
+
+  /** Spotlights and glare sprites at the lamps of the current model. */
+  private placeLamps(l: Rig['lamps']): void {
+    [l.fl, l.fr].forEach((p, k) => {
+      const b = this.beams[k]!, s = Math.sign(p.x) || 1;
+      // just ahead of the lamp glass, so the car's own body never shadows its beam
+      b.position.set(p.x, p.y, p.z + 0.08);
+      b.target.position.set(p.x + s * 0.6, p.y - Math.tan(BEAM_TILT) * 30, p.z + 30); // toe out a little
+    });
+    [l.rl, l.rr].forEach((p, k) => {
+      const t = this.tails[k]!;
+      t.position.set(p.x, p.y, p.z - 0.05);
+      t.target.position.set(p.x + Math.sign(p.x) * 0.16, G - 0.6, p.z - 8);
+    });
+    for (const { glare, head, side } of this.glares) glare.place(head ? (side === 'l' ? l.fl : l.fr) : side === 'l' ? l.rl : l.rr);
   }
 
   /** Lens glare of head- and tail lamps for the current camera; call after setPose/setLights, before rendering. */
@@ -377,8 +414,21 @@ export class DrivenCar {
     for (const { glare, head } of this.glares) glare.update(camera, this.group, head ? this.headK : this.tailK, occluded, dt);
   }
 
-  show(color: number): void {
-    this.paint.color.setHex(color);
+  show(type: CarType, color: number): void {
+    let r = this.rigs.get(type);
+    const model = this.models?.get(type)?.full;
+    if (!r && model) {
+      r = makeRig(model, type);
+      this.rigs.set(type, r);
+    }
+    if (this.current) this.group.remove(this.current.root);
+    this.current = r ?? null;
+    this.radius = CAR_SPECS[type].wheelRadius;
+    if (r) {
+      this.group.add(r.root);
+      for (const m of r.paint) m.color.setHex(color);
+      this.placeLamps(r.lamps);
+    }
     this.group.visible = true;
     this.shown = true;
   }
@@ -398,11 +448,28 @@ export class DrivenCar {
     }
   }
 
+  /** Wheels: spin with the speed (m/s), steer and follow each wheel's suspension; dt = frame time. */
+  setWheels(v: Vehicle, dt: number): void {
+    const r = this.current;
+    if (!r) return;
+    this.spin = (this.spin + (v.speed() * dt) / this.radius) % (Math.PI * 2);
+    this.qSpin.setFromAxisAngle(this.axisX, this.spin);
+    r.wheels.forEach(({ node, rest }, i) => {
+      this.qSteer.setFromAxisAngle(this.axisY, i < 2 ? v.wheelSteering(i) : 0);
+      node.quaternion.copy(this.qSteer).multiply(this.qSpin);
+      const lift = Math.max(-WHEEL_TRAVEL, Math.min(WHEEL_TRAVEL, SUSPENSION_REST_LENGTH - v.wheelSuspension(i)));
+      node.position.set(rest.x, rest.y + lift, rest.z);
+    });
+  }
+
   /** night 0..1; braking lights the tail lamps fully by day too; power 0..1 (ignition: off, flickering, on) scales everything. */
   setLights(night: number, braking: boolean, power: number): void {
     const brake = braking && power > 0.5;
-    this.headMat.emissiveIntensity = (0.15 + 2.2 * night) * power;
-    this.tailMat.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+    const r = this.current;
+    if (r) {
+      for (const m of r.head) m.emissiveIntensity = (0.15 + 2.2 * night) * power;
+      for (const m of r.tail) m.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+    }
     this.setBeams(this.shown && power > 0.5 ? night * power : 0);
     const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
     for (const l of this.tails) l.intensity = tail * power;
@@ -426,7 +493,7 @@ export const CAR_PHYSICS_NEAR = 150;
 /** …and are removed again beyond this distance (hysteresis). */
 export const CAR_PHYSICS_FAR = 200;
 /** Parked cars are drawn only within this distance of the camera (m)… */
-export const CAR_RENDER_RADIUS = 250;
+export const CAR_RENDER_RADIUS = 150;
 /** …and that set is rebuilt only after the camera moved more than this since the last rebuild (m). */
 export const CAR_REBUILD_MOVE = 20;
 
@@ -446,41 +513,60 @@ export function visibleCars(poses: readonly XZ[], x: number, z: number, radius =
 export const needsCarRebuild = (last: XZ | null, x: number, z: number): boolean =>
   !last || Math.hypot(x - last.x, z - last.z) > CAR_REBUILD_MOVE;
 
+/** Parked cars closer to the camera than this use the full model, the rest the distance version (m). */
+export const CAR_LOD_NEAR = 45;
+
+/** Instanced meshes of one model (one per part); level 0 = full detail, 1 = distance version. */
+type Level = { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[]; used: number };
+
 /**
- * All manifest cars. Unoccupied ones within CAR_RENDER_RADIUS of the camera render as two InstancedMeshes (paint
- * coloured per instance, trim; updateVisibility packs them into the first instance slots);
- * a sleeping Rapier Vehicle exists only near the player. Poses of pushed cars live in `poses`, so a car
- * re-created after being disposed appears where it was left, not at its original spot.
+ * All manifest cars. Unoccupied ones within CAR_RENDER_RADIUS of the camera render as instanced meshes, one per
+ * model part, type and level of detail (paint coloured per instance; updateVisibility packs them into the first
+ * instance slots); a sleeping Rapier Vehicle exists only near the player. Poses of pushed cars live in `poses`,
+ * so a car re-created after being disposed appears where it was left, not at its original spot.
  */
 export class ParkedCars {
   readonly poses: CarPose[];
   readonly colors: number[];
+  readonly types: CarType[];
   private readonly vehicles = new Map<number, Vehicle>();
-  private readonly paint: InstancedMesh;
-  private readonly trim: InstancedMesh;
+  private readonly levels = new Map<CarType, [Level, Level]>();
   private occupied: number | null = null;
-  /** Instance slot of each car, −1 while it is not drawn. */
+  /** Instance slot of each car in its type's meshes, −1 while it is not drawn; and the level it is drawn at. */
   private readonly slots: Int32Array;
+  private readonly level: Uint8Array;
   private lastRebuild: XZ | null = null;
   private readonly m = new Matrix4();
+  private readonly base = new Matrix4();
   private readonly q = new Quaternion();
   private readonly p = new Vector3();
   private readonly one = new Vector3(1, 1, 1);
   private readonly zero = new Vector3(0, 0, 0);
+  private readonly dirty = new Set<Level>();
 
-  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid) {
+  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid, models?: CarModels) {
     this.poses = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
     this.colors = parked.map((c) => c.color);
-    const g = carGeometries();
-    this.paint = new InstancedMesh(g.paint, paintMaterial(), parked.length);
-    this.trim = new InstancedMesh(merged([g.trim, g.head, g.tail]), trimMaterial(), parked.length);
+    this.types = parked.map((c) => carTypeOf(c.type));
     this.slots = new Int32Array(parked.length).fill(-1);
-    this.paint.setColorAt(0, new Color()); // allocate instanceColor
-    for (const im of [this.paint, this.trim]) {
-      im.count = 0;
-      im.castShadow = true;
-      im.receiveShadow = true;
-      scene.add(im);
+    this.level = new Uint8Array(parked.length);
+    for (const [type, m] of models ?? []) {
+      const n = Math.max(1, this.types.filter((t) => t === type).length);
+      const make = (model: Object3D, tag: string): Level => {
+        const parts = modelParts(model);
+        const meshes = parts.map((part, k) => {
+          const im = new InstancedMesh(part.geometry, instanceMaterial(part.material), n);
+          im.name = `car_${type}_${tag}_${k}`;
+          im.count = 0;
+          im.castShadow = im.receiveShadow = true;
+          scene.add(im);
+          return im;
+        });
+        const paint = parts.map((part) => part.material.name === 'paint');
+        meshes.forEach((im, k) => { if (paint[k]) im.setColorAt(0, new Color()); }); // allocate instanceColor
+        return { parts, meshes, paint, used: 0 };
+      };
+      this.levels.set(type, [make(m.full, 'full'), make(m.lod, 'lod')]);
     }
   }
 
@@ -499,18 +585,32 @@ export class ParkedCars {
     this.lastRebuild = { x, z };
     const shown = visibleCars(this.poses, x, z, CAR_RENDER_RADIUS, always);
     this.slots.fill(-1);
+    for (const lv of this.levels.values()) for (const l of lv) l.used = 0;
     const col = new Color();
-    shown.forEach((i, k) => {
+    for (const i of shown) {
+      const lv = this.levels.get(this.types[i]!);
+      if (!lv) continue;
+      const s = this.poses[i]!;
+      // the margin keeps cars on the full model until the next rebuild, however the camera moved meanwhile
+      const near = Math.hypot(s.x - x, s.z - z) < CAR_LOD_NEAR + CAR_REBUILD_MOVE;
+      const l = lv[near ? 0 : 1];
+      const k = l.used++;
       this.slots[i] = k;
-      this.paint.setColorAt(k, col.setHex(this.colors[i]!));
+      this.level[i] = near ? 0 : 1;
+      l.meshes.forEach((im, j) => { if (l.paint[j]) im.setColorAt(k, col.setHex(this.colors[i]!)); });
       this.writeMatrix(i);
-    });
-    for (const im of [this.paint, this.trim]) {
-      im.count = shown.length;
-      im.computeBoundingSphere();
     }
-    this.paint.instanceColor!.needsUpdate = true;
-    this.flush();
+    for (const lv of this.levels.values()) {
+      for (const l of lv) {
+        for (const im of l.meshes) {
+          im.count = l.used;
+          im.instanceMatrix.needsUpdate = true;
+          if (im.instanceColor) im.instanceColor.needsUpdate = true;
+          im.computeBoundingSphere();
+        }
+      }
+    }
+    this.dirty.clear();
   }
 
   get count(): number {
@@ -519,16 +619,23 @@ export class ParkedCars {
 
   private writeMatrix(i: number): void {
     const k = this.slots[i]!;
-    if (k < 0) return;
+    const lv = this.levels.get(this.types[i]!);
+    if (k < 0 || !lv) return;
+    const l = lv[this.level[i]!]!;
     const s = this.poses[i]!;
-    this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.occupied ? this.zero : this.one);
-    this.paint.setMatrixAt(k, this.m);
-    this.trim.setMatrixAt(k, this.m);
+    this.base.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.occupied ? this.zero : this.one);
+    l.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(this.base).multiply(l.parts[j]!.local)));
+    this.dirty.add(l);
   }
 
   private flush(): void {
-    this.paint.instanceMatrix.needsUpdate = true;
-    this.trim.instanceMatrix.needsUpdate = true;
+    for (const l of this.dirty) {
+      for (const im of l.meshes) {
+        im.instanceMatrix.needsUpdate = true;
+        im.computeBoundingSphere(); // a pushed car may leave the old bounds (frustum culling)
+      }
+    }
+    this.dirty.clear();
   }
 
   /** Creates physics cars within CAR_PHYSICS_NEAR of (x, z) and disposes those beyond CAR_PHYSICS_FAR (keeping their pose). */
@@ -549,7 +656,7 @@ export class ParkedCars {
   /** A sleeping Vehicle at the car's stored pose (its original spot or where it was pushed to). */
   private spawn(i: number): Vehicle {
     const s = this.poses[i]!;
-    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y });
+    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y }, this.types[i]);
     // tilted on a slope (or left tilted after a push): keep the stored rotation
     if (Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
     return v;
@@ -557,13 +664,12 @@ export class ParkedCars {
 
   /** Copies the poses of awake (pushed or driven) cars into the instances. */
   sync(): void {
-    let changed = false;
     for (const [i, v] of this.vehicles) {
       if (v.chassis.isSleeping()) continue;
       this.poses[i] = v.pose();
-      if (i !== this.occupied) { this.writeMatrix(i); changed = true; }
+      if (i !== this.occupied) this.writeMatrix(i);
     }
-    if (changed) this.flush();
+    this.flush();
   }
 
   /** Cars for nearestEnterableCar. */

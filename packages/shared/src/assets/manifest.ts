@@ -1,4 +1,5 @@
 import { BIKE_TYPES, type BikeType } from '../physics/biketypes';
+import { CAR_TYPES, type CarType } from '../physics/cartypes';
 
 /**
  * World manifest (apps/client/public/world/manifest.json), written by the pipeline.
@@ -51,7 +52,10 @@ export type WorldManifest = {
    * (the side it is read from), width in m.
    */
   shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
-  parked: { x: number; z: number; heading: number; color: number }[];
+  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen); parked[0] stands at the spawn. */
+  parked: { x: number; z: number; heading: number; color: number; type?: number }[];
+  /** Car models (car_<type>.glb and its distance version car_<type>_lod.glb, nodes per data/models/cars/README.md). Missing in older manifests → []. */
+  carModels: { type: CarType; file: string; lod: string; bytes: number }[];
   /**
    * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
    * loaded and unloaded together with chunk `chunk` (the chunk of the replaced building's centroid).
@@ -145,7 +149,22 @@ export function parseManifest(json: unknown): WorldManifest {
       if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'y', 'z', 'heading', 'width']);
       return shop;
     }),
-    parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),
+    parked: arr(o.parked, 'parked', (v, p) => {
+      const c: WorldManifest['parked'][number] = nums(v, p, ['x', 'z', 'heading', 'color']);
+      const t = (v as Record<string, unknown>).type;
+      if (t !== undefined) {
+        const type = num(t, `${p}.type`);
+        if (!Number.isInteger(type) || type < 0 || type >= CAR_TYPES.length) fail(`${p}.type`, `must be an integer 0..${CAR_TYPES.length - 1}`);
+        c.type = type;
+      }
+      return c;
+    }),
+    carModels: o.carModels === undefined ? [] : arr(o.carModels, 'carModels', (v, p) => {
+      const c = obj(v, p);
+      const type = str(c.type, `${p}.type`);
+      if (!(CAR_TYPES as readonly string[]).includes(type)) fail(`${p}.type`, `must be one of ${CAR_TYPES.join(', ')}`);
+      return { type: type as CarType, file: str(c.file, `${p}.file`), lod: str(c.lod, `${p}.lod`), bytes: num(c.bytes, `${p}.bytes`) };
+    }),
     models: o.models === undefined ? [] : arr(o.models, 'models', (v, p) => {
       const x = obj(v, p);
       return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };

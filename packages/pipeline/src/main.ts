@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { BIKE_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
@@ -35,6 +35,7 @@ const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
 const BIKE_MODELS = 'data/models/bikes';
+const CAR_MODELS = 'data/models/cars';
 /** Frame colour of the cargo bike at the spawn. */
 const SPAWN_BIKE_COLOR = 0x2f5d3a;
 /** Rack bikes this close to the spawn bike are left out (m). */
@@ -219,6 +220,19 @@ async function main() {
     rackModels.push({ kind, file: `${name}.glb`, bytes: glb.byteLength });
   }
 
+  // car models (data/models/cars, built by their build.py): full detail and the distance version
+  const carModels: WorldManifest['carModels'] = [];
+  for (const type of CAR_TYPES) {
+    let bytes = 0;
+    for (const suffix of ['', '_lod']) {
+      const glb = await prepareProp(await readFile(join(CAR_MODELS, type, `${type}${suffix}.glb`)));
+      await writeFile(join(OUT_DIR, `car_${type}${suffix}.glb`), glb);
+      bytes += glb.byteLength;
+    }
+    carModels.push({ type, file: `car_${type}.glb`, lod: `car_${type}_lod.glb`, bytes });
+  }
+  console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
+
   const spawnCar = spawnCarSpot(f, spawn, buildings);
   const racks = layoutRacks(f, buildings);
   const carSpots = withSpawnCar(spawnCar, dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks));
@@ -247,6 +261,7 @@ async function main() {
     models,
     bikeModels,
     rackModels,
+    carModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
     bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
     parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),

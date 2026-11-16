@@ -18,6 +18,7 @@ const valid = (): WorldManifest => ({
   bikes: [{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }],
   bikeModels: [{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }],
   rackModels: [{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }],
+  carModels: [],
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -97,4 +98,16 @@ test('manifest parse: bike and rack models, default [] and validated', () => {
   expect(parseManifest(old).bikeModels).toEqual([]);
   expect(parseManifest(old).rackModels).toEqual([]);
   expect(() => parseManifest({ ...valid(), bikeModels: [{ type: 'unicycle', file: 'x.glb', bytes: 1 }] })).toThrow();
+});
+
+test('manifest parse: car types and car models, default and validated', () => {
+  const car = { x: 1, z: 2, heading: 0.5, color: 0xffffff };
+  const models = [{ type: 'smart', file: 'car_smart.glb', lod: 'car_smart_lod.glb', bytes: 7 }];
+  const m = parseManifest({ ...valid(), parked: [{ ...car, type: 3 }, car], carModels: models });
+  expect(m.parked[0]!.type).toBe(3);
+  expect(m.parked[1]!.type).toBeUndefined();
+  expect(m.carModels).toEqual(models);
+  expect(parseManifest(valid()).carModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), parked: [{ ...car, type: 4 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), carModels: [{ ...models[0], type: 'bus' }] })).toThrow();
 });
