@@ -1,7 +1,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { CAR_SPECS, type CarSpec, type CarType } from './cartypes';
 import { TUNING } from './tuning';
-import { CAR_GROUPS, onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
+import { CAR_GROUPS, onBeforeStep, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
 export type VehicleInput = { throttle: number; steer: number; brake: boolean };
@@ -101,11 +101,13 @@ export class Vehicle {
     }
     this.ctrl = c;
 
-    // Wheel rays hit the city, other cars and street furniture (fallen lamps); never this chassis, characters (kinematic) or sensors.
-    const wheelFilter = staticWorldFilter(true, this.chassis, true);
+    // Wheel rays get no filter predicate: Rapier excludes the chassis itself, and the rays hit everything else. A JS
+    // predicate cannot work here in rapier.js 0.21: update_vehicle holds the collider set, so any Collider method called
+    // from the predicate throws ("recursive use of an object"), and a throwing predicate counts as "hit it". That was
+    // the old staticWorldFilter's fate (same results, bit for bit), at ~0.05 ms per thrown error, 8 per car and step.
     this.unsubscribe = onBeforeStep(pw, () => {
       // a kinematic chassis (a car the server streams, see CarPool.follow) is placed, not driven
-      if (!this.chassis.isSleeping() && this.chassis.isDynamic()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
+      if (!this.chassis.isSleeping() && this.chassis.isDynamic()) c.updateVehicle(TUNING.world.dt);
     });
   }
 
