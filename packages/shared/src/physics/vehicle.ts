@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { CAR_SPECS, type CarSpec, type CarType } from './cartypes';
 import { TUNING } from './tuning';
 import { CAR_GROUPS, onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
 
@@ -9,6 +10,26 @@ const T = TUNING.vehicle;
 const KMH = 1 / 3.6;
 /** Chassis centre height at rest (approx.: mount height + loaded suspension + wheel radius). */
 export const VEHICLE_REST_Y = -T.wheelY + T.suspensionRest - 9.81 / (4 * T.suspensionStiffness) + T.wheelRadius;
+/** Suspension length at rest (the ray length minus the wheel radius, loaded). */
+export const SUSPENSION_REST_LENGTH = T.suspensionRest - 9.81 / (4 * T.suspensionStiffness);
+/** Underside of the chassis collider above the ground (m). */
+const CLEARANCE = 0.22;
+
+/**
+ * Chassis layout of a car type in the chassis frame (origin VEHICLE_REST_Y above the ground at the axle midpoint):
+ * collider box centre and half sizes, wheel mount points. The mount height is chosen per wheel radius so every
+ * type rests at the same VEHICLE_REST_Y.
+ */
+export function chassisLayout(spec: CarSpec): { centre: { x: number; y: number; z: number }; half: { x: number; y: number; z: number }; wheels: { x: number; y: number; z: number }[] } {
+  const y = SUSPENSION_REST_LENGTH + spec.wheelRadius - VEHICLE_REST_Y;
+  const x = spec.track / 2, z = spec.wheelbase / 2;
+  return {
+    centre: { x: 0, y: (CLEARANCE + spec.height) / 2 - VEHICLE_REST_Y, z: spec.bodyZ },
+    half: { x: spec.width / 2, y: (spec.height - CLEARANCE) / 2, z: spec.length / 2 },
+    // Rapier order (and wheel index): front right, front left, rear right, rear left (+x = left)
+    wheels: [{ x: -x, y, z }, { x, y, z }, { x: -x, y, z: -z }, { x, y, z: -z }],
+  };
+}
 
 /**
  * Car: a dynamic box on Rapier's DynamicRayCastVehicleController (4 ray-cast wheels).
@@ -22,10 +43,18 @@ export class Vehicle {
   private readonly unsubscribe: () => void;
   private occupied = false;
   private steerAngle = 0;
+  readonly type: CarType;
+  readonly spec: CarSpec;
+  /** Engine and brake forces scale with the mass, so every type accelerates and stops alike. */
+  private readonly force: number;
 
   /** pose.y is the ground height under the car (default 0); the chassis starts at y + VEHICLE_REST_Y. */
-  constructor(private readonly pw: PhysicsWorld, pose: { x: number; z: number; heading: number; y?: number }) {
+  constructor(private readonly pw: PhysicsWorld, pose: { x: number; z: number; heading: number; y?: number }, type: CarType = 'kleinwagen') {
     const { rapier: R, world } = pw;
+    this.type = type;
+    this.spec = CAR_SPECS[type];
+    this.force = this.spec.mass / T.mass;
+    const lay = chassisLayout(this.spec);
     const h = pose.heading;
     this.chassis = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
@@ -36,12 +65,13 @@ export class Vehicle {
         .setCcdEnabled(true)
         .setSleeping(true),
     );
-    const [hx, hy, hz] = [T.width / 2, T.height / 2, T.length / 2];
-    const m = T.mass;
+    const [hx, hy, hz] = [lay.half.x, lay.half.y, lay.half.z];
+    const m = this.spec.mass;
     world.createCollider(
-      R.ColliderDesc.cuboid(hx, hy, hz).setMassProperties(
+      R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(lay.centre.x, lay.centre.y, lay.centre.z).setMassProperties(
         m,
-        { x: 0, y: -T.comDrop, z: 0 },
+        // centre of mass over the axle midpoint at comY above the ground (collider-local)
+        { x: 0, y: this.spec.comY - VEHICLE_REST_Y - lay.centre.y, z: -lay.centre.z },
         { x: (m / 3) * (hy * hy + hz * hz), y: (m / 3) * (hx * hx + hz * hz), z: (m / 3) * (hx * hx + hy * hy) },
         { x: 0, y: 0, z: 0, w: 1 },
       ).setCollisionGroups(CAR_GROUPS),
@@ -51,9 +81,9 @@ export class Vehicle {
     const c = world.createVehicleController(this.chassis);
     c.indexUpAxis = 1;
     c.setIndexForwardAxis = 2;
-    for (const [x, z] of [[-T.wheelX, T.wheelZ], [T.wheelX, T.wheelZ], [-T.wheelX, -T.wheelZ], [T.wheelX, -T.wheelZ]] as const) {
+    for (const w of lay.wheels) {
       const i = c.numWheels();
-      c.addWheel({ x, y: T.wheelY, z }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, T.suspensionRest, T.wheelRadius);
+      c.addWheel(w, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, T.suspensionRest, this.spec.wheelRadius);
       c.setWheelMaxSuspensionTravel(i, T.suspensionTravel);
       c.setWheelSuspensionStiffness(i, T.suspensionStiffness);
       c.setWheelSuspensionCompression(i, T.suspensionCompression);
@@ -61,7 +91,7 @@ export class Vehicle {
       c.setWheelMaxSuspensionForce(i, T.maxSuspensionForce);
       c.setWheelFrictionSlip(i, T.frictionSlip);
       c.setWheelSideFrictionStiffness(i, T.sideFrictionStiffness);
-      c.setWheelBrake(i, T.parkingBrake);
+      c.setWheelBrake(i, T.parkingBrake * this.force);
     }
     this.ctrl = c;
 
@@ -89,15 +119,15 @@ export class Vehicle {
 
     // Throttle against the direction of travel brakes first; only near standstill does it change gear.
     let engine = 0;
-    let brake = i.brake ? T.brake : 0;
+    let brake = i.brake ? T.brake * this.force : 0;
     if ((throttle > 0 && v < -1) || (throttle < 0 && v > 1)) {
-      brake = T.brake;
+      brake = T.brake * this.force;
     } else if (throttle !== 0) {
       const topKmh = throttle > 0 ? T.maxForwardKmh : T.maxReverseKmh;
       const limiter = Math.max(0, Math.min(1, (topKmh - kmh) / T.limiterBandKmh));
-      engine = throttle * T.engineForce * limiter;
+      engine = throttle * T.engineForce * this.force * limiter;
     } else if (!i.brake) {
-      brake = T.coastBrake;
+      brake = T.coastBrake * this.force;
     }
 
     for (let w = 0; w < 4; w++) {
@@ -138,8 +168,17 @@ export class Vehicle {
     for (let w = 0; w < 4; w++) {
       this.ctrl.setWheelEngineForce(w, 0);
       this.ctrl.setWheelSteering(w, 0);
-      this.ctrl.setWheelBrake(w, T.parkingBrake);
+      this.ctrl.setWheelBrake(w, T.parkingBrake * this.force);
     }
+  }
+
+  /** Front wheel angle (rad, positive = left) and suspension length of wheel w (0 fr, 1 fl, 2 rr, 3 rl), for the view. */
+  wheelSteering(w: number): number {
+    return this.ctrl.wheelSteering(w) ?? 0;
+  }
+
+  wheelSuspension(w: number): number {
+    return this.ctrl.wheelSuspensionLength(w) ?? SUSPENSION_REST_LENGTH;
   }
 
   /** Removes the car from the world. The instance must not be used afterwards. */
