@@ -125,8 +125,8 @@ def build():
 
     # ---- rider attachment points
     empty(coll, 'seat', SEAT + V((0, 0.03, 0.06)), frame)
-    empty(coll, 'grip_l', BAR + V((0, -0.03, 0.09)) + grips[0], bar)
-    empty(coll, 'grip_r', BAR + V((0, -0.03, 0.09)) + grips[1], bar)
+    empty(coll, 'grip_l', BAR + grips[0], bar)
+    empty(coll, 'grip_r', BAR + grips[1], bar)
     return frame
 
 
