@@ -1,9 +1,9 @@
-import { MIX, type LoopVoice, type ShotVoice } from './mixer';
+import { MIX, type ShotVoice } from './mixer';
 import type { SoundId } from './sounds';
 
 /**
- * Bike sounds, synthesised (no recordings): metallic freewheel pawl ticks while coasting, a chain whirr while pedalling, tyre
- * rolling noise and a two-tone bell. The samples are generated once by the mixer (SYNTH in mixer.ts).
+ * Bike sounds, synthesised (no recordings): metallic freewheel pawl ticks while coasting and a
+ * two-tone bell. Pedalling and rolling are silent. The samples are generated once by the mixer (SYNTH in mixer.ts).
  */
 
 /** Pawl engagements per wheel turn (a typical rear hub) and the wheel circumference (m). */
@@ -16,11 +16,6 @@ const MAX_TICKS = 34;
 export function freewheelTickRate(speed: number, pedalling: boolean): number {
   if (pedalling || speed < 0.3) return 0;
   return Math.min(MAX_TICKS, (speed / WHEEL_CIRCUMFERENCE) * ENGAGEMENTS);
-}
-
-/** Rolling noise gain 0..1: square-root curve, full at 40 km/h. */
-export function rollGain(speed: number): number {
-  return Math.min(1, Math.sqrt(Math.max(0, speed) / (40 / 3.6)));
 }
 
 /** Deterministic noise in −1..1 (so samples are the same every run). */
@@ -76,62 +71,29 @@ export function synthTick(rate: number): Float32Array {
   return out;
 }
 
-/** Seamless noise loop (seconds long), low-passed at about `cutoff` Hz; ends fade into each other. */
-export function synthNoiseLoop(rate: number, seconds: number, cutoff: number): Float32Array {
-  const n = Math.round(rate * seconds);
-  const out = new Float32Array(n);
-  const r = noise(cutoff | 0);
-  const k = 1 - Math.exp((-2 * Math.PI * cutoff) / rate);
-  let lp = 0;
-  for (let i = 0; i < n; i++) {
-    lp += (r() - lp) * k;
-    out[i] = lp;
-  }
-  // the loop is the first n − fade samples, its start crossfaded with what follows its end: no click at the seam
-  const fade = Math.round(n * 0.1);
-  for (let i = 0; i < fade; i++) {
-    const w = i / fade;
-    out[i] = out[i]! * w + out[n - fade + i]! * (1 - w);
-  }
-  const loop = out.slice(0, n - fade);
-  const peak = loop.reduce((m, v) => Math.max(m, Math.abs(v)), 0) || 1;
-  for (let i = 0; i < loop.length; i++) loop[i] = loop[i]! / peak;
-  return loop;
-}
-
-type Out = { loop(id: SoundId): LoopVoice; oneShot(id: SoundId, o?: { gain?: number; rate?: number }): ShotVoice };
+type Out = { oneShot(id: SoundId, o?: { gain?: number; rate?: number }): ShotVoice };
 
 /** The sounds of the ridden bike; start() when getting on, stop() when getting off. */
 export class BikeSound {
-  private roll: LoopVoice | null = null;
-  private chain: LoopVoice | null = null;
+  private active = false;
   private tickClock = 0;
   private rand = noise(3);
 
   constructor(private readonly out: Out) {}
 
   start(): void {
-    if (this.roll) return;
-    this.roll = this.out.loop('bikeRoll');
-    this.chain = this.out.loop('bikeChain');
-    this.roll.setGain(0);
-    this.chain.setGain(0);
+    this.active = true;
   }
 
   stop(): void {
-    this.roll?.stop();
-    this.chain?.stop();
-    this.roll = this.chain = null;
+    this.active = false;
+    this.tickClock = 0;
   }
 
   /** Every frame while riding; speed in m/s. */
   update(s: { speed: number; pedalling: boolean; grounded: boolean }, dt: number): void {
-    if (!this.roll || !this.chain) return;
+    if (!this.active) return;
     const v = Math.abs(s.speed);
-    this.roll.setGain(s.grounded ? rollGain(v) * MIX.bikeRoll : 0);
-    this.roll.setRate(0.8 + 0.5 * Math.min(1, v / 12));
-    this.chain.setGain(s.pedalling ? MIX.bikeChain * Math.min(1, 0.4 + v / 8) : 0);
-    this.chain.setRate(0.7 + 0.6 * Math.min(1, v / 10));
     const rate = freewheelTickRate(v, s.pedalling);
     if (rate <= 0) {
       this.tickClock = 0;
