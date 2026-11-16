@@ -18,6 +18,7 @@ const valid = (): WorldManifest => ({
   bikes: [{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }],
   bikeModels: [{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }],
   rackModels: [{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }],
+  characterModels: [{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }],
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -97,4 +98,11 @@ test('manifest parse: bike and rack models, default [] and validated', () => {
   expect(parseManifest(old).bikeModels).toEqual([]);
   expect(parseManifest(old).rackModels).toEqual([]);
   expect(() => parseManifest({ ...valid(), bikeModels: [{ type: 'unicycle', file: 'x.glb', bytes: 1 }] })).toThrow();
+});
+
+test('manifest parse: character models, default [] and validated', () => {
+  expect(parseManifest(JSON.parse(JSON.stringify(valid()))).characterModels).toEqual([{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }]);
+  const { characterModels: _c, ...old } = valid();
+  expect(parseManifest(old).characterModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), characterModels: [{ variant: 'robot', file: 'x.glb', bytes: 1 }] })).toThrow();
 });

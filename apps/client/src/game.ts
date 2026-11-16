@@ -1,7 +1,7 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
   BikeRacks, Character, dismountSpot, FixedStepper, heightAt, ParkedBikes, staticWorldFilter, StreetProps, TUNING, VEHICLE_REST_Y,
-  type BikeState, type BikeType, type PhysicsWorld, type RiddenBike, type TerrainGrid, type Vehicle, type WorldManifest,
+  type BikeState, type BikeType, type CharacterVariant, type PhysicsWorld, type RiddenBike, type TerrainGrid, type Vehicle, type WorldManifest,
 } from '@nn/shared';
 import { BikeRig } from './bikes/rig';
 import { BikeView } from './bikes/parked';
@@ -14,6 +14,7 @@ import type { Hud } from './hud';
 import type { Input } from './input';
 import { canGetOut, DrivenCar, exitSpot, headingOf, nearestEnterableCar, ParkedCars, type CarPose } from './car';
 import { angleDelta, PlayerFigure, type Posture } from './player';
+import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
 import { Ignition } from './ignition';
 import { MapMode, type DriveControls } from './map/map-mode';
@@ -31,6 +32,9 @@ export type GameContext = {
   audio?: GameAudio;
   /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
   bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
+  /** Player character models (WorldLoader.characterModels) and the stored choice's template, if it loaded. */
+  characters?: CharacterModels;
+  character?: Object3D | null;
 };
 
 /** Upper-body posture per bike type. */
@@ -108,6 +112,8 @@ export class Game {
     const { scene, camera, input, devCam, terrain } = ctx;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
+    this.character = storedCharacter();
+    this.figure.setModel(ctx.character ?? null);
     this.driven = new DrivenCar(scene);
     this.fly = new FreeFly(camera, input);
     const spawn = devCam ? { x: devCam.x, z: devCam.z, heading: devCam.yawDeg * DEG } : m.spawn;
@@ -147,6 +153,26 @@ export class Game {
     return Math.hypot(v.x, v.z);
   }
 
+  /** Player character shown (CHARACTER_VARIANTS); C switches to the next one that has a model. */
+  character: CharacterVariant;
+
+  private switchCharacter(): void {
+    const models = this.ctx.characters;
+    const variants = models?.variants ?? [];
+    if (!models || variants.length < 2) return;
+    const next = variants[(variants.indexOf(this.character) + 1) % variants.length]!;
+    this.character = next;
+    storeCharacter(next);
+    this.ctx.hud.flash(next === 'woman' ? 'Figur: Frau' : 'Figur: Mann');
+    // the first switch to a figure downloads it; the old one stays until it is there
+    models.load(next).then((model) => {
+      if (this.character === next) this.figure.setModel(model); // unless switched on meanwhile
+    }, (err: unknown) => {
+      console.error(err);
+      if (this.character === next) this.ctx.hud.flash('Figur konnte nicht geladen werden');
+    });
+  }
+
   /** One rendered frame: input, fixed physics steps, poses for rendering. night 0..1 drives the car lights. */
   frame(dt: number, night: number): void {
     const { input, debug, audio } = this.ctx;
@@ -154,6 +180,7 @@ export class Game {
     const notches = input.takeWheel();
     if (debug && input.consume('KeyF')) this.toggleFly();
     if (input.consume('KeyN')) audio?.toggleMute();
+    if (input.consume('KeyC')) this.switchCharacter();
     if (!this.flying && input.consume('KeyM')) {
       this.map.toggle();
       if (this.map.open) this.closeWheel();
