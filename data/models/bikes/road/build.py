@@ -77,8 +77,8 @@ def build():
     lr.to_object(coll, frame, V((0, 0.29, 0.87)))
 
     empty(coll, 'seat', SEAT + V((0, 0.03, 0.06)), frame)
-    empty(coll, 'grip_l', HT_TOP + V((0, -0.11, 0.045)) + grips[0], fork)
-    empty(coll, 'grip_r', HT_TOP + V((0, -0.11, 0.045)) + grips[1], fork)
+    empty(coll, 'grip_l', HT_TOP + grips[0], fork)
+    empty(coll, 'grip_r', HT_TOP + grips[1], fork)
     return frame
 
 
