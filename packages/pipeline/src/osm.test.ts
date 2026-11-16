@@ -42,6 +42,20 @@ test('boundary relation parts are joined (one reversed) into a closed ring', () 
   expect(new Set(b.map((p) => `${p.x.toFixed(0)},${p.z.toFixed(0)}`)).size).toBe(4);
 });
 
+test('Nippes and Neustadt-Nord join into one play area; their shared border way drops out', () => {
+  const way = (ref: number, pts: [number, number][]) => ({ type: 'way', ref, role: 'outer', geometry: pts.map(([lat, lon]) => ({ lat, lon })) });
+  const rel = (id: number, members: unknown[]) => ({ type: 'relation', id, tags: { boundary: 'administrative' }, members });
+  // two unit squares stacked north–south, sharing way 3 (the lat 50.96 edge)
+  const f = parseOsm({ elements: [
+    rel(2613766, [way(1, [[50.96, 6.95], [50.97, 6.95], [50.97, 6.96]]), way(2, [[50.97, 6.96], [50.96, 6.96]]), way(3, [[50.96, 6.96], [50.96, 6.95]])]),
+    rel(2613763, [way(3, [[50.96, 6.96], [50.96, 6.95]]), way(4, [[50.96, 6.95], [50.95, 6.95], [50.95, 6.96], [50.96, 6.96]])]),
+  ] });
+  expect(f.boundary).toHaveLength(7); // 6 corners, closed
+  expect(f.boundary[0]).toEqual(f.boundary[6]);
+  const zs = f.boundary.map((p) => p.z);
+  expect(Math.max(...zs) - Math.min(...zs)).toBeGreaterThan(2000); // spans both squares (~2.2 km north–south)
+});
+
 test('cafés, restaurants, bars and pharmacies (amenity) count as shops; address kept', () => {
   const node = (id: number, tags: Record<string, string>) => ({ type: 'node', id, lat: 50.96, lon: 6.95, tags });
   const f = parseOsm({ elements: [

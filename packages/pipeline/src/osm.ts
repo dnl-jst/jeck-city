@@ -40,9 +40,10 @@ export type Shop = { pos: Pt; name?: string; type: string; street?: string; hous
 
 type LL = { lat: number; lon: number };
 type Tags = Record<string, string>;
-type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[]; tags?: Tags; members?: { type: string; role: string; geometry?: LL[] }[] };
+type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[]; tags?: Tags; members?: { type: string; ref?: number; role: string; geometry?: LL[] }[] };
 
-const BOUNDARY_ID = 2613766;
+/** The play area: the union of these Stadtteile (Nippes, Neustadt-Nord with the Agnesviertel). */
+export const BOUNDARY_IDS = [2613766, 2613763];
 const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
@@ -120,12 +121,24 @@ export function parseOsm(json: unknown): OsmFeatures {
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
   const pending: { index: number; el: El; pts: Pt[]; t: Tags }[] = [];
+  /** Outer ways of the boundary relations by way id; a way shared by two of them is an inner border (count 2). */
+  const borderWays = new Map<number, { pts: Pt[]; count: number }>();
+  const seenBoundaries = new Set<number>();
   for (const el of elements) {
     const t = el.tags ?? {};
     if (el.type === 'relation') {
       const outers = (el.members ?? []).filter((m) => m.type === 'way' && m.role === 'outer' && m.geometry).map((m) => toPts(m.geometry!));
-      if (el.id === BOUNDARY_ID) f.boundary = joinRings(outers).sort((a, b) => b.length - a.length)[0] ?? [];
-      else if (GREEN(t)) f.greens.push(...joinRings(outers));
+      if (BOUNDARY_IDS.includes(el.id)) {
+        if (seenBoundaries.has(el.id)) continue;
+        seenBoundaries.add(el.id);
+        (el.members ?? []).forEach((m, i) => {
+          if (m.type !== 'way' || m.role !== 'outer' || !m.geometry) return;
+          const key = m.ref ?? -(el.id * 10000 + i);
+          const w = borderWays.get(key);
+          if (w) w.count++;
+          else borderWays.set(key, { pts: toPts(m.geometry), count: 1 });
+        });
+      } else if (GREEN(t)) f.greens.push(...joinRings(outers));
     } else if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
       const pos = wgs84ToLocal(el.lat, el.lon);
       if (t.natural === 'tree') f.trees.push(pos);
@@ -165,6 +178,9 @@ export function parseOsm(json: unknown): OsmFeatures {
       }
     }
   }
+  // union of the Stadtteile: their common border ways cancel out, the rest joins into the outer ring
+  const outerBorder = [...borderWays.values()].filter((w) => w.count === 1).map((w) => w.pts);
+  f.boundary = joinRings(outerBorder).sort((a, b) => b.length - a.length)[0] ?? [];
   f.tramStops = dedupeStops(stops);
   // parking:*=separate becomes a strip where a street-side parking area runs alongside
   for (const p of pending) f.roads[p.index] = parseRoad(p.el, p.pts, p.t, separateParkingSides(p.pts, parkingAreas))!;
