@@ -1,6 +1,7 @@
 import { Box3, Color, Group, Mesh, MeshStandardMaterial, Object3D, SpotLight, Vector3, type Material } from 'three';
 import type { BikeState, BikeType } from '@nn/shared';
 import type { Posture } from '../player';
+import { spreadIndices } from '../quality';
 
 /** Upper-body posture of a rider per bike type. */
 export const RIDER_POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
@@ -234,6 +235,15 @@ export class BikeLights {
     this.holder.name = 'bike-lights';
     scene.add(this.holder);
     this.park();
+  }
+
+  /**
+   * Keeps only n disco dots (spread evenly round the ball); the others are hidden, so they cost nothing in the shaders.
+   * Changing n recompiles the scene's materials: only at startup and when the player switches the quality level.
+   */
+  setDiscoDots(n: number): void {
+    const keep = spreadIndices(this.dots.length, n);
+    this.dots.forEach((s, k) => { s.visible = keep.has(k); });
   }
 
   /** Back into the holder, dark (nobody riding). */

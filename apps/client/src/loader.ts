@@ -37,9 +37,9 @@ export function chunksToLoad(manifest: WorldManifest, pos: XZ, loaded: ReadonlyS
     .map((c) => c.key);
 }
 
-/** Keys in `loaded` whose chunk centre is > UNLOAD_RADIUS from `pos`. */
-export function chunksToUnload(manifest: WorldManifest, pos: XZ, loaded: ReadonlySet<string>): string[] {
-  return manifest.chunks.filter((c) => loaded.has(c.key) && centreDistance(c, pos) > UNLOAD_RADIUS).map((c) => c.key);
+/** Keys in `loaded` whose chunk centre is > `radius` from `pos`. */
+export function chunksToUnload(manifest: WorldManifest, pos: XZ, loaded: ReadonlySet<string>, radius = UNLOAD_RADIUS): string[] {
+  return manifest.chunks.filter((c) => loaded.has(c.key) && centreDistance(c, pos) > radius).map((c) => c.key);
 }
 
 /** fetch that turns network failures (offline, DNS) and non-ok statuses into FetchError (status 0 for the former). */
@@ -68,6 +68,8 @@ export class WorldLoader {
   /** Buildings that carry a real shop sign: their facade sign band gets no pseudo lettering. */
   private signed = new Set<string>();
   private lastPos: XZ = { x: 0, z: 0 };
+  /** Chunks load within this radius of the camera and unload beyond the other (quality level). */
+  private radii = { load: LOAD_RADIUS, unload: UNLOAD_RADIUS };
   /** Incremented whenever a chunk is added to or removed from the scene. */
   revision = 0;
   readonly facade = createFacadeMaterial();
@@ -76,6 +78,11 @@ export class WorldLoader {
   readonly street = createStreetMaterials();
 
   constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
+
+  /** Load and unload radius (m) of a quality level; takes effect on the next update(). */
+  setRadii(load: number, unload: number): void {
+    this.radii = { load, unload: Math.max(unload, load) };
+  }
 
   /**
    * Loads the manifest (unless given: already being loaded elsewhere) and every chunk within READY_RADIUS of `start`
@@ -117,10 +124,10 @@ export class WorldLoader {
     const m = this.manifest;
     if (!m || !this.ready) return;
     this.lastPos = { x: cameraPos.x, z: cameraPos.z };
-    for (const key of chunksToUnload(m, cameraPos, new Set(this.loaded.keys()))) this.unload(key);
+    for (const key of chunksToUnload(m, cameraPos, new Set(this.loaded.keys()), this.radii.unload)) this.unload(key);
     const waiting = [...this.failed].filter(([, f]) => f.retryAt > now).map(([key]) => key);
     const busy = new Set([...this.loaded.keys(), ...this.pending, ...waiting]);
-    this.queue = chunksToLoad(m, cameraPos, busy);
+    this.queue = chunksToLoad(m, cameraPos, busy, this.radii.load);
     while (this.pending.size < MAX_CONCURRENT && this.queue.length > 0) {
       const key = this.queue.shift()!;
       this.load(key).then(
@@ -143,7 +150,7 @@ export class WorldLoader {
       const gltf = await this.gltf.parseAsync(buf, this.baseUrl);
       const root = gltf.scene;
       // the player may have moved away while this chunk was downloading
-      if (centreDistance(chunk, this.lastPos) > UNLOAD_RADIUS) {
+      if (centreDistance(chunk, this.lastPos) > this.radii.unload) {
         disposeGltf(root); // its own materials and textures were not swapped for the shared ones yet
         return;
       }

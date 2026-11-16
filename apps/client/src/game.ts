@@ -19,6 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
+import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -128,6 +129,13 @@ export class Game {
     this.sample();
     session.onStep = () => this.sample();
     session.onCorrection = () => this.resample();
+  }
+
+  /** The own car's and bike's lights and the parked cars' draw radius at a quality level. */
+  setQuality(q: Quality): void {
+    this.driven.setQuality(q);
+    this.bikeLights.setDiscoDots(q.discoDots);
+    this.cars.setRadius(q.carRadius);
   }
 
   /** Fixed steps run so far (tests wait on simulation time, not on the wall clock). */
