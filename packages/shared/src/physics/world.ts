@@ -85,6 +85,7 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   await initRapier();
   const world = new RAPIER.World({ x: 0, y: TUNING.world.gravity, z: 0 });
   world.timestep = TUNING.world.dt;
+  skipSoftBodyRemap(world);
 
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
   const mesh = subdivideLargeTriangles(c.vertices, dropZeroAreaTriangles(c.vertices, c.indices), TUNING.world.maxTriangleEdge);
@@ -110,6 +111,20 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   };
   beforeStep.set(pw, hooks);
   return pw;
+}
+
+/**
+ * rapier.js 0.21 ends every World.step with mapNewSoftBodies(): it walks every rigid-body and collider handle through
+ * wasm→JS callbacks and filters both wrapper maps, to wrap the pieces soft-body tearing creates inside a step. With the
+ * city's ~14k street props that bookkeeping cost ~4 ms per step, while the physics itself took ~0.03 ms. This world
+ * has no soft bodies, so a step never creates or removes a body or collider; createRigidBody/createCollider and the
+ * remove calls keep the wrapper maps up to date themselves. The remap therefore only runs while soft bodies exist.
+ */
+function skipSoftBodyRemap(world: RAPIER.World): void {
+  const remap = world.mapNewSoftBodies.bind(world);
+  world.mapNewSoftBodies = () => {
+    if (world.softBodies.len() > 0) remap();
+  };
 }
 
 /**

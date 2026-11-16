@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
@@ -75,6 +75,27 @@ describe('rapier', () => {
     const hit = pw.world.castRay(new R.Ray({ x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }), 2, true, undefined, undefined, undefined, undefined, staticWorldFilter());
     expect(hit).not.toBeNull();
     expect(hit!.timeOfImpact).toBeCloseTo(1, 3);
+  });
+
+  test('a step does not rescan every body and collider handle (rapier.js soft-body remap), and the wrappers stay valid', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const R = pw.rapier, w = pw.world;
+    const scans = vi.spyOn(w.colliders, 'unmapRemovedColliders');
+    const box = w.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(0, 2, 0));
+    const c = w.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5), box);
+    const free = w.createCollider(R.ColliderDesc.ball(0.2).setTranslation(3, 0.2, 3));
+    for (let i = 0; i < 60; i++) pw.step();
+    expect(scans).not.toHaveBeenCalled();
+    expect(box.translation().y).toBeCloseTo(0.5, 1);
+    expect(w.getCollider(c.handle)).toBe(c);
+    expect(w.getRigidBody(box.handle)).toBe(box);
+    w.removeCollider(free, false);
+    pw.step();
+    expect(w.getCollider(free.handle)).toBeFalsy();
+    w.removeRigidBody(box);
+    pw.step();
+    expect(w.getRigidBody(box.handle)).toBeFalsy();
+    expect(w.getCollider(c.handle)).toBeFalsy();
   });
 });
 
