@@ -189,6 +189,7 @@ export class Game {
     }
     this.mapInput = this.map.open ? { dx: mouse.dx, dy: mouse.dy, notches } : { dx: 0, dy: 0, notches: 0 };
     if (this.map.takeClosed()) input.clearPresses();
+    let honk = false;
     if (this.flying) {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
@@ -208,7 +209,9 @@ export class Game {
         if (this.mode === 'walk') this.jumpPending = true;
         else if (this.mode === 'ride') this.hopPending = true;
       }
-      if (input.consume('KeyH') && this.mode === 'ride') audio?.bell();
+      const hPressed = input.consume('KeyH'); // a tap between two frames still honks
+      if (hPressed && this.mode === 'ride') audio?.bell();
+      honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
       if (input.consume('KeyE') && !busy) {
         if (this.mode === 'walk') this.getIn();
         else if (this.mode === 'ride') this.getOffBike();
@@ -216,6 +219,7 @@ export class Game {
       }
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
+    audio?.horn(honk, dt);
     const still = this.flying || this.figure.busy;
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
