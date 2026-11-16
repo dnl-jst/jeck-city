@@ -2,7 +2,7 @@ import { heightAt } from '../assets/terrain';
 import type { BikeState, RiddenBike } from '../physics/bike';
 import { CAR_SPECS } from '../physics/cartypes';
 import { Character, type CharacterState } from '../physics/character';
-import { BikeRacks, dismountSpot, ParkedBikes } from '../physics/parkedbikes';
+import { BikeRacks, dismountSpot, ParkedBikes, type BikePose } from '../physics/parkedbikes';
 import { StreetProps } from '../physics/props';
 import { surfaceY } from '../physics/surface';
 import { TUNING } from '../physics/tuning';
@@ -28,16 +28,20 @@ export type SimEvent =
   | { t: 'enter'; id: PlayerId; car: number }
   /** E on foot next to a car someone else drives (and no free car in reach). */
   | { t: 'enterDenied'; id: PlayerId }
+  /** E on foot next to a bike someone else rides (and nothing free in reach). */
+  | { t: 'mountDenied'; id: PlayerId }
   | { t: 'exit'; id: PlayerId; car: number }
   | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' }
   | { t: 'mount'; id: PlayerId; bike: number }
   /**
-   * Off the bike: stepped (or jumped) off, or `crash`ed into something (the rider falls and lies for
+   * Off the bike: stepped (or jumped) off, or `crash`ed into something or hit by a car (the rider falls and lies for
    * TUNING.bike.getUpSeconds without control). heading: the bike's heading at that moment.
    */
   | { t: 'dismount'; id: PlayerId; bike: number; heading: number; crash: boolean }
   /** E on the bike with no free spot to step off to. */
   | { t: 'dismountDenied'; id: PlayerId }
+  /** A rider rang the bell (H) at (x, z). */
+  | { t: 'bell'; id: PlayerId; x: number; z: number }
   | { t: 'ignition'; car: number; e: IgnitionEvent }
   | { t: 'knock'; id: PlayerId; by: number }
   | { t: 'impact'; x: number; z: number; strength: number }
@@ -46,7 +50,8 @@ export type SimEvent =
 /**
  * One player's state after a step. pos/vel: feet and velocity while walking (or down), chassis centre and velocity
  * while driving, the ground under the wheels and the velocity along the heading while riding. yaw: the player's last
- * input yaw. engine: ignition of the car they drive ('off' otherwise). falling: fell off a bike and has no control yet.
+ * input yaw. engine: ignition of the car they drive ('off' otherwise). falling: fell off a bike and has no control yet
+ * (fallTicks: ticks left). pedalling: riding with the pedal input forward.
  */
 export type PlayerSnapshot = {
   mode: 'walk' | 'drive' | 'down' | 'ride';
@@ -60,6 +65,8 @@ export type PlayerSnapshot = {
   bikeId: number | null;
   bike: BikeState | null;
   falling: boolean;
+  fallTicks: number;
+  pedalling: boolean;
 };
 
 type Player = {
@@ -70,6 +77,8 @@ type Player = {
   facing: number;
   /** Ticks left lying after a bike crash (no control). */
   fallTicks: number;
+  /** Riding with the pedal input forward (the remote rig turns the crank). */
+  pedalling: boolean;
 };
 
 /** Ticks between two car proximity updates (0.5 s, as in single player). */
@@ -99,30 +108,32 @@ export class WorldSim {
   private readonly ignitions: Ignition[];
   /** Per car: whether the last applied driver input brakes (brake lights). */
   private readonly brakes: boolean[];
+  /** Per car: whether its driver holds the horn. */
+  private readonly horns: boolean[];
   private readonly resets = new ResetTimers();
   private readonly proxies: Proxies;
 
   private constructor(
     readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, readonly bikes: ParkedBikes, readonly racks: BikeRacks,
-    private readonly a: WorldAssets, private readonly foci: 'players' | readonly XZ[], private readonly riding: boolean,
+    private readonly a: WorldAssets, private readonly foci: 'players' | readonly XZ[],
   ) {
     this.ignitions = cars.poses.map(() => new Ignition());
     this.brakes = cars.poses.map(() => false);
-    this.proxies = new Proxies(pw, cars);
+    this.horns = cars.poses.map(() => false);
+    this.proxies = new Proxies(pw, cars, bikes);
   }
 
   /**
    * Builds the world from the assets. foci: where cars and parked bikes get physics bodies ('players' = around every
-   * player, default). riding: E can mount a bike (offline only for now: the server does not simulate riders yet, so
-   * online sims leave it off and E only picks cars; parked bikes exist and collide either way).
+   * player, default).
    */
-  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; riding?: boolean } = {}): Promise<WorldSim> {
+  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[] } = {}): Promise<WorldSim> {
     const pw = await createPhysicsWorld(a.collision, a.terrain);
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain);
     const cars = new CarPool(pw, a.manifest.parked, a.terrain);
     const racks = new BikeRacks(pw, a.manifest.bikeRacks, a.terrain);
     const bikes = new ParkedBikes(pw, a.manifest.bikes, a.terrain);
-    const sim = new WorldSim(pw, cars, props, bikes, racks, a, opts.foci ?? 'players', opts.riding ?? false);
+    const sim = new WorldSim(pw, cars, props, bikes, racks, a, opts.foci ?? 'players');
     cars.updateProximity(sim.focusPoints());
     bikes.updateProximity(sim.focusPoints());
     // colliders created after the last world step are invisible to scene queries (spawn and exit tests) until the
@@ -148,6 +159,7 @@ export class WorldSim {
     const char = new Character(this.pw, { x: p.x, y: p.y + DROP, z: p.z });
     this.list.set(id, {
       char, car: null, yaw: manifest.spawn.heading, use: false, jump: false, bike: null, ridden: null, facing: manifest.spawn.heading, fallTicks: 0,
+      pedalling: false,
     });
   }
 
@@ -177,6 +189,11 @@ export class WorldSim {
   /** Whether car i's brake lights are on: its driver holds the brake or throttles against the direction of travel. */
   braking(i: number): boolean {
     return this.brakes[i]!;
+  }
+
+  /** Whether car i's driver holds the horn. */
+  horning(i: number): boolean {
+    return this.horns[i]!;
   }
 
   /** Sets the radio of the car player `id` drives; ignored on foot. */
@@ -237,6 +254,27 @@ export class WorldSim {
   }
 
   /**
+   * Client prediction: poses of the bikes the server streams (ridden by someone else, or rolling) are followed
+   * kinematically; a bike no longer streamed rests at rest(i) or its last pose. Bikes local players ride are never touched.
+   */
+  setBikeProxies(bikes: ReadonlyMap<number, BikePose>, rest?: (i: number) => BikePose | null): void {
+    this.proxies.setBikes(bikes, (i) => this.riddenLocally(i), rest);
+  }
+
+  /**
+   * Client prediction: who else rides which bike (the server's slow state). Those bikes count as taken when getting
+   * on. Bikes local players ride are never touched.
+   */
+  setRemoteRiders(riders: ReadonlyMap<number, PlayerId>): void {
+    const r = this.bikes.rider;
+    for (let i = 0; i < r.length; i++) {
+      if (this.riddenLocally(i)) continue;
+      const who = riders.get(i) ?? null;
+      if (r[i] !== who) r[i] = who;
+    }
+  }
+
+  /**
    * Client prediction: who else (not a player of this sim) sits in which car, from the server's slow state. Those cars
    * count as taken when getting in. Cars local players drive are never touched.
    */
@@ -259,6 +297,7 @@ export class WorldSim {
     const pl = this.list.get(id);
     if (!pl) throw new Error(`no player ${id}`);
     this.setOwn(id, pl, from);
+    // the own car; a ridden bike is kinematic and never among the saved bodies
     const ownBody = (): number => (pl.car !== null ? this.cars.vehicle(pl.car)!.chassis.handle : -1);
     const saved = saveDynamicBodies(this.pw.world, new Set([ownBody()]));
     this.props.takeFallen(); // replay runs between steps: nothing pending here
@@ -270,7 +309,8 @@ export class WorldSim {
       this.pw.step();
       onStep?.(k);
     });
-    restoreDynamicBodies(saved, new Set([ownBody()]));
+    // (a parked bike mounted during the replay has lost its body: restoreDynamicBodies skips removed bodies)
+    restoreDynamicBodies(this.pw.world, saved, new Set([ownBody()]));
     // lamps the replayed path knocked over: the original prediction did not (or did it in an earlier step)
     for (const i of this.props.takeFallen()) this.props.standUp(i);
     this.cars.sync();
@@ -286,19 +326,19 @@ export class WorldSim {
       const car = v.saveState();
       return {
         mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw,
-        carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false,
+        carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
       };
     }
     if (pl.bike !== null) {
       const b = pl.ridden!.state();
       return {
         mode: 'ride', pos: { x: b.x, y: b.y, z: b.z }, vel: { x: Math.sin(b.heading) * b.speed, y: b.vy, z: Math.cos(b.heading) * b.speed },
-        yaw: pl.yaw, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false,
+        yaw: pl.yaw, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
       };
     }
     return {
       mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw,
-      carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0,
+      carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0, fallTicks: pl.fallTicks, pedalling: false,
     };
   }
 
@@ -312,6 +352,19 @@ export class WorldSim {
     const out: { id: PlayerId; char: Character }[] = [];
     for (const [id, pl] of this.list) if (pl.car === null && pl.bike === null) out.push({ id, char: pl.char });
     return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** Players on a bike in id order, with their bikes: what collisions.ts checks cars against. */
+  riders(): { id: PlayerId; bike: RiddenBike }[] {
+    const out: { id: PlayerId; bike: RiddenBike }[] = [];
+    for (const [id, pl] of this.list) if (pl.ridden) out.push({ id, bike: pl.ridden });
+    return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** A car hit rider `id` hard: they fall off as in a crash (the bike stops and stays), with the `dismount` event. */
+  knockOffBike(id: PlayerId, ev: SimEvent[]): void {
+    const pl = this.list.get(id);
+    if (pl?.ridden) this.crash(id, pl, ev);
   }
 
   /** Where every player is (the car they drive, the bike they ride, else their feet). */
@@ -394,6 +447,11 @@ export class WorldSim {
       pl.char.applyInput({ forward: 0, right: 0, run: false, yaw: input.yaw, jump: false });
     } else if (pl.bike !== null) {
       const r = pl.ridden!.applyInput({ pedal: input.forward, steer: input.right, sprint: input.run, hop: jump });
+      pl.pedalling = input.forward > 0;
+      if (input.bell) {
+        const s = pl.ridden!.state();
+        ev.push({ t: 'bell', id, x: s.x, z: s.z });
+      }
       if (r.crashed) this.crash(id, pl, ev);
     } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
@@ -402,6 +460,7 @@ export class WorldSim {
       const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
       v.applyInput({ throttle, steer: input.right, brake: input.brake });
       this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+      this.horns[pl.car] = input.horn === true;
     }
   }
 
@@ -411,15 +470,40 @@ export class WorldSim {
     return d !== null && d !== undefined && this.list.get(d)?.car === i;
   }
 
-  /** Puts player `id` into `s`: in or out of the right car (quietly: no events, no door/ignition restart), then the state. */
+  /** Whether a player of this sim rides bike i. */
+  private riddenLocally(i: number): boolean {
+    const r = this.bikes.rider[i];
+    return r !== null && r !== undefined && this.list.get(r)?.bike === i;
+  }
+
+  /**
+   * Puts player `id` into `s`: on or off the right bike, in or out of the right car (quietly: no events, no
+   * door/ignition restart), then the state.
+   */
   private setOwn(id: PlayerId, pl: Player, s: OwnState): void {
     const target = s.mode === 'drive' && s.car && s.carId !== null ? s.carId : null;
+    const bikeTarget = s.mode === 'ride' && s.bike && s.bikeId !== null && s.bikeId !== undefined ? s.bikeId : null;
+    if (pl.bike !== null && pl.bike !== bikeTarget) {
+      this.bikes.dismount(pl.bike, pl.ridden!);
+      pl.bike = null;
+      pl.ridden = null;
+      pl.char.setEnabled(true);
+    }
     if (pl.car !== null && pl.car !== target) {
       this.leaveCar(pl.car);
       pl.car = null;
       pl.char.setEnabled(true);
     }
-    if (target !== null) {
+    pl.fallTicks = s.fallTicks ?? 0;
+    pl.pedalling = false;
+    if (bikeTarget !== null) {
+      if (pl.bike === null) {
+        pl.ridden = this.bikes.mount(bikeTarget, id);
+        pl.bike = bikeTarget;
+        pl.char.setEnabled(false);
+      }
+      pl.ridden!.restoreState(s.bike!);
+    } else if (target !== null) {
       if (pl.car === null) {
         this.cars.enter(target, id);
         pl.car = target;
@@ -442,14 +526,22 @@ export class WorldSim {
     const candidates = this.cars.candidates();
     const car = nearestEnterableCar(pos, candidates, ENTER_MAX_DIST);
     // a car and a bike in reach: the one the figure faces
-    const bike = this.riding ? this.bikes.nearestMountable(pos) : null;
+    const bike = this.bikes.nearestMountable(pos);
     if (pickVehicle(pos, pl.facing, car === null ? null : this.cars.poses[car]!, bike === null ? null : this.bikes.poses[bike]!) === 'bike') {
       this.mountBike(id, pl, bike!, ev);
       return;
     }
     if (car === null) {
-      // only a taken car in reach: tell the player (their prediction may have put them in it)
-      if (candidates.some((c) => c.occupied && Math.hypot(c.x - pos.x, c.z - pos.z) <= ENTER_MAX_DIST)) ev.push({ t: 'enterDenied', id });
+      // only a taken car or bike in reach: tell the player (their prediction may have put them in or on it)
+      let taken: XZ | null = null, takenD = ENTER_MAX_DIST;
+      for (const c of candidates) {
+        const d = Math.hypot(c.x - pos.x, c.z - pos.z);
+        if (c.occupied && d <= takenD) [taken, takenD] = [c, d];
+      }
+      const ridden = this.bikes.nearestRidden(pos);
+      const which = pickVehicle(pos, pl.facing, taken, ridden === null ? null : this.bikes.poses[ridden]!);
+      if (which === 'car') ev.push({ t: 'enterDenied', id });
+      else if (which === 'bike') ev.push({ t: 'mountDenied', id });
       return;
     }
     this.cars.enter(car, id);
@@ -483,7 +575,7 @@ export class WorldSim {
   }
 
   private mountBike(id: PlayerId, pl: Player, bike: number, ev: SimEvent[]): void {
-    pl.ridden = this.bikes.mount(bike);
+    pl.ridden = this.bikes.mount(bike, id);
     pl.bike = bike;
     pl.jump = false;
     pl.char.setEnabled(false);
@@ -517,6 +609,7 @@ export class WorldSim {
     this.bikes.dismount(bike, pl.ridden!);
     pl.bike = null;
     pl.ridden = null;
+    pl.pedalling = false;
     pl.char.setEnabled(true);
     const y = surfaceY(this.pw, spot.x, spot.z, s.y + 1) ?? heightAt(this.a.terrain, spot.x, spot.z);
     pl.char.teleport({ x: spot.x, y: y + DROP, z: spot.z });
@@ -536,5 +629,7 @@ export class WorldSim {
     this.cars.exit(i);
     this.ignitions[i]!.stop();
     this.brakes[i] = false;
+    this.horns[i] = false;
+
   }
 }

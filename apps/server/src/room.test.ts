@@ -265,6 +265,73 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await leaveAll();
   });
 
+  /**
+   * A bike with no car within 6 m and no other bike within 4 m (E there can only mean this bike), nearest the spawn,
+   * and the points 1 m left/right of it.
+   */
+  const lonelyBike = () => {
+    const sim = srv.room.sim, sp = sim.bikes.poses[0]!;
+    let best = -1, bestD = Infinity;
+    sim.bikes.poses.forEach((b, i) => {
+      if (sim.bikes.rider[i] !== null || sim.cars.poses.some((c) => Math.hypot(c.x - b.x, c.z - b.z) < 6)) return;
+      if (sim.bikes.poses.some((o, j) => j !== i && Math.hypot(o.x - b.x, o.z - b.z) < 4)) return;
+      const d = Math.hypot(b.x - sp.x, b.z - sp.z);
+      if (d < bestD) [best, bestD] = [i, d];
+    });
+    const b = sim.bikes.poses[best]!;
+    const lx = Math.cos(b.heading), lz = -Math.sin(b.heading);
+    return { id: best, left: { x: b.x + lx, z: b.z + lz }, right: { x: b.x - lx, z: b.z - lz } };
+  };
+
+  it('mount is exclusive and the other client sees the rider', async () => {
+    const a = await join('Anna'), b = await join('Bert');
+    const wa = watch(a), wb = watch(b);
+    const bike = lonelyBike();
+    teleport(a, bike.left.x, bike.left.z);
+    teleport(b, bike.right.x, bike.right.z);
+    await sleep(300);
+    const pa = new Pilot(a), pb = new Pilot(b);
+    pa.press();
+    pb.press();
+    await sleep(500);
+    const slots = [slotOf(a), slotOf(b)];
+    const modes = slots.map((s) => srv.room.sim.player(s).mode);
+    expect(modes.filter((m) => m === 'ride')).toHaveLength(1);
+    const rider = slots[modes.indexOf('ride')]!;
+    expect(srv.room.sim.bikes.rider[bike.id]).toBe(rider);
+    const [riderRoom, otherWatch, riderWatch] = rider === slots[0] ? [a, wb, wa] : [b, wa, wb];
+    // the rider's own snapshot says ride on that bike; the other one sees a rider entry and the slow state
+    await until(() => riderWatch.last?.own.mode === 3 && otherWatch.last!.riders.length === 1);
+    expect(riderWatch.last!.own.bikeId).toBe(bike.id);
+    expect(otherWatch.last!.riders[0]).toMatchObject({ slot: rider, bikeId: bike.id });
+    expect(otherWatch.last!.walkers.map((w) => w.slot)).not.toContain(rider);
+    const other = rider === slots[0] ? b : a;
+    const st = other.state as { players: Map<string, { mode: number; bikeId: number }>; bikes: Map<string, { rider: number }> };
+    await until(() => st.bikes.get(String(bike.id))?.rider === rider);
+    expect(st.players.get(String(rider))).toMatchObject({ mode: 3, bikeId: bike.id });
+    // pedalling away: the other client's rider entry follows
+    const p0 = otherWatch.last!.riders[0]!;
+    (rider === slots[0] ? pa : pb).input = { ...NEUTRAL_INPUT(0), forward: 1 };
+    await until(() => Math.hypot(otherWatch.last!.riders[0]!.x - p0.x, otherWatch.last!.riders[0]!.z - p0.z) > 2, 5000);
+    expect(riderRoom.connection.isOpen).toBe(true);
+    pa.stop();
+    pb.stop();
+    await leaveAll();
+  }, 20_000);
+
+  it('the character variant from the join options is in the player state (validated)', async () => {
+    const a = await join('Anna', { variant: 1 }), b = await join('Bert', { variant: 99 });
+    const st = b.state as { players: Map<string, { variant: number }> };
+    await until(() => st.players?.size === 2);
+    expect(st.players.get(String(slotOf(a)))!.variant).toBe(1);
+    expect(st.players.get(String(slotOf(b)))!.variant).toBe(0);
+    b.send('variant', 1);
+    await until(() => st.players.get(String(slotOf(b)))!.variant === 1);
+    a.send('variant', -3);
+    await until(() => st.players.get(String(slotOf(a)))!.variant === 0);
+    await leaveAll();
+  });
+
   it('car hits walker → down, up after ~1 s', async () => {
     const a = await join('Anna'), b = await join('Bert');
     const wb = watch(b);

@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { TUNING } from '../physics/tuning';
+import { RESET_AFTER_S } from '../net/constants';
 import type { WorldAssets } from './assets';
 import { fixtureAssets } from './fixture.test-util';
 import { WorldSim, type SimEvent } from './world-sim';
@@ -21,7 +22,7 @@ function withBikes(bikes: WorldAssets['manifest']['bikes']): WorldAssets {
 }
 
 test('E next to a bike: mount, pedal off along the heading, step off to the side', async () => {
-  const sim = await WorldSim.create(fixtureAssets(), { riding: true });
+  const sim = await WorldSim.create(fixtureAssets());
   sim.addPlayer(1, { x: -5, z: -30 }); // 1 m left of bike 0 (at (−6, −30), facing +z)
   run(sim, 10);
   let ev = sim.step(new Map([[1, USE]]));
@@ -29,7 +30,7 @@ test('E next to a bike: mount, pedal off along the heading, step off to the side
   let p = sim.player(1);
   expect(p.mode).toBe('ride');
   expect(p.bikeId).toBe(0);
-  expect(sim.bikes.ridden).toBe(0);
+  expect(sim.bikes.rider[0]).toBe(1);
   expect(sim.riddenBike(1)!.type).toBe('dutch');
   run(sim, 60, { ...N, forward: 1 });
   p = sim.player(1);
@@ -43,27 +44,30 @@ test('E next to a bike: mount, pedal off along the heading, step off to the side
   p = sim.player(1);
   expect(p.mode).toBe('walk');
   expect(p.bikeId).toBeNull();
-  expect(sim.bikes.ridden).toBeNull();
+  expect(sim.bikes.rider[0]).toBeNull();
   const b = sim.bikes.poses[0]!;
   expect(Math.hypot(p.pos.x - b.x, p.pos.z - b.z)).toBeCloseTo(1, 1);
   run(sim, 30);
   expect(sim.player(1).char.grounded).toBe(true);
 }, 30_000);
 
-test('riding off (online sims): E next to a bike does nothing, the parked bike still has a body', async () => {
+test('two players press E at one bike in the same tick: the first in the queue rides, the other is refused', async () => {
   const sim = await WorldSim.create(fixtureAssets());
-  sim.addPlayer(1, { x: -5, z: -30 });
-  run(sim, 10);
-  const ev = sim.step(new Map([[1, USE]]));
-  expect(ev.filter((e) => e.t === 'mount')).toEqual([]);
+  sim.addPlayer(1, { x: -5, z: -30 }); // 1 m left of bike 0
+  sim.addPlayer(2, { x: -7, z: -30 }); // 1 m right of it
+  for (let t = 0; t < 10; t++) sim.step(new Map([[1, N], [2, N]]));
+  const ev = sim.step(new Map([[2, USE], [1, USE]])); // 2 arrived first
+  expect(ev).toContainEqual({ t: 'mount', id: 2, bike: 0 });
+  expect(ev).toContainEqual({ t: 'mountDenied', id: 1 });
   expect(sim.player(1).mode).toBe('walk');
-  expect(sim.bikes.activeIds()).toContain(0);
+  expect(sim.player(2).mode).toBe('ride');
+  expect(sim.bikes.rider[0]).toBe(2);
 }, 30_000);
 
 test('E with a car and a bike in reach picks the one the figure faces', async () => {
   // car 0 at (5, 0), a bike at (1.5, 0): the player at (3.2, 0) has both in reach
   for (const [yaw, want] of [[Math.PI / 2, 'car'], [-Math.PI / 2, 'bike']] as const) {
-    const sim = await WorldSim.create(withBikes([{ x: 1.5, z: 0, heading: 0, type: 1, color: 0 }]), { riding: true });
+    const sim = await WorldSim.create(withBikes([{ x: 1.5, z: 0, heading: 0, type: 1, color: 0 }]));
     sim.addPlayer(1, { x: 3.2, z: 0 });
     run(sim, 10);
     run(sim, 5, { ...N, forward: 1, yaw }); // a step towards it turns the figure
@@ -75,7 +79,7 @@ test('E with a car and a bike in reach picks the one the figure faces', async ()
 
 test('crashing into a tree throws the rider off: no control until up again', async () => {
   // the fixture's tree stands at (−10, −10); a bike 30 m before it, facing it
-  const sim = await WorldSim.create(withBikes([{ x: -10, z: -40, heading: 0, type: 1, color: 0 }]), { riding: true });
+  const sim = await WorldSim.create(withBikes([{ x: -10, z: -40, heading: 0, type: 1, color: 0 }]));
   sim.addPlayer(1, { x: -9, z: -40 });
   run(sim, 10);
   sim.step(new Map([[1, USE]]));
@@ -96,4 +100,82 @@ test('crashing into a tree throws the rider off: no control until up again', asy
   expect(sim.player(1).falling).toBe(false);
   run(sim, 30, { ...N, forward: 1, yaw: Math.PI });
   expect(Math.hypot(sim.player(1).pos.x - at.x, sim.player(1).pos.z - at.z)).toBeGreaterThan(0.5);
+}, 30_000);
+
+/** The fixture with one bike at (0, −60) facing +z and car 0 `gap` m behind it on the same line, facing it. */
+function carBehindBike(gap: number): WorldAssets {
+  const a = withBikes([{ x: 0, z: -60, heading: 0, type: 0, color: 0 }]);
+  a.manifest.parked[0] = { x: 0, z: -60 - gap, heading: 0, color: 0xff0000 };
+  return a;
+}
+
+/** Player 1 rides the bike (mounted from its left), player 2 sits in car 0 with the engine running. */
+async function riderAndDriver(gap = 30): Promise<WorldSim> {
+  const sim = await WorldSim.create(carBehindBike(gap));
+  sim.addPlayer(1, { x: 1, z: -60 });
+  sim.addPlayer(2, { x: 2.5, z: -60 - gap });
+  for (let t = 0; t < 10; t++) sim.step(new Map([[1, N], [2, N]]));
+  sim.step(new Map([[1, USE], [2, USE]]));
+  expect(sim.player(1).mode).toBe('ride');
+  expect(sim.player(2).mode).toBe('drive');
+  for (let t = 0; t < 100; t++) sim.step(new Map([[1, N], [2, N]])); // the engine starts
+  return sim;
+}
+
+test('a car faster than KNOCKDOWN_KMH throws a rider off: crash, knock, no control while lying', async () => {
+  const sim = await riderAndDriver();
+  let ev: SimEvent[] = [];
+  for (let t = 0; t < 600 && !ev.some((e) => e.t === 'knock'); t++) ev = sim.step(new Map([[1, N], [2, { ...N, forward: 1 }]]));
+  expect(ev).toContainEqual({ t: 'knock', id: 1, by: 0 });
+  expect(ev.find((e) => e.t === 'dismount')).toMatchObject({ id: 1, bike: 0, crash: true });
+  expect(ev.some((e) => e.t === 'impact')).toBe(true);
+  const p = sim.player(1);
+  expect(p.mode === 'walk' || p.mode === 'down').toBe(true);
+  expect(p.falling).toBe(true);
+  expect(sim.bikes.rider[0]).toBeNull();
+}, 30_000);
+
+test('a slow car shoves a rider along without throwing them off', async () => {
+  const sim = await riderAndDriver(8);
+  const z0 = sim.player(1).pos.z;
+  const ev: SimEvent[] = [];
+  // creep: a little throttle, then let it roll; the car stays under KNOCKDOWN_KMH
+  for (let t = 0; t < 900; t++) {
+    const v = sim.cars.vehicle(0)!.speed();
+    ev.push(...sim.step(new Map([[1, N], [2, { ...N, forward: v < 1.2 ? 0.4 : 0 }]])));
+  }
+  expect(ev.filter((e) => e.t === 'knock' || e.t === 'dismount')).toEqual([]);
+  expect(sim.player(1).mode).toBe('ride');
+  expect(sim.player(1).pos.z).toBeGreaterThan(z0 + 0.5);
+}, 30_000);
+
+test('a moved bike goes home after RESET_AFTER_S without riders, only with nobody near', async () => {
+  const sim = await WorldSim.create(fixtureAssets());
+  sim.addPlayer(1, { x: -5, z: -30 });
+  run(sim, 10);
+  sim.step(new Map([[1, USE]]));
+  run(sim, 60, { ...N, forward: 1 });
+  sim.step(new Map([[1, USE]]));
+  run(sim, 120);
+  expect(sim.bikes.isMoved(0)).toBe(true);
+  sim.advanceIdleTicks(RESET_AFTER_S * 60);
+  run(sim, 61);
+  expect(sim.bikes.isMoved(0)).toBe(true); // the player is still near
+  sim.removePlayer(1);
+  sim.addPlayer(1, { x: 120, z: 120 }); // > RESET_CLEAR_RADIUS away
+  sim.advanceIdleTicks(RESET_AFTER_S * 60);
+  run(sim, 61);
+  expect(sim.bikes.isMoved(0)).toBe(false);
+  expect(sim.bikes.poses[0]).toMatchObject({ x: -6, z: -30, heading: 0 });
+}, 30_000);
+
+test('bell rings as a positional event while riding; the horn shows on the car while held', async () => {
+  const sim = await riderAndDriver();
+  const ev = sim.step(new Map([[1, { ...N, bell: true }], [2, { ...N, horn: true }]]));
+  const bell = ev.find((e) => e.t === 'bell');
+  expect(bell).toMatchObject({ t: 'bell', id: 1 });
+  expect(Math.hypot((bell as { x: number }).x - 0, (bell as { z: number }).z + 60)).toBeLessThan(0.5);
+  expect(sim.horning(0)).toBe(true);
+  sim.step(new Map([[1, N], [2, N]]));
+  expect(sim.horning(0)).toBe(false);
 }, 30_000);

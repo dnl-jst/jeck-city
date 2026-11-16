@@ -233,8 +233,7 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
     fetchOk('/world/collision.bin').then(async (r) => decodeCollision(await r.arrayBuffer())),
     fetchOk('/world/terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
-  // riding bikes is offline-only until the server simulates bikes for its players (Task M2)
-  const sim = await WorldSim.create({ manifest, collision, terrain }, { riding: offline });
+  const sim = await WorldSim.create({ manifest, collision, terrain });
   physicsLoading = false; // only once the world is built
   showStatus();
   return { sim, terrain };

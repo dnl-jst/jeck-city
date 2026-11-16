@@ -5,12 +5,13 @@ const AFTER_TICKS = RESET_AFTER_S * TICK_HZ;
 
 /**
  * Puts things back where the manifest has them once nobody used them for RESET_AFTER_S: a driverless car away from
- * its spot (and not moving) and a lamp that lies. Nothing resets while any player is within RESET_CLEAR_RADIUS.
+ * its spot (and not moving), an unridden bike away from its spot (and not moving) and a lamp that lies. Nothing resets while any player is within RESET_CLEAR_RADIUS.
  * Call update() about once a second (it only reads the tick counter, no clock).
  */
 export class ResetTimers {
-  /** Tick of the last use/movement per car and per lamp. */
+  /** Tick of the last use/movement per car, per bike and per lamp. */
   private readonly car: number[] = [];
+  private readonly bike: number[] = [];
   private readonly lamp: number[] = [];
 
   update(sim: WorldSim): void {
@@ -26,6 +27,17 @@ export class ResetTimers {
       if (now - this.car[i]! >= AFTER_TICKS && clear(p.x, p.z)) {
         sim.cars.reset(i);
         this.car[i] = now;
+      }
+    }
+
+    const bikes = sim.bikes, rolling = new Set(bikes.awake());
+    for (let i = 0; i < bikes.poses.length; i++) {
+      this.bike[i] ??= now;
+      if (bikes.rider[i] !== null || rolling.has(i) || !bikes.isMoved(i)) { this.bike[i] = now; continue; }
+      const p = bikes.poses[i]!;
+      if (now - this.bike[i]! >= AFTER_TICKS && clear(p.x, p.z)) {
+        bikes.reset(i);
+        this.bike[i] = now;
       }
     }
 

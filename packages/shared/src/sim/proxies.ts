@@ -1,5 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { CHARACTER_CENTRE } from '../physics/character';
+import type { BikePose, ParkedBikes } from '../physics/parkedbikes';
 import { TUNING } from '../physics/tuning';
 import { CHARACTER_GROUPS, type PhysicsWorld } from '../physics/world';
 import type { CarPool, PlayerId } from './cars';
@@ -10,12 +11,13 @@ type Vec3 = { x: number; y: number; z: number };
 /**
  * Other players in the client's prediction world: people on foot as kinematic capsules (the own character walks
  * into them like on the server), cars someone else drives or the server streams as kinematic cars on their pose
- * (CarPool.follow). Nothing here is simulated; the poses come from the snapshots.
+ * (CarPool.follow), bikes someone else rides or the server streams the same way (ParkedBikes.follow). Nothing here is
+ * simulated; the poses come from the snapshots.
  */
 export class Proxies {
   private readonly walkers = new Map<PlayerId, RAPIER.RigidBody>();
 
-  constructor(private readonly pw: PhysicsWorld, private readonly cars: CarPool) {}
+  constructor(private readonly pw: PhysicsWorld, private readonly cars: CarPool, private readonly bikes: ParkedBikes) {}
 
   /** Number of walker capsules (tests, debug). */
   get walkerCount(): number {
@@ -55,4 +57,14 @@ export class Proxies {
     }
     for (const [i, pose] of poses) if (!skip(i)) this.cars.follow(i, pose);
   }
+
+  /** Streamed bike poses, as setCars: followed; one missing from `poses` rests at rest(i) or where it was last followed. */
+  setBikes(poses: ReadonlyMap<number, BikePose>, skip: (i: number) => boolean, rest?: (i: number) => BikePose | null): void {
+    for (const i of [...this.bikes.following()]) {
+      if (poses.has(i) || skip(i)) continue;
+      this.bikes.release(i, rest?.(i) ?? this.bikes.poses[i]!);
+    }
+    for (const [i, pose] of poses) if (!skip(i)) this.bikes.follow(i, pose);
+  }
+
 }

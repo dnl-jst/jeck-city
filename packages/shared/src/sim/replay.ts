@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import type { BikeState } from '../physics/bike';
 import type { CharacterState } from '../physics/character';
 import type { VehicleState } from '../physics/vehicle';
 import type { SnapshotOwn } from '../net/codec';
@@ -6,13 +7,17 @@ import type { IgnitionSave, IgnitionState } from './ignition';
 
 /**
  * A player's own state as the server had it after the input `ackSeq` (client reconciliation): where WorldSim.replay
- * starts. carId is the car while driving (null otherwise); car the car's state while driving.
+ * starts. carId is the car while driving (null otherwise); car the car's state while driving; bikeId / bike the same
+ * while riding. fallTicks: ticks left lying after falling off a bike.
  */
 export type OwnState = {
-  mode: 'walk' | 'drive' | 'down';
+  mode: 'walk' | 'drive' | 'down' | 'ride';
   carId: number | null;
   char: CharacterState;
   car: VehicleState | null;
+  bikeId?: number | null;
+  bike?: BikeState | null;
+  fallTicks?: number;
   /** Engine of the car while driving (the server's ignition state). */
   engine?: IgnitionState;
   /** Exact ignition of that car at that instant if known (the client's prediction for the same input); wins over engine. */
@@ -22,14 +27,18 @@ export type OwnState = {
   jump?: boolean;
 };
 
-const MODES = ['walk', 'drive', 'down'] as const;
+const MODES = ['walk', 'drive', 'down', 'ride'] as const;
 const ENGINES = ['off', 'starting', 'running'] as const;
 
-/** The own state a snapshot carries, as replay takes it (carId only while driving). */
+/** The own state a snapshot carries, as replay takes it (carId only while driving, bikeId only while riding). */
 export function ownStateOf(o: SnapshotOwn): OwnState {
   const mode = MODES[o.mode];
   const drive = mode === 'drive' && o.car !== null;
-  return { mode, carId: drive ? o.carId : null, char: o.char, car: drive ? o.car : null, engine: drive ? ENGINES[o.engine] : 'off' };
+  const ride = mode === 'ride' && o.bike !== null;
+  return {
+    mode, carId: drive ? o.carId : null, char: o.char, car: drive ? o.car : null, engine: drive ? ENGINES[o.engine] : 'off',
+    bikeId: ride ? o.bikeId : null, bike: ride ? o.bike : null, fallTicks: o.fallTicks,
+  };
 }
 
 type BodySave = {
@@ -50,11 +59,15 @@ export function saveDynamicBodies(world: RAPIER.World, exclude: ReadonlySet<numb
   return out;
 }
 
-/** Puts the bodies back into the saved state (bodies that turned non-dynamic or `skip` meanwhile are left alone). */
-export function restoreDynamicBodies(saved: readonly BodySave[], skip: ReadonlySet<number>): void {
+/**
+ * Puts the bodies back into the saved state (bodies that were removed from `world`, turned non-dynamic or are in
+ * `skip` meanwhile are left alone).
+ */
+export function restoreDynamicBodies(world: RAPIER.World, saved: readonly BodySave[], skip: ReadonlySet<number>): void {
   for (const s of saved) {
     const b = s.body;
-    if (skip.has(b.handle) || !b.isDynamic()) continue;
+    if (skip.has(b.handle) || world.getRigidBody(b.handle) !== b || !b.isDynamic()) continue;
+
     b.setTranslation(s.t, !s.sleeping);
     b.setRotation(s.r, !s.sleeping);
     b.setLinvel(s.lv, !s.sleeping);

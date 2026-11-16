@@ -74,4 +74,32 @@ describe('buildSnapshot', () => {
     const s = buildSnapshot(sim, 1, new Interest(), 0, ev, slotOf);
     expect(s.events).toEqual([{ t: 'knock', slot: 11 }, { t: 'knock', slot: 12 }, { t: 'impact', x: 3, z: 3, strength: 1 }]);
   });
+
+  test('a rider is a rider entry (not a walker), the own riding state is in own; a bike that rolls away is streamed', async () => {
+    const sim = await WorldSim.create(fixtureAssets());
+    sim.addPlayer(1, { x: -5, z: -30 }); // next to bike 0
+    sim.addPlayer(2, { x: -3, z: -34 });
+    for (let t = 0; t < 10; t++) sim.step(new Map());
+    sim.step(new Map([[1, { ...N, use: true }]]));
+    for (let t = 0; t < 60; t++) sim.step(new Map([[1, { ...N, forward: 1 }]]));
+    const other = buildSnapshot(sim, 2, new Interest(), 0, [], slotOf);
+    expect(other.walkers).toEqual([]);
+    expect(other.riders).toHaveLength(1);
+    expect(other.riders[0]).toMatchObject({ slot: 11, bikeId: 0, pedalling: true, airborne: false });
+    expect(other.riders[0]!.speed).toBeGreaterThan(1);
+    const own = buildSnapshot(sim, 1, new Interest(), 0, [{ t: 'bell', id: 1, x: -6, z: -28 }], slotOf);
+    expect(own.own.mode).toBe(3);
+    expect(own.own.bikeId).toBe(0);
+    expect(own.own.bike!.speed).toBeGreaterThan(1);
+    expect(own.events).toEqual([]); // the own bell is never sent back
+    expect(buildSnapshot(sim, 2, new Interest(), 0, [{ t: 'bell', id: 1, x: -6, z: -28 }], slotOf).events)
+      .toEqual([{ t: 'bell', slot: 11, x: -6, z: -28 }]);
+    // jump off fast: the bike rolls on, unridden, away from its spot
+    for (let t = 0; t < 120; t++) sim.step(new Map([[1, { ...N, forward: 1, run: true }]]));
+    sim.step(new Map([[1, { ...N, use: true }]]));
+    sim.step(new Map());
+    const after = buildSnapshot(sim, 2, new Interest(), 0, [], slotOf);
+    expect(after.riders).toEqual([]);
+    expect(after.bikes.map((b) => b.id)).toEqual([0]);
+  });
 });

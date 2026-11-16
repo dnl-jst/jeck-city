@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const TICK_HZ = 60;
 export const SNAPSHOT_EVERY = 3;
 export const MAX_INPUTS_PER_PACKET = 3;

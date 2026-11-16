@@ -208,3 +208,15 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 1. ~~Radio für andere hörbar?~~ **Entschieden:** ja, leise und dumpf (siehe 7).
 2. ~~Offline-Fallback?~~ **Entschieden:** nein (siehe 11).
 3. ~~Hosting?~~ **Entschieden:** Docker-Image + Caddy-Beispiel genügen (siehe 10).
+
+## 17. Fahrräder im Mehrspieler (Nachtrag 2026-11-16)
+
+Nutzerentscheidung: Fahrräder gehören voll zum Mehrspieler. Andere sehen dich fahren, geschobene oder umgefallene Räder sind für alle gleich.
+
+- **Server-autoritativ wie Autos:** Der Server simuliert Fahrer und abgestellte Räder (`WorldSim`, `riding` überall an). Der Client sagt das eigene Rad vorher und gleicht es ab wie das eigene Auto (`replay`, Abweichung < 1 cm nach 10 s bei 0 ms Latenz).
+- **Ein Fahrer pro Rad,** beliebig viele Räder gleichzeitig. Aufsteigen auf ein Rad, das jemand anderes fährt, wird abgelehnt (Ereignis `mountDenied`, Hinweis „Das Fahrrad ist besetzt“). Drücken zwei im selben Tick E, gewinnt, wer zuerst beim Server ankommt; der Client nimmt das vorhergesagte Aufsteigen zurück.
+- **Auto trifft Radfahrer:** schneller als `KNOCKDOWN_KMH` → Sturz wie im Einzelspieler (Fahrer fällt ab, liegt und steht auf, das Rad bleibt liegen bzw. wird weggeschoben) plus `knock`. Langsamer → das Auto schiebt das Rad samt Fahrer vor sich her.
+- **Rückstellung:** Verschobene Räder ohne Fahrer gehen nach `RESET_AFTER_S` ohne Bewegung auf ihren Manifest-Platz zurück, wenn kein Spieler ≤ `RESET_CLEAR_RADIUS` entfernt ist.
+- **Protokoll (Version 2):** Eigener Block mit Modus `ride`, Rad-Id und vollem Radzustand; Snapshot mit Fahrern (Slot, Rad, Pose, Tempo, Lenkung, Treten, Sprung) und bewegten abgestellten Rädern (Id, Pose) im Interessenbereich. Hupe als gehaltenes Eingabe-Bit und Bit im Auto-Datensatz, Klingel als Eingabe-Puls und positionsgebundenes Ereignis `bell` (Abspielen fremder Hupen/Klingeln: Task 12). Budget bleibt ≤ 50 KB/s pro Client bei 100 Spielern in der Nähe.
+- **Langsamer Zustand:** Spieler mit Modus `ride`, `bikeId` und Figur-Variante (`variant`, beim Beitritt gewählt, mit C änderbar, vom Server geprüft); Karte `bikes` für Räder mit Fahrer oder abseits ihres Manifest-Platzes (Fahrer, Ruhepose).
+- **Darstellung:** Fremde Fahrer sitzen mit ihrer eigenen Figur-Variante und der Fahrhaltung aus dem Einzelspieler auf dem richtigen Radmodell, Name darüber; das abgestellte Rad ist dabei ausgeblendet. Bewegte abgestellte Räder folgen den Snapshot-Posen.

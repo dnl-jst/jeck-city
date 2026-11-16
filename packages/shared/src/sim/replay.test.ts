@@ -92,11 +92,12 @@ for (const [name, assets, skip] of worlds) {
      * bystander as a proxy) run the same inputs; after every 3rd tick the snapshot goes through the codec and the
      * client reconciles at once (0 ms latency). Returns the largest position error seen before a reconciliation.
      */
-    async function run(ticks: number, input: (t: number, s: WorldSim) => PlayerInput, car: number | null): Promise<number> {
+    async function run(ticks: number, input: (t: number, s: WorldSim) => PlayerInput, car: number | null, bike: number | null = null): Promise<number> {
       const a = await assets();
       const server = await WorldSim.create(a);
       const client = await WorldSim.create(a);
-      const at = car !== null ? leftOf(server.cars.poses[car]!, 2.5) : a.manifest.spawn;
+      const at = car !== null ? leftOf(server.cars.poses[car]!, 2.5)
+        : bike !== null ? leftOfBike(server.bikes.poses[bike]!, 1) : a.manifest.spawn;
       server.addPlayer(1, at);
       client.addPlayer(1, at);
       server.addPlayer(2, { x: at.x + 1.5, z: at.z - 1.5 });
@@ -110,7 +111,8 @@ for (const [name, assets, skip] of worlds) {
         if (server.tick % 3 !== 0) continue;
         const snap = decodeSnapshot(encodeSnapshot(buildSnapshot(server, 1, interest, t, events, (id) => id)))!;
         events = [];
-        err = Math.max(err, dist3(where(client, 1), ownStateOf(snap.own).car ?? snap.own.char));
+        const own = ownStateOf(snap.own);
+        err = Math.max(err, dist3(where(client, 1), own.car ?? own.bike ?? snap.own.char));
         client.replay(1, { ...ownStateOf(snap.own), ignition: client.player(1).carId !== null ? client.ignition(client.player(1).carId!).save() : undefined, use: i.use, jump: i.jump }, []);
         client.setProxies(
           new Map(snap.walkers.map((w) => [w.slot, w])),
@@ -137,5 +139,25 @@ for (const [name, assets, skip] of worlds) {
       }, car);
       expect(err).toBeLessThan(0.01);
     }, 60_000);
+
+    test('prediction matches server at 0 ms latency: riding', async () => {
+      const a = await assets();
+      let rode = false;
+      const err = await run(600, (t, s) => {
+        if (t === 5) return { ...N, use: true };
+        const p = s.player(1);
+        rode ||= p.mode === 'ride';
+        // pedal on with a slow weave, a hop and a ring of the bell on the way
+        return { ...N, forward: 1, right: 0.4 * Math.sin(t / 50), jump: t === 200, bell: t === 300, yaw: p.bike ? p.bike.heading : 0 };
+      }, null, 0); // fixture: the dutch bike; real world: the spawn Long John
+      expect(rode).toBe(true);
+      expect(a.manifest.bikes.length).toBeGreaterThan(0);
+      expect(err).toBeLessThan(0.01);
+    }, 60_000);
   });
+}
+
+/** Point d m to the left of a bike (left = (cos h, −sin h)). */
+function leftOfBike(b: { x: number; z: number; heading: number }, d: number): { x: number; z: number } {
+  return { x: b.x + Math.cos(b.heading) * d, z: b.z - Math.sin(b.heading) * d };
 }

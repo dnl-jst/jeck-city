@@ -19,7 +19,7 @@ function source(): BikeSource {
     poses: [{ x: 0, y: 0, z: 0, heading: 0 }, { x: 5, y: 0, z: 0, heading: 0 }, { x: 500, y: 0, z: 0, heading: 0 }, { x: 3, y: 0, z: 0, heading: 0 }],
     types: ['dutch', 'dutch', 'dutch', 'road'] as BikeType[],
     colors: [0xff0000, 0x00ff00, 0x0000ff, 0xffffff],
-    ridden: null,
+    rider: [null, null, null, null],
     activeIds: () => [],
   };
 }
@@ -33,7 +33,7 @@ test('draws the bikes near the camera per type, not the ridden one, racks always
   const view = new BikeView(scene, models, new Map([[0, model()]]), src, [{ x: 1, z: 1, heading: 0, kind: 0 }], [0.12]);
   view.update(0, 0);
   expect(counts(scene)).toEqual(expect.arrayContaining([['bike_dutch_frame', 2], ['bike_dutch_wheel_rear', 2], ['bike_road_frame', 1], ['rack_0_frame', 1]]));
-  (src as { ridden: number | null }).ridden = 0;
+  (src.rider as (number | null)[])[0] = 3;
   view.update(0, 0);
   expect(counts(scene)).toEqual(expect.arrayContaining([['bike_dutch_frame', 1]]));
 });

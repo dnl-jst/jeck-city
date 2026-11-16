@@ -63,6 +63,9 @@ export class RiddenBike {
   private readonly centre = FOOT_R + FOOT_HALF + OFFSET;
   private readonly notMe: (c: RAPIER.Collider) => boolean;
   private s: BikeState;
+  /** Shove (m) waiting for the next step (a slow car pushing the bike). */
+  private pushX = 0;
+  private pushZ = 0;
 
   constructor(private readonly pw: PhysicsWorld, readonly type: BikeType, pose: { x: number; y: number; z: number; heading: number }, speed = 0) {
     const { rapier: R, world } = pw;
@@ -168,7 +171,8 @@ export class RiddenBike {
         dz = uz * toi + sz;
       }
     }
-    const want = { x: dx, y: s.vy * DT, z: dz };
+    const want = { x: dx + this.pushX, y: s.vy * DT, z: dz + this.pushZ };
+    this.pushX = this.pushZ = 0;
     this.kcc.computeColliderMovement(this.foot, want, this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.notMe);
     const m = this.kcc.computedMovement();
     this.s.grounded = this.kcc.computedGrounded() && s.vy <= 0;
@@ -214,16 +218,34 @@ export class RiddenBike {
 
   restore(st: BikeState): void {
     this.s = { ...st };
+    this.pushX = this.pushZ = 0;
     this.place();
+  }
+
+  /** The full state (client prediction: what WorldSim.replay starts from); same as state(). */
+  saveState(): BikeState {
+    return this.state();
+  }
+
+  /** Continues from a saved state; same as restore(). */
+  restoreState(st: BikeState): void {
+    this.restore(st);
+  }
+
+  /** Handles of the bike's colliders (wheel capsule and frame box). */
+  colliderHandles(): [number, number] {
+    return [this.foot.handle, this.frame.handle];
+  }
+
+  /** Shoves the bike by (dx, dz) m in the next step (collision-checked like its own movement). */
+  push(dx: number, dz: number): void {
+    this.pushX += dx;
+    this.pushZ += dz;
   }
 
   /** Visual lean (rad, + = to the right) from speed and steering, limited to the type's maxLeanDeg. */
   lean(): number {
-    const max = (this.spec.maxLeanDeg * Math.PI) / 180;
-    if (max === 0) return 0;
-    const curv = Math.tan(this.s.steer) / this.spec.wheelbase;
-    const a = Math.atan((this.s.speed * this.s.speed * curv) / G);
-    return Math.max(-max, Math.min(max, a));
+    return bikeLean(this.spec, this.s.speed, this.s.steer);
   }
 
   /** Removes the bike from the world. The instance must not be used afterwards. */
@@ -241,6 +263,15 @@ export class RiddenBike {
     this.body.setNextKinematicRotation(q);
     this.pw.world.propagateModifiedBodyPositionsToColliders();
   }
+}
+
+/** Visual lean (rad, + = right) of a bike of `spec` at `speed` (m/s) with the front wheel at `steer` (rad). */
+export function bikeLean(spec: BikeSpec, speed: number, steer: number): number {
+  const max = (spec.maxLeanDeg * Math.PI) / 180;
+  if (max === 0) return 0;
+  const curv = Math.tan(steer) / spec.wheelbase;
+  const a = Math.atan((speed * speed * curv) / G);
+  return Math.max(-max, Math.min(max, a));
 }
 
 function yawQuat(h: number): { x: number; y: number; z: number; w: number } {

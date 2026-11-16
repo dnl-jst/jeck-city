@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  buildSnapshot, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
+  buildSnapshot, CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
   parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, TICK_HZ, WorldSim,
   type PlayerId, type PlayerInput, type PropPose, type SimEvent, type WorldAssets,
 } from '@nn/shared';
@@ -11,7 +11,7 @@ import { TickStats, type Health } from './health';
 import { InputQueue } from './inputs';
 import { JoinLimiter } from './join-limit';
 import { ipHash, log } from './log';
-import { CarState, LampState, NippesState, PlayerState } from './state';
+import { BikeSlowState, CarState, LampState, NippesState, PlayerState } from './state';
 
 /** What the room is built from; the world is loaded once at server start. */
 export type RoomDeps = { cfg: Config; assets: WorldAssets; worldHash: string };
@@ -27,11 +27,10 @@ const MAX_RAW_NAME = 100;
 /** Messages per second before Colyseus drops a client: inputs come at 60 Hz, radio and pings rarely. */
 const MAX_MESSAGES_PER_S = 5 * TICK_HZ;
 
-/** ride: riding is offline-only until Task M2 (online sims never mount a bike), so it never reaches the wire. */
-const MODE = { walk: 0, drive: 1, down: 2, ride: 0 } as const;
+const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 
-type Auth = { name: string; ipHash: string };
+type Auth = { name: string; ipHash: string; variant: number };
 type Seat = {
   slot: PlayerId; name: string; ipHash: string; queue: InputQueue; kicked: boolean;
   client: Client;
@@ -51,6 +50,8 @@ function rawSize(data: unknown): number {
 }
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+/** An untrusted character variant: an index into CHARACTER_VARIANTS, anything else is the first one. */
+const parseVariant = (v: unknown): number => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < CHARACTER_VARIANTS.length ? (v as number) : 0);
 
 /** Copies a pose into a schema entry, touching only changed fields (unchanged fields cost nothing on the wire). */
 function setPose(e: Record<'x' | 'y' | 'z' | 'qx' | 'qy' | 'qz' | 'qw', number>, p: PropPose): void {
@@ -101,12 +102,18 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const seat = this.seatOf(client);
       if (!seat || !cfg.dev) return;
       const { x, z } = (msg ?? {}) as { x?: unknown; z?: unknown };
+      // (a bike they rode rolls out there, a car they drove stays with the engine off)
       if (!finite(x) || !finite(z)) return;
       // a fresh figure at (x, z); a car they drove stays there with the engine off
       this.inbound(seat, () => {
         this.sim.removePlayer(seat.slot);
         this.sim.addPlayer(seat.slot, { x, z });
       });
+    });
+    this.onMessage('variant', (client, msg: unknown) => {
+      const seat = this.seatOf(client);
+      const e = seat && this.state.players.get(String(seat.slot));
+      if (e) e.variant = parseVariant(msg);
     });
     this.onMessage('*', (client, type: string | number) => this.kick(client, `unknown message ${String(type).slice(0, 32)}`));
 
@@ -124,7 +131,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       log('info', 'join rejected', { ipHash: hash, reason: 'rate' });
       throw new ServerError(429, 'rate');
     }
-    const o = (options ?? {}) as { name?: unknown; protocolVersion?: unknown; worldHash?: unknown };
+    const o = (options ?? {}) as { name?: unknown; protocolVersion?: unknown; worldHash?: unknown; variant?: unknown };
     if (o.protocolVersion !== PROTOCOL_VERSION || o.worldHash !== this.deps.worldHash) {
       log('info', 'join rejected', { ipHash: hash, reason: 'version' });
       throw new ServerError(409, 'version');
@@ -135,7 +142,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       log('info', 'join rejected', { ipHash: hash, reason: r.error });
       throw new ServerError(400, r.error);
     }
-    return { name: r.name, ipHash: hash };
+    return { name: r.name, ipHash: hash, variant: parseVariant(o.variant) };
   }
 
   onJoin(client: Client, _options: unknown, auth: Auth): void {
@@ -152,7 +159,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
     };
     this.seats.set(client.sessionId, seat);
-    this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1 }));
+    this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant }));
     this.watchMessageSize(client);
     client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
@@ -301,7 +308,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     }
   }
 
-  /** Mirrors players, moved or driven cars and lying lamps into the schema state. */
+  /** Mirrors players, moved or driven cars, moved or ridden bikes and lying lamps into the schema state. */
   private syncState(): void {
     const { sim, state } = this;
     for (const seat of this.seats.values()) {
@@ -311,6 +318,8 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       if (e.mode !== MODE[p.mode]) e.mode = MODE[p.mode];
       const carId = p.carId ?? -1;
       if (e.carId !== carId) e.carId = carId;
+      const bikeId = p.bikeId ?? -1;
+      if (e.bikeId !== bikeId) e.bikeId = bikeId;
     }
 
     const cars = sim.cars;
@@ -332,6 +341,25 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       if (e.lights !== lights) e.lights = lights;
       if (e.radio !== radio) e.radio = radio;
       if (fresh || !v || v.chassis.isSleeping()) setPose(e, v ? v.pose() : cars.poses[i]!);
+    }
+
+    const bikes = sim.bikes, rolling = new Set(bikes.awake());
+    for (let i = 0; i < bikes.poses.length; i++) {
+      const key = String(i);
+      const rider = bikes.rider[i] ?? null;
+      if (rider === null && !bikes.isMoved(i)) {
+        if (state.bikes.has(key)) state.bikes.delete(key);
+        continue;
+      }
+      let e = state.bikes.get(key);
+      const fresh = !e;
+      if (!e) state.bikes.set(key, (e = new BikeSlowState()));
+      const r = rider ?? -1;
+      if (e.rider !== r) e.rider = r;
+      if (fresh || (rider === null && !rolling.has(i))) {
+        const p = bikes.poses[i]!;
+        for (const k of ['x', 'y', 'z', 'heading'] as const) if (e[k] !== p[k]) e[k] = p[k];
+      }
     }
 
     const lying = new Set<string>();

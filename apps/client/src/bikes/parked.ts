@@ -7,7 +7,8 @@ export type BikeSource = {
   readonly poses: readonly BikePose[];
   readonly types: readonly BikeType[];
   readonly colors: readonly number[];
-  readonly ridden: number | null;
+  /** Who rides each bike (null: parked); ridden bikes are drawn by their rider's rig, not here. */
+  readonly rider: readonly (number | null)[];
   activeIds(): number[];
 };
 
@@ -41,7 +42,7 @@ function instanceMaterial(m: Material): Material {
 
 /**
  * Parked bikes and rack hoops as instanced meshes: one per model part and type. Bikes within BIKE_RENDER_RADIUS of the
- * camera, without the ridden one; bikes with a physics body (pushed around) are re-placed every update. Racks are
+ * camera, without the ridden ones; bikes with a physics body (pushed around) are re-placed every update. Racks are
  * all drawn (static, frustum-culled per part).
  */
 export class BikeView {
@@ -49,7 +50,8 @@ export class BikeView {
   /** Instance slot of each bike in its type's meshes, −1 while not drawn. */
   private readonly slots: Int32Array;
   private last: { x: number; z: number } | null = null;
-  private lastRidden: number | null = null;
+  /** The ridden set at the last rebuild ('1,7': ids). */
+  private lastRidden = '';
   private readonly m = new Matrix4();
   private readonly q = new Quaternion();
   private readonly p = new Vector3();
@@ -94,13 +96,15 @@ export class BikeView {
     }
   }
 
-  /** Rebuilds the drawn set when the camera moved or the ridden bike changed; re-places bikes that have a body. */
+  /** Rebuilds the drawn set when the camera moved or the ridden bikes changed; re-places bikes that have a body. */
   update(camX: number, camZ: number): void {
-    const ridden = this.src.ridden;
+    const ridden = new Set<number>();
+    this.src.rider.forEach((r, i) => { if (r !== null) ridden.add(i); });
+    const key = [...ridden].join();
     const moved = !this.last || Math.hypot(camX - this.last.x, camZ - this.last.z) > BIKE_REBUILD_MOVE;
-    if (moved || ridden !== this.lastRidden) {
+    if (moved || key !== this.lastRidden) {
       this.last = { x: camX, z: camZ };
-      this.lastRidden = ridden;
+      this.lastRidden = key;
       this.rebuild(camX, camZ, ridden);
     } else {
       const touched = new Set<BikeType>();
@@ -113,7 +117,7 @@ export class BikeView {
     }
   }
 
-  private rebuild(x: number, z: number, ridden: number | null): void {
+  private rebuild(x: number, z: number, ridden: ReadonlySet<number>): void {
     this.slots.fill(-1);
     const shown = visibleBikes(this.src.poses, x, z, BIKE_RENDER_RADIUS, ridden);
     const next = new Map<BikeType, number>();

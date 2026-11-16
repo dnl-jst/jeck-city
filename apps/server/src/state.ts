@@ -5,12 +5,17 @@ import { schema, t, type SchemaType } from '@colyseus/schema';
  * instead; this holds who is here and what changes rarely. No StateView: at most a few hundred small entries.
  */
 
-/** A player, keyed by slot. mode: 0 walk, 1 drive, 2 down (as OwnMode). carId: the driven car, −1 on foot. */
+/**
+ * A player, keyed by slot. mode: 0 walk, 1 drive, 2 down, 3 ride (as OwnMode). carId: the driven car, −1 otherwise.
+ * bikeId: the ridden bike, −1 otherwise. variant: the character model (index into CHARACTER_VARIANTS).
+ */
 export const PlayerState = schema({
   slot: t.uint8(),
   name: t.string(),
   mode: t.uint8(),
   carId: t.int16().default(-1),
+  bikeId: t.int16().default(-1),
+  variant: t.uint8(),
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
 
@@ -36,9 +41,20 @@ export const LampState = schema({
 }, 'LampState');
 export type LampState = SchemaType<typeof LampState>;
 
+/**
+ * A bike away from its manifest spot or with a rider, keyed by bike index. rider: slot, −1 without one. The pose (ground
+ * under it, heading) is updated whenever the bike rests (while it moves or is ridden, snapshots carry it).
+ */
+export const BikeSlowState = schema({
+  rider: t.int16().default(-1),
+  x: t.float32(), y: t.float32(), z: t.float32(), heading: t.float32(),
+}, 'BikeSlowState');
+export type BikeSlowState = SchemaType<typeof BikeSlowState>;
+
 export const NippesState = schema({
   players: t.map(PlayerState),
   cars: t.map(CarState),
+  bikes: t.map(BikeSlowState),
   lamps: t.map(LampState),
 }, 'NippesState');
 export type NippesState = SchemaType<typeof NippesState>;

@@ -5,7 +5,7 @@ import { labelOpacity, type Label } from './name-label';
 import { RemotePlayers, type CarView, type RemoteCarInfo } from './remote-players';
 
 const walker = (slot: number, x = slot * 2, state: 0 | 1 | 2 = 0): SnapshotWalker => ({ slot, x, y: 0, z: 0, yaw: 0, speed: 0, state });
-const car = (id: number, hasDriver = true): SnapshotCar => ({ id, x: 5, y: 1, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0, steer: 0, brakeLight: false, hasDriver });
+const car = (id: number, hasDriver = true): SnapshotCar => ({ id, x: 5, y: 1, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0, steer: 0, brakeLight: false, hasDriver, horn: false });
 
 class FakeLabel implements Label {
   disposed = false;

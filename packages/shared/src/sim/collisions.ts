@@ -1,4 +1,5 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
+import { bikeColliderRadius, type RiddenBike } from '../physics/bike';
 import type { Character } from '../physics/character';
 import { TUNING } from '../physics/tuning';
 import { CHASSIS_CLEARANCE } from '../physics/vehicle';
@@ -23,13 +24,18 @@ const CELL = 2;
  * Before every step: every awake car faster than KNOCKDOWN_KMH knocks down the people (not already down) inside its
  * chassis box, grown by the distance it covers this step (pattern of StreetProps.checkHits); a slower car shoves
  * them out of its way. Cars and people do not collide in the solver (see CAR_GROUPS), so this is the only contact.
+ * Riders the same: a fast car throws them off the bike (the crash path, WorldSim.knockOffBike, plus a `knock`), a
+ * slow one shoves the bike.
  */
 export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
   const awake = sim.cars.awake();
   if (awake.length === 0) return;
   const people = new Map<number, { id: PlayerId; char: Character }>();
   for (const p of sim.onFoot()) people.set(p.char.colliderHandle, p);
-  if (people.size === 0) return;
+  /** Riders by the collider handles of their bikes. */
+  const riders = new Map<number, { id: PlayerId; bike: RiddenBike }>();
+  for (const r of sim.riders()) for (const h of r.bike.colliderHandles()) riders.set(h, r);
+  if (people.size === 0 && riders.size === 0) return;
   const { rapier, world } = sim.pw;
   const knocked = new Set<number>();
   for (const i of awake) {
@@ -45,16 +51,25 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
     const V = v.spec;
     const box = new rapier.Cuboid(V.width / 2 + m, (V.height - CHASSIS_CLEARANCE) / 2 + m, V.length / 2 + m);
     const hit: { id: PlayerId; char: Character }[] = [];
+    const hitRiders = new Map<PlayerId, RiddenBike>();
     // the chassis box (its collider sits off the body origin, see chassisLayout), in world space
     const box0 = body.collider(0);
+    const riderOf = (c: RAPIER.Collider) => riders.get(c.handle);
     world.intersectionsWithShape(box0.translation(), box0.rotation(), box, (c: RAPIER.Collider) => {
-      hit.push(people.get(c.handle)!);
+      const p = people.get(c.handle);
+      if (p) hit.push(p);
+      else {
+        const r = riderOf(c)!;
+        hitRiders.set(r.id, r.bike); // a bike has two colliders: once per rider
+      }
       return true;
     }, undefined, undefined, undefined, body, (c: RAPIER.Collider) => {
       const p = people.get(c.handle);
-      return !!p && !p.char.isDown() && !knocked.has(p.id);
+      if (p) return !p.char.isDown() && !knocked.has(p.id);
+      const r = riderOf(c);
+      return !!r && !knocked.has(r.id);
     });
-    if (hit.length === 0) continue;
+    if (hit.length === 0 && hitRiders.size === 0) continue;
     const pose = v.pose();
     const h = headingOf(pose), fx = Math.sin(h), fz = Math.cos(h);
     const dx = vel.x / speed, dz = vel.z / speed;
@@ -78,6 +93,29 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
         p.char.push(dx * overlap, dz * overlap);
       }
     }
+    for (const [id, bike] of [...hitRiders].sort((a, b) => a[0] - b[0])) {
+      if (knocked.has(id)) continue;
+      const s = bike.state();
+      if (fast) {
+        knocked.add(id);
+        sim.knockOffBike(id, ev);
+        ev.push({ t: 'knock', id, by: i });
+        ev.push({ t: 'impact', x: s.x, z: s.z, strength: speed });
+        struck = true;
+      } else {
+        // the bike collides with the car in the solver (it is kinematic: the car would stop dead), so it is kept a
+        // step's travel (m) ahead of the chassis box: from the box centre, its extent plus the bike's frame box (half
+        // width across, half length along its heading) along the travel direction
+        const c = box0.translation();
+        const ahead = (s.x - c.x) * dx + (s.z - c.z) * dz;
+        if (ahead <= 0) continue;
+        const along = dx * Math.sin(s.heading) + dz * Math.cos(s.heading);
+        const reach = (bike.spec.wheelbase / 2 + 0.3) * Math.abs(along) + bikeColliderRadius(bike.spec) * Math.sqrt(Math.max(0, 1 - along * along));
+        const overlap = Math.min(PUSH_MAX, Math.max(0, extent + reach + m - ahead));
+        bike.push(dx * overlap, dz * overlap);
+      }
+    }
+
     if (struck) body.setLinvel({ x: vel.x * CAR_KEEP, y: vel.y, z: vel.z * CAR_KEEP }, true);
   }
 }
