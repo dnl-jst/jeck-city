@@ -24,12 +24,13 @@ type StateMap<T> = { get(key: string): T | undefined; forEach(cb: (v: T, key: st
 type StatePose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
 
 /**
- * Read-only mirror of the slow Colyseus state (names, modes, car occupancy and resting poses, lying lamps); entries
- * are keyed by slot / car index / lamp index. Car driver −1: none.
+ * Read-only mirror of the slow Colyseus state (names, modes, character variants, car and bike occupancy and resting
+ * poses, lying lamps); entries are keyed by slot / car index / bike index / lamp index. Car driver, bike rider −1: none.
  */
 export type NetState = {
-  players: StateMap<{ slot: number; name: string; mode: number; carId: number }>;
+  players: StateMap<{ slot: number; name: string; mode: number; carId: number; bikeId: number; variant: number }>;
   cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
+  bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number }>;
   lamps: StateMap<StatePose>;
 };
 
@@ -166,6 +167,11 @@ export class Connection {
     this.room.send('radio', s);
   }
 
+  /** The character variant (index into CHARACTER_VARIANTS) the others see. */
+  sendVariant(v: number): void {
+    if (this.status === 'online' && this.room.connection.isOpen) this.room.send('variant', v);
+  }
+
   /** Dev only (the server ignores it in production). */
   sendTeleport(x: number, z: number): void {
     if (this.status === 'online' && this.room.connection.isOpen) this.room.send('devTeleport', { x, z });
@@ -208,7 +214,8 @@ export class Connection {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Joins the one room 'nippes' (never joinOrCreate: the server creates it at startup). Retries by itself every
+ * Joins the one room 'nippes' (never joinOrCreate: the server creates it at startup) as `name` showing character
+ * `variant` (index into CHARACTER_VARIANTS). Retries by itself every
  * RETRY_CONNECT_S seconds (with a countdown in `ui`) while the server is unreachable, the room is full or the join rate
  * limit is hit. Throws JoinRejected for a bad name (the error text is shown, the caller asks for a new name) and for a
  * version conflict (the text is shown, nothing more to try).
@@ -216,12 +223,12 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
  * The first `welcome` is sent while the join is still being acknowledged and is only delivered after join() resolved;
  * the handlers are registered in the very same turn (no await in between), so nothing can be missed.
  */
-export async function connectRoom(name: string, worldHash: string, ui: ConnectUi, url?: string): Promise<Connection> {
+export async function connectRoom(name: string, worldHash: string, ui: ConnectUi, variant = 0, url?: string): Promise<Connection> {
   for (;;) {
     ui.showStatus(STATUS_TEXTS.connecting);
     let conn: Connection | null = null;
     try {
-      const room = await new Client(url).join('nippes', { name, protocolVersion: PROTOCOL_VERSION, worldHash });
+      const room = await new Client(url).join('nippes', { name, protocolVersion: PROTOCOL_VERSION, worldHash, variant });
       conn = new Connection(room);
       await conn.whenWelcomed();
       return conn;

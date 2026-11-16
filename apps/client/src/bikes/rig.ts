@@ -1,5 +1,9 @@
 import { Box3, Color, Group, Mesh, MeshStandardMaterial, Object3D, SpotLight, Vector3, type Material } from 'three';
 import type { BikeState, BikeType } from '@nn/shared';
+import type { Posture } from '../player';
+
+/** Upper-body posture of a rider per bike type. */
+export const RIDER_POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
 
 const DISCO_HUE = new Color();
 

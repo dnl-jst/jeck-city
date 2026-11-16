@@ -2,7 +2,7 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, worldHash, WorldSim,
+  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, worldHash, WorldSim,
   type MapData, type SunState, type TerrainGrid, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
@@ -263,7 +263,7 @@ async function connect(): Promise<Connection | null> {
   for (;;) {
     const name = await lobby.ask();
     try {
-      const conn = await connectRoom(name, hash, lobby);
+      const conn = await connectRoom(name, hash, lobby, CHARACTER_VARIANTS.indexOf(storedCharacter()));
       conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
       lobby.close();
       return conn;

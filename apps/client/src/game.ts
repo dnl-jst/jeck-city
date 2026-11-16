@@ -1,9 +1,9 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
-  headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput, type PlayerSnapshot,
-  type SimEvent, type StationId, type WorldManifest,
+  CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
+  type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
 } from '@nn/shared';
-import { BikeRig } from './bikes/rig';
+import { BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
 import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
@@ -12,7 +12,7 @@ import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
 import { DrivenCar, lampPower, ParkedCars, type CarModels } from './car';
-import { angleDelta, PlayerFigure, type Posture } from './player';
+import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
@@ -35,8 +35,6 @@ export type GameContext = {
   character?: Object3D | null;
 };
 
-/** Upper-body posture per bike type. */
-const POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
 
 const STATIC_ONLY = staticWorldFilter();
 
@@ -95,6 +93,8 @@ export class Game {
   private readonly qa = new Quaternion();
   private readonly qb = new Quaternion();
   private readonly qc = new Quaternion();
+  /** Other players' character templates by variant: loaded, being loaded, or failed (null). */
+  private readonly figureTemplates = new Map<CharacterVariant, Object3D | null | 'loading'>();
 
   constructor(readonly session: Session, m: WorldManifest, private readonly ctx: GameContext) {
     const { scene, camera, input, devCam } = ctx;
@@ -113,7 +113,8 @@ export class Game {
     this.follow.yaw = heading;
     this.remotes = session.remote ? new RemotePlayers(scene, this.cars, {
       me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!, occluded: (a, b) => this.occluded(a, b),
-      carModels: ctx.carModels, figureModel: ctx.character ?? null,
+      carModels: ctx.carModels, figureModel: ctx.character ?? null, figureFor: (v) => this.figureFor(v),
+      bikeModels: ctx.bikeModels?.bikes, bikeTypeOf: (i) => sim.bikes.types[i]!, bikeColorOf: (i) => sim.bikes.colors[i]!,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -157,6 +158,7 @@ export class Game {
     const next = variants[(variants.indexOf(this.character) + 1) % variants.length]!;
     this.character = next;
     storeCharacter(next);
+    this.session.setVariant?.(CHARACTER_VARIANTS.indexOf(next));
     this.ctx.hud.flash(next === 'woman' ? 'Figur: Frau' : 'Figur: Mann');
     // the first switch to a figure downloads it; the old one stays until it is there
     models.load(next).then((model) => {
@@ -165,6 +167,25 @@ export class Game {
       console.error(err);
       if (this.character === next) this.ctx.hud.flash('Figur konnte nicht geladen werden');
     });
+  }
+
+  /**
+   * Another player's figure model for character variant v (index into CHARACTER_VARIANTS): the template once it is
+   * loaded (the first request starts the download), until then (or without one) the own figure's.
+   */
+  private figureFor(v: number): Object3D | null {
+    const models = this.ctx.characters, fallback = this.ctx.character ?? null;
+    const name = CHARACTER_VARIANTS[v] ?? CHARACTER_VARIANTS[0];
+    if (!models || !models.variants.includes(name)) return fallback;
+    const got = this.figureTemplates.get(name);
+    if (got === undefined) {
+      this.figureTemplates.set(name, 'loading');
+      models.load(name).then((m) => { this.figureTemplates.set(name, m); }, (err: unknown) => {
+        console.error(err);
+        this.figureTemplates.set(name, null);
+      });
+    }
+    return got && got !== 'loading' ? got : fallback;
   }
 
   /** Lamps knocked over since the last call (to switch their light off and tip the rendered post). */
@@ -188,7 +209,7 @@ export class Game {
     }
     this.mapInput = this.map.open ? { dx: mouse.dx, dy: mouse.dy, notches } : { dx: 0, dy: 0, notches: 0 };
     if (this.map.takeClosed()) input.clearPresses();
-    let use = false, jump = false, honk = false;
+    let use = false, jump = false, honk = false, bell = false;
     if (this.flying) {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
@@ -207,7 +228,10 @@ export class Game {
       // Space: jump on foot, hop on the bike
       if (input.consume('Space') && !busy && this.mode !== 'drive') jump = true;
       const hPressed = input.consume('KeyH'); // a tap between two frames still honks
-      if (hPressed && this.mode === 'ride') audio?.bell();
+      if (hPressed && this.mode === 'ride') {
+        audio?.bell();
+        bell = true;
+      }
       if (input.consume('KeyL') && this.mode === 'ride' && this.rig?.hasDisco) {
         this.rig.setDisco(!this.rig.discoOn);
         this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
@@ -220,7 +244,7 @@ export class Game {
     const still = this.flying || this.figure.busy;
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
-    const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw };
+    const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw, horn: honk, bell };
     let radio: StationId | null | undefined;
     if (this.mode === 'drive' && audio && audio.station !== this.sentRadio) radio = this.sentRadio = audio.station;
     this.handle(this.session.frame(dt, cmd, radio));
@@ -259,8 +283,20 @@ export class Game {
   private resample(): void {
     const { sim, me } = this.session;
     const p = sim.player(me);
-    if (vehicleKey(p) !== this.sampledKey || p.bike) {
+    if (vehicleKey(p) !== this.sampledKey) {
       this.sample();
+      return;
+    }
+    if (p.bike) {
+      if (!this.currBike || !this.prevBike) {
+        this.sample();
+        return;
+      }
+      const now = p.bike, was = this.currBike, prev = this.prevBike;
+      this.prevBike = {
+        ...prev, x: prev.x + now.x - was.x, y: prev.y + now.y - was.y, z: prev.z + now.z - was.z, heading: prev.heading + angleDelta(was.heading, now.heading),
+      };
+      this.currBike = now;
       return;
     }
     if (p.carId !== null && this.currPose && this.prevPose) {
@@ -290,6 +326,7 @@ export class Game {
       else if (e.t === 'exit' && e.id === me) this.leftCar(e.car);
       else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
+      else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
       else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash);
       else if (e.t === 'dismountDenied' && e.id === me) hud.flash('Hier kannst du nicht absteigen');
@@ -397,12 +434,14 @@ export class Game {
     } else if (this.mode === 'ride' && this.currBike) {
       const prev = this.prevBike ?? this.currBike, cur = this.currBike;
       const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
+      // server correction still fading out (online)
+      s.x += off.x; s.y += off.y; s.z += off.z;
       const rig = this.rig;
       if (rig) {
         rig.update(s, this.session.sim.riddenBike(this.session.me)?.lean() ?? 0, dt);
         rig.setLights(night);
         this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
-          [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], POSTURE[rig.type]);
+          [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);
       }
       if (!this.flying) this.follow.update(s, s.heading, dt);
       audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
@@ -432,9 +471,10 @@ export class Game {
       }
     }
     if (this.remotes) {
-      const { walkers, cars } = this.session.remote!();
-      const { names, cars: info } = this.session.roster!();
-      this.remotes.update({ walkers, cars }, names, info, this.ctx.camera, night, dt);
+      const { walkers, cars, riders } = this.session.remote!();
+      const { names, variants, cars: info } = this.session.roster!();
+      this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants);
+
     }
     if (audio) {
       const f = this.focus();

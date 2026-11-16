@@ -94,3 +94,23 @@ export function extrapolatePose<T extends PoseLike>(a: T, dtS: number): T {
 }
 
 export const poseOps = <T extends PoseLike>(): InterpOps<T> => ({ lerp: lerpPose, extrapolate: extrapolatePose });
+
+/** Shortest-way blend of two headings (rad). */
+const mixAngle = (a: number, b: number, t: number): number => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
+
+type Headed = { x: number; y: number; z: number; heading: number };
+
+/** Unridden moving bikes: position linear, heading the short way round; past the newest snapshot they stay. */
+export const bikeOps = <T extends Headed>(): InterpOps<T> => ({
+  lerp: (a, b, t) => ({ ...a, x: mix(a.x, b.x, t), y: mix(a.y, b.y, t), z: mix(a.z, b.z, t), heading: mixAngle(a.heading, b.heading, t) }),
+  extrapolate: (a) => a,
+});
+
+/** Riders: as bikes, plus speed and steering blended; carried on along the heading at their speed. */
+export const riderOps = <T extends Headed & { speed: number; steer: number }>(): InterpOps<T> => ({
+  lerp: (a, b, t) => ({
+    ...(t < 0.5 ? a : b), x: mix(a.x, b.x, t), y: mix(a.y, b.y, t), z: mix(a.z, b.z, t), heading: mixAngle(a.heading, b.heading, t),
+    speed: mix(a.speed, b.speed, t), steer: mix(a.steer, b.steer, t),
+  }),
+  extrapolate: (a, dtS) => ({ ...a, x: a.x + Math.sin(a.heading) * a.speed * dtS, z: a.z + Math.cos(a.heading) * a.speed * dtS }),
+});

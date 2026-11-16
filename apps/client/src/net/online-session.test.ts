@@ -50,7 +50,7 @@ class FakeNet {
   private readonly interest = new Interest();
   private mail: Mail[] = [];
   private readonly listeners = new Set<(s: ReturnType<typeof decodeSnapshot> & object) => void>();
-  private mirror = { players: new Map(), cars: new Map(), lamps: new Map() };
+  private mirror = { players: new Map(), cars: new Map(), bikes: new Map(), lamps: new Map() };
 
   constructor(readonly server: WorldSim, private readonly oneWayMs: number) {
     const net = this;
@@ -128,7 +128,9 @@ class FakeNet {
     const players = new Map<string, unknown>();
     for (const id of s.players()) {
       const p = s.player(id);
-      players.set(String(id), { slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 0 }[p.mode], carId: p.carId ?? -1 });
+      players.set(String(id), {
+        slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 3 }[p.mode], carId: p.carId ?? -1, bikeId: p.bikeId ?? -1, variant: 0,
+      });
     }
     const cars = new Map<string, unknown>();
     for (let i = 0; i < s.cars.count; i++) {
@@ -138,7 +140,11 @@ class FakeNet {
     }
     const lamps = new Map<string, unknown>();
     for (const i of s.lampsDown()) if (s.lampState(i) === 'lying') lamps.set(String(i), s.props.lampPose(i));
-    return { players, cars, lamps };
+    const bikes = new Map<string, unknown>();
+    s.bikes.poses.forEach((b, i) => {
+      if (s.bikes.rider[i] !== null || s.bikes.isMoved(i)) bikes.set(String(i), { rider: s.bikes.rider[i] ?? -1, ...b });
+    });
+    return { players, cars, bikes, lamps };
   }
 }
 
@@ -270,6 +276,67 @@ describe('OnlineSession', () => {
     expect(client.cars.following().has(car)).toBe(true);
     const c = client.player(ME).pos, s = server.player(ME).pos;
     expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(0.2);
+  }, 60_000);
+});
+
+describe('OnlineSession bikes', () => {
+  /** The fixture with bike 0 out on the open south-west lawn (−60, −80), facing +z. */
+  function openLawnBike(): WorldAssets {
+    const a = fixtureAssets();
+    a.manifest.bikes = [{ x: -60, z: -80, heading: 0, type: 0, color: 0 }];
+    return a;
+  }
+
+  test('150 ms RTT: no correction jump > 0.2 m (p95), riding', async () => {
+    const { net, session, client } = await setup(openLawnBike(), { x: -59, z: -80 }, 75);
+    const rnd = prng(6);
+    play(net, session, 500, () => N, rnd);
+    const ev = play(net, session, 100, () => ({ ...N, use: true }), rnd).flatMap((f) => f.events);
+    expect(ev).toContainEqual({ t: 'mount', id: ME, bike: 0 });
+    // a wide left-hand circle at cruising speed, with a hop now and then
+    const frames = play(net, session, 15_000, (t) => {
+      const p = client.player(ME);
+      return { ...N, forward: 1, right: -0.3, jump: Math.floor(t / 3000) !== Math.floor((t - 20) / 3000), yaw: p.bike ? p.bike.heading : 0 };
+    }, rnd);
+    expect(client.player(ME).mode).toBe('ride');
+    expect(frames.flatMap((f) => f.events).filter((e) => e.t === 'dismount' || e.t === 'mount')).toEqual([]);
+    expect(p95(frames.map((f) => f.correction))).toBeLessThan(0.2);
+    expect(p95(frames.map((f) => f.predErrorM))).toBeLessThan(0.2);
+    const p = client.player(ME).pos;
+    expect(Math.hypot(p.x + 60, p.z + 80)).toBeGreaterThan(5);
+  }, 60_000);
+
+  test('denied mount is rolled back', async () => {
+    const a = fixtureAssets(); // bike 0 at (−6, −30) facing +z
+    const { net, session, client, server } = await setup(a, { x: -5, z: -30 }, 75);
+    server.addPlayer(OTHER, { x: -7, z: -30 });
+    const rnd = prng(7);
+    play(net, session, 1000, () => N, rnd);
+    expect(client.bikes.rider[0]).toBe(null);
+
+    // OTHER presses E at the server two ticks from now; our E reaches the server ~75 ms later
+    const otherUse = server.tick + 2;
+    net.others = (tick) => new Map([[OTHER, tick === otherUse ? { ...N, use: true } : N]]);
+    const first = session.frame(0.017, { ...N, use: true });
+    net.advanceTo(net.t + 17);
+    expect([...first, ...play(net, session, 50, () => N, rnd).flatMap((f) => f.events)]).toContainEqual({ t: 'mount', id: ME, bike: 0 });
+    expect(client.player(ME).mode).toBe('ride'); // predicted
+
+    const ev = play(net, session, 1000, () => N, rnd).flatMap((f) => f.events);
+    expect(server.player(OTHER).bikeId).toBe(0);
+    expect(server.player(ME).mode).toBe('walk');
+    expect(ev.filter((e) => e.t === 'mountDenied')).toEqual([{ t: 'mountDenied', id: ME }]);
+    expect(ev.filter((e) => e.t === 'dismount')).toMatchObject([{ t: 'dismount', id: ME, bike: 0, crash: false }]);
+    expect(client.player(ME).mode).toBe('walk');
+    // the bike is OTHER's now: taken in the prediction world and following the server's pose
+    expect(client.bikes.rider[0]).toBe(OTHER);
+    expect(client.bikes.following().has(0)).toBe(true);
+    const c = client.player(ME).pos, s = server.player(ME).pos;
+    expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(0.2);
+    // E again at the taken bike: refused at once by the prediction
+    const again = play(net, session, 100, () => ({ ...N, use: true }), rnd).flatMap((f) => f.events);
+    expect(again).toContainEqual({ t: 'mountDenied', id: ME });
+    expect(client.player(ME).mode).toBe('walk');
   }, 60_000);
 });
 
