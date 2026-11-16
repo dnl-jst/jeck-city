@@ -72,8 +72,8 @@ export type WorldManifest = {
    */
   bikeRacks: { x: number; z: number; heading: number; kind: 0 | 1 }[];
   /**
-   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike), color = frame colour;
-   * bikes[0] is the cargo bike at the spawn. Missing in older manifests → [].
+   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike, 5 soundjohn), color = frame
+   * colour; bikes[0] is the cargo bike at the spawn, the one soundjohn (sound box, radio) stands at Neusser Str. 381. Missing in older manifests → [].
    */
   bikes: { x: number; z: number; heading: number; type: number; color: number }[];
   /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */

@@ -322,3 +322,23 @@ test('horn: loop while held in the car, stops on release and on getting out, nev
   audio.exitCar();
   expect(horns()[1]!.stopped).toBe(true);
 });
+
+test('sound Long John: radio on while sitting on it, tunable, off on getting off; plain bikes stay silent', () => {
+  const { audio, tunes } = setup();
+  audio.mountBike();
+  expect(tunes).toEqual([]);
+  expect(audio.station).toBeNull();
+  audio.radioStep(1);
+  expect(tunes).toEqual([]);
+  audio.dismountBike();
+  audio.mountBike(true);
+  expect(tunes).toEqual(['koellefornia']);
+  expect(audio.station).toBe('koellefornia');
+  audio.radioStep(1);
+  expect(tunes).toEqual(['koellefornia', 'radiokoeln']);
+  audio.dismountBike();
+  expect(tunes.at(-1)).toBeNull();
+  expect(audio.station).toBeNull();
+  audio.radioStep(1);
+  expect(tunes).toHaveLength(3);
+});

@@ -12,6 +12,8 @@ export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
 /** Bottom hint while riding a bike. */
 export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
+/** Bottom hint on the sound Long John (radio through its box). */
+export const SOUND_RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · R Radio · L Disco · E absteigen';
 
 export const HUD_CSS = `
   .nn-loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);

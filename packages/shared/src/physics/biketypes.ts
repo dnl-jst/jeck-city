@@ -1,5 +1,5 @@
 /** Bike types; the index is the `type` number in the manifest. */
-export const BIKE_TYPES = ['dutch', 'road', 'mtb', 'longjohn', 'trike'] as const;
+export const BIKE_TYPES = ['dutch', 'road', 'mtb', 'longjohn', 'trike', 'soundjohn'] as const;
 export type BikeType = (typeof BIKE_TYPES)[number];
 
 export type BikeSpec = {
@@ -34,5 +34,7 @@ export const BIKE_SPECS: Record<BikeType, BikeSpec> = {
   road: { cruiseKmh: 30, sprintKmh: 45, accel: 3.2, sprintAccel: 4.6, brake: 7, wheelbase: 1.0, width: 0.45, steerLowLock: 0.5, steerHighLock: 0.08, maxYaw: 1.1, maxLeanDeg: 35, hopSpeed: 4.0, massParked: 9 },
   mtb: { cruiseKmh: 25, sprintKmh: 38, accel: 2.9, sprintAccel: 4.2, brake: 7, wheelbase: 1.15, width: 0.72, steerLowLock: 0.6, steerHighLock: 0.1, maxYaw: 1.2, maxLeanDeg: 35, hopSpeed: 4.5, massParked: 14 },
   longjohn: { cruiseKmh: 22, sprintKmh: 28, accel: 3.0, sprintAccel: 3.8, brake: 5.5, wheelbase: 1.95, width: 0.66, steerLowLock: 0.45, steerHighLock: 0.07, maxYaw: 0.8, maxLeanDeg: 30, hopSpeed: 3.0, assistKmh: 25, massParked: 45 },
+  /** The one Long John with the sound box (Neusser Str. 381): a bit heavier. */
+  soundjohn: { cruiseKmh: 22, sprintKmh: 27, accel: 2.8, sprintAccel: 3.6, brake: 5.5, wheelbase: 1.95, width: 0.66, steerLowLock: 0.45, steerHighLock: 0.07, maxYaw: 0.8, maxLeanDeg: 28, hopSpeed: 2.8, assistKmh: 25, massParked: 60 },
   trike: { cruiseKmh: 18, sprintKmh: 25, accel: 2.8, sprintAccel: 3.5, brake: 5, wheelbase: 1.6, width: 0.9, steerLowLock: 0.5, steerHighLock: 0.1, maxYaw: 0.8, maxLeanDeg: 0, hopSpeed: 2.6, assistKmh: 22, massParked: 55 },
 };

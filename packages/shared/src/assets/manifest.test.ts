@@ -86,7 +86,7 @@ test('manifest parse: old manifest without bikes gets empty lists', () => {
 });
 
 test('manifest parse rejects bike type out of range and rack kind 2', () => {
-  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 5, color: 0 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 6, color: 0 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 1.5, color: 0 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikeRacks: [{ x: 0, z: 0, heading: 0, kind: 2 }] })).toThrow();
 });
