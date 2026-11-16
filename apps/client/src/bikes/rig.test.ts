@@ -108,3 +108,36 @@ describe('visible bikes', () => {
     expect(visibleBikes(poses, 0, 0, 120, 0)).toEqual([1]);
   });
 });
+
+describe('disco ball', () => {
+  test('only a model with a disco node has one; on: spins, shimmers, dots lit; off: still', () => {
+    const plain = new BikeRig(model().root, 'longjohn');
+    expect(plain.hasDisco).toBe(false);
+    plain.setDisco(true);
+    expect(plain.discoOn).toBe(false);
+
+    const { root } = model();
+    const mirror = new MeshStandardMaterial({ name: 'mirror' });
+    const ball = new Mesh(new BoxGeometry(0.2, 0.2, 0.2), mirror);
+    ball.name = 'disco';
+    root.getObjectByName('frame')!.add(ball);
+    const rig = new BikeRig(root, 'soundjohn');
+    expect(rig.hasDisco).toBe(true);
+    const disco = rig.node('disco')!;
+    const dots = () => disco.children.filter((c) => (c as { isSpotLight?: boolean }).isSpotLight && c.visible).length;
+    rig.update(state(), 0, 0.5);
+    expect(disco.rotation.y).toBe(0);
+    expect(dots()).toBe(0);
+    rig.setDisco(true);
+    rig.update(state(), 0, 0.5);
+    expect(disco.rotation.y).toBeGreaterThan(0.5);
+    expect(dots()).toBeGreaterThan(4);
+    expect(((disco as Mesh).material as MeshStandardMaterial).emissiveIntensity).toBeGreaterThan(0);
+    expect(mirror.emissiveIntensity).toBe(1); // the model's shared material stays untouched
+    rig.setDisco(false);
+    const y = disco.rotation.y;
+    rig.update(state(), 0, 0.5);
+    expect(disco.rotation.y).toBe(y);
+    expect(dots()).toBe(0);
+  });
+});

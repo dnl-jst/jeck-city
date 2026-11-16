@@ -7,6 +7,7 @@ import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, 
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
 import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
+import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp } from './models.js';
 import { shipCharacterModels } from './characters.js';
 import { parseCityGml } from './citygml.js';
@@ -41,6 +42,11 @@ const CAR_MODELS = 'data/models/cars';
 const SPAWN_BIKE_COLOR = 0x2f5d3a;
 /** Rack bikes this close to the spawn bike are left out (m). */
 const SPAWN_BIKE_CLEAR = 3;
+/**
+ * The sound Long John (type 5, sound box on the deck, radio while riding): on the sidewalk in front of Neusser Str. 381
+ * (LOD2 DENW37AL1000AGv2), at its corner with Niehler Kirchweg, parallel to the Neusser Str. facade and facing the corner.
+ */
+const SOUND_BIKE = { x: 35.0, z: -729.6, heading: -2.912, type: 5, color: 0xc0262d };
 const TREE_SEED = 2613766;
 const SPAWN_TARGET = { x: 0, z: 0 };
 /**
@@ -239,7 +245,9 @@ async function main() {
   const racks = layoutRacks(f, buildings);
   const carSpots = withSpawnCar(spawnCar, dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks));
   const spawnBike = spawnBikeSpot(f, spawn, spawnCar, buildings);
-  const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) => Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR);
+  if (insideAnyFootprint(SOUND_BIKE, buildings)) throw new Error('sound bike: spot lies inside a building');
+  const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) =>
+    Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR && Math.hypot(b.x - SOUND_BIKE.x, b.z - SOUND_BIKE.z) >= SPAWN_BIKE_CLEAR);
   const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
 
@@ -266,7 +274,7 @@ async function main() {
     carModels,
     characterModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
-    bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+    bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
     parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,

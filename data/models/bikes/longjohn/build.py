@@ -31,9 +31,10 @@ BAR = V((0, 0.33, 0.88))     # handlebar column top = bar pivot
 DECK = dict(y0=-0.66, y1=0.2, x=0.29, z=0.35, rail=0.12)
 
 
-def build():
+def build(coll_name='BIKE_LONGJOHN', cargo=None):
+    """cargo(part, M, deck): optional load added to the frame on the deck (see ../soundjohn)."""
     clear_default_scene()
-    coll = reset_collection('BIKE_LONGJOHN')
+    coll = reset_collection(coll_name)
     M = bike_materials()
 
     # ---- frame (root)
@@ -80,6 +81,8 @@ def build():
     for z0, z1 in ((0.38, 0.37), (0.18, 0.29)):
         f.cyl(V((-0.05, BB.y, z0)), V((-0.05, RA.y, z1)), 0.004, M['dark'], seg=4, caps=False)
     fender(f, M, 0.36, 1.25, 3.0, 0.055, c=RA)   # rear mudguard (on the frame: the wheel spins)
+    if cargo:
+        cargo(f, M, DECK)
     frame = f.to_object(coll)
 
     # ---- fork (pivot on the steering axis) with the front wheel
@@ -130,4 +133,5 @@ def build():
     return frame
 
 
-result = run(NAME, HERE, build, (2.3, 2.7))
+if not globals().get('NN_IMPORT_ONLY'):  # soundjohn/build.py reuses build()
+    result = run(NAME, HERE, build, (2.3, 2.7))

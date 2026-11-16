@@ -43,6 +43,8 @@ export class GameAudio {
   private readonly bike: BikeSound;
   /** On a bike: its loops run (once loaded + unlocked). */
   private riding = false;
+  /** On the sound Long John: the radio plays through its box. */
+  private boxRadio = false;
   private impacts = new ImpactDetector();
   private staticVoice: LoopVoice | null = null;
   private readonly hornState = new HornState();
@@ -104,7 +106,7 @@ export class GameAudio {
       this.d.mixer.suspend();
     } else {
       this.d.mixer.resume();
-      if (this.inCar) this.d.radio.resume();
+      if (this.inCar || this.boxRadio) this.d.radio.resume();
     }
   }
 
@@ -153,13 +155,13 @@ export class GameAudio {
 
   /** Next (1) or previous (-1) station; only in a car with the engine running. */
   radioStep(dir: 1 | -1): void {
-    if (!this.engineOn) return;
+    if (!this.radioOn) return;
     this.tune(dir === 1 ? this.d.tuner.next() : this.d.tuner.prev());
   }
 
   /** Radio wheel pick; only with the engine running. Same station as now: no retune, just the name again. */
   radioSelect(id: StationId | null): void {
-    if (!this.engineOn) return;
+    if (!this.radioOn) return;
     if (id === this.d.tuner.current) this.d.flash(stationLabel(id));
     else this.tune(this.d.tuner.select(id));
   }
@@ -187,15 +189,25 @@ export class GameAudio {
     this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, cueDt);
   }
 
-  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked). */
-  mountBike(): void {
+  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked); `soundBox`: the radio comes on through its box. */
+  mountBike(soundBox = false): void {
     this.riding = true;
     this.startLoops();
+    if (soundBox) {
+      this.boxRadio = true;
+      this.tune(this.d.tuner.enterCar());
+    }
   }
 
   dismountBike(): void {
     this.riding = false;
     this.bike.stop();
+    if (this.boxRadio) {
+      this.boxRadio = false;
+      this.stopStatic();
+      this.d.radio.tune(null);
+      this.d.tuner.exitCar();
+    }
   }
 
   /** On a bike, every frame: rolling, chain and freewheel. Speed in m/s. */
@@ -228,6 +240,11 @@ export class GameAudio {
     if (nearestTramStop && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
       this.d.mixer.oneShot('tramBell', { gain: MIX.tramBell, at: { x: nearestTramStop.x, z: nearestTramStop.z } });
     }
+  }
+
+  /** The radio is on: engine running, or sitting on the sound Long John. */
+  private get radioOn(): boolean {
+    return this.engineOn || this.boxRadio;
   }
 
   private tune(id: StationId | null): void {
