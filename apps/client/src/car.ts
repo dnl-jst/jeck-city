@@ -498,6 +498,7 @@ export class ParkedCars {
   private shown: number[] = [];
   private readonly drawn: (CarPose | null)[];
   private lastRebuild: XZ | null = null;
+  private radius = CAR_RENDER_RADIUS;
   private readonly m = new Matrix4();
   private readonly base = new Matrix4();
   private readonly q = new Quaternion();
@@ -562,6 +563,13 @@ export class ParkedCars {
    * (rebuilt after CAR_REBUILD_MOVE of movement or when an always-drawn car has no slot yet), and rewrites the
    * matrices of the drawn cars whose pose changed.
    */
+  /** Cars are drawn within this radius (m) of the camera (quality level); a change rebuilds the set on the next update. */
+  setRadius(r: number): void {
+    if (r === this.radius) return;
+    this.radius = r;
+    this.lastRebuild = null;
+  }
+
   update(x: number, z: number): void {
     const always = this.always();
     if (needsCarRebuild(this.lastRebuild, x, z) || !always.every((i) => this.slots[i]! >= 0 || !this.levels.has(this.pool.types[i]!))) {
@@ -573,7 +581,7 @@ export class ParkedCars {
 
   private rebuild(x: number, z: number, always: number[]): void {
     this.lastRebuild = { x, z };
-    this.shown = visibleCars(this.pool.poses, x, z, CAR_RENDER_RADIUS, always);
+    this.shown = visibleCars(this.pool.poses, x, z, this.radius, always);
     this.slots.fill(-1);
     for (const lv of this.levels.values()) for (const l of lv) l.used = 0;
     const col = new Color();

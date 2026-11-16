@@ -131,10 +131,11 @@ export class Game {
     session.onCorrection = () => this.resample();
   }
 
-  /** The own car's and bike's lights at a quality level (fewer lights, smaller or no beam shadows). */
+  /** The own car's and bike's lights and the parked cars' draw radius at a quality level. */
   setQuality(q: Quality): void {
     this.driven.setQuality(q);
     this.bikeLights.setDiscoDots(q.discoDots);
+    this.cars.setRadius(q.carRadius);
   }
 
   /** Fixed steps run so far (tests wait on simulation time, not on the wall clock). */

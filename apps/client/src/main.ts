@@ -209,12 +209,13 @@ if (debug) {
 }
 
 let lighting: Lighting | null = null;
-/** Applies the current quality level to the renderer, the lights, the shadows and the trees (all live but MSAA). */
+/** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees and cars (all live but MSAA). */
 function applyQuality(): void {
   const q = QUALITY[qualityLevel];
   resize();
   lighting?.setQuality(q);
-  props?.setTreeShadowRadius(q.treeShadowRadius);
+  props?.setTreeRadii(q.treeRadius, q.treeShadowRadius);
+  world.setRadii(q.loadRadius, q.unloadRadius);
   game?.setQuality(q);
 }
 let props: Props | null = null;
@@ -283,6 +284,12 @@ renderer.setAnimationLoop((t: number) => {
     }
     nightFactor = sun.nightFactor;
     lighting.update(sun, camera.position);
+    // the far plane at the fog's end: what the fog hides completely is culled, not drawn
+    const far = lighting.viewFar + 5;
+    if (Math.abs(camera.far - far) > 0.5) {
+      camera.far = far;
+      camera.updateProjectionMatrix();
+    }
     props.setNight(nightFactor);
   }
   renderer.render(scene, camera);

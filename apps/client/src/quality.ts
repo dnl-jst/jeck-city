@@ -1,6 +1,6 @@
 /**
- * Graphics quality levels. 'high' is the full look (all lights, big shadow maps, up to 2× pixel ratio); 'medium' (the
- * default) and 'low' trade the most expensive parts for frame rate: every light in the scene is evaluated in every
+ * Graphics quality levels. 'high' is the full look (all lights, big shadow maps, up to 2× pixel ratio); 'low' (the
+ * default) and 'medium' trade the most expensive parts for frame rate: every light in the scene is evaluated in every
  * pixel of every standard material (also at intensity 0), so fewer lights is the biggest saving, then resolution and
  * shadows. Everything but antialiasing switches live (G); antialiasing is a WebGL context option, read at startup.
  */
@@ -29,18 +29,40 @@ export type Quality = {
   shadowRadius: number;
   /** Street trees cast shadows within this radius (m). */
   treeShadowRadius: number;
+  /**
+   * View distance (m) by day: the fog is opaque here (night: shorter) and the camera's far plane sits at the fog's end,
+   * so everything beyond is culled instead of drawn invisibly.
+   */
+  viewDistance: number;
+  /** World chunks are loaded when their centre is within this radius (m)… */
+  loadRadius: number;
+  /** …and unloaded beyond this one. */
+  unloadRadius: number;
+  /** Street trees are drawn within this radius (m). */
+  treeRadius: number;
+  /** Parked cars are drawn within this radius (m). */
+  carRadius: number;
 };
 
 export const QUALITY: Record<QualityLevel, Quality> = {
-  high: { pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80 },
-  medium: { pixelRatio: 1.5, antialias: true, lampLights: 5, discoDots: 4, tailLights: false, beamShadow: 512, sunShadow: 2048, shadowRadius: 100, treeShadowRadius: 50 },
-  low: { pixelRatio: 1, antialias: false, lampLights: 3, discoDots: 2, tailLights: false, beamShadow: 0, sunShadow: 1024, shadowRadius: 70, treeShadowRadius: 30 },
+  high: {
+    pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
+    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150,
+  },
+  medium: {
+    pixelRatio: 1.5, antialias: true, lampLights: 5, discoDots: 4, tailLights: false, beamShadow: 512, sunShadow: 2048, shadowRadius: 100, treeShadowRadius: 50,
+    viewDistance: 450, loadRadius: 420, unloadRadius: 600, treeRadius: 190, carRadius: 120,
+  },
+  low: {
+    pixelRatio: 1, antialias: false, lampLights: 3, discoDots: 2, tailLights: false, beamShadow: 0, sunShadow: 1024, shadowRadius: 70, treeShadowRadius: 30,
+    viewDistance: 300, loadRadius: 280, unloadRadius: 450, treeRadius: 140, carRadius: 90,
+  },
 };
 
 /** The most of each light kind any level uses: they are all created once, the level only hides some. */
 export const MAX_LAMP_LIGHTS = Math.max(...QUALITY_LEVELS.map((l) => QUALITY[l].lampLights));
 
-export const DEFAULT_QUALITY: QualityLevel = 'medium';
+export const DEFAULT_QUALITY: QualityLevel = 'low';
 
 /** localStorage key of the chosen level (a per-viewer convenience; missing storage = the default). */
 const QUALITY_KEY = 'nn.quality';

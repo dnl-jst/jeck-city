@@ -5,6 +5,8 @@ import {
 import type { SunState } from '@nn/shared';
 import { LAMP_LIGHT_Y } from './props';
 import { MAX_LAMP_LIGHTS, QUALITY, type Quality } from './quality';
+/** Fog end (m) by day at full view distance (quality 'high'); night pulls it in. */
+const FULL_VIEW = 650;
 /** The lamp light pool is reassigned when the camera has moved farther than this (m). */
 export const LAMP_REASSIGN = 10;
 
@@ -108,6 +110,8 @@ export class Lighting {
   private lampCount: number = MAX_LAMP_LIGHTS;
   /** Sun shadows are cast within this radius (m) around the camera. */
   private shadowRadius = 0;
+  /** Fog distances relative to the full view distance (FULL_VIEW): a lower quality level pulls the fog in. */
+  private viewScale = 1;
 
   constructor(
     private readonly scene: Scene,
@@ -165,6 +169,7 @@ export class Lighting {
     const s = this.sun.shadow;
     s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
     this.shadowRadius = q.shadowRadius;
+    this.viewScale = q.viewDistance / FULL_VIEW;
     s.camera.left = s.camera.bottom = -q.shadowRadius;
     s.camera.right = s.camera.top = q.shadowRadius;
     s.camera.updateProjectionMatrix();
@@ -181,6 +186,11 @@ export class Lighting {
     if (this.out.delete(i)) this.poolAt = null;
   }
 
+  /** Where the fog turns opaque (m): nothing beyond needs drawing (the camera's far plane). */
+  get viewFar(): number {
+    return this.fog.far;
+  }
+
   update(sun: SunState, cameraPos: Vector3): void {
     const night = sun.nightFactor;
     const mood = moodAt((sun.altitude * 180) / Math.PI);
@@ -195,8 +205,8 @@ export class Lighting {
     u.sunCol!.value.copy(mood.sun);
     u.night!.value = night;
     this.fog.color.copy(mood.horizon);
-    this.fog.near = 150 - 90 * night;
-    this.fog.far = 650 - 200 * night;
+    this.fog.near = (150 - 90 * night) * this.viewScale;
+    this.fog.far = (FULL_VIEW - 200 * night) * this.viewScale;
     this.facadeSky.value.copy(mood.horizon).lerp(mood.zenith, 0.4);
     this.facadeNight.value = night;
 

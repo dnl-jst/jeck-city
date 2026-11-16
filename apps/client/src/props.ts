@@ -292,6 +292,7 @@ export class Props {
   private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] }[];
   private lastTrees: XZ | null = null;
   private treeShadowRadius = TREE_SHADOW_RADIUS;
+  private treeRadius = TREE_RENDER_RADIUS;
   private readonly haloPoints: Points;
   /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
   private readonly stops = new Map<number, Group>();
@@ -421,17 +422,18 @@ export class Props {
     if (needsTreeRebuild(this.lastTrees, x, z)) this.writeTrees(x, z);
   }
 
-  /** Trees cast shadows within this radius (m) of the camera (quality level). */
-  setTreeShadowRadius(r: number): void {
-    if (r === this.treeShadowRadius) return;
-    this.treeShadowRadius = r;
+  /** Trees are drawn within `radius` (m) of the camera and cast shadows within `shadow` (quality level). */
+  setTreeRadii(radius: number, shadow: number): void {
+    if (radius === this.treeRadius && shadow === this.treeShadowRadius) return;
+    this.treeRadius = radius;
+    this.treeShadowRadius = shadow;
     if (this.lastTrees) this.writeTrees(this.lastTrees.x, this.lastTrees.z);
   }
 
   private writeTrees(x: number, z: number): void {
     this.lastTrees = { x, z };
     const loaded = this.loaded;
-    const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)), this.treeShadowRadius);
+    const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)), this.treeShadowRadius, this.treeRadius);
     const m = new Matrix4(), c = new Color();
     const nv = this.trees.length;
     for (const which of ['near', 'far'] as const) {
