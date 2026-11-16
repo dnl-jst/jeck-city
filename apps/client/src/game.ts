@@ -1,6 +1,6 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
-  CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
+  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from './bikes/rig';
@@ -118,6 +118,8 @@ export class Game {
       me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!, occluded: (a, b) => this.occluded(a, b),
       carModels: ctx.carModels, figureModel: ctx.character ?? null, figureFor: (v) => this.figureFor(v),
       bikeModels: ctx.bikeModels?.bikes, bikeTypeOf: (i) => sim.bikes.types[i]!, bikeColorOf: (i) => sim.bikes.colors[i]!,
+      // other riders have no physics bike here: their wheels are probed against the static city and terrain
+      bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -460,7 +462,8 @@ export class Game {
       s.x += off.x; s.y += off.y; s.z += off.z;
       const rig = this.rig;
       if (rig) {
-        rig.update(s, this.session.sim.riddenBike(this.session.me)?.lean() ?? 0, dt);
+        const ridden = this.session.sim.riddenBike(this.session.me);
+        rig.update(s, ridden?.lean() ?? 0, dt, ridden?.groundPose(s));
         rig.setLights(night);
         this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
           [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);

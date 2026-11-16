@@ -19,6 +19,8 @@ const LAMP_GLOW = 3;
 const WHEELS = ['wheel_front', 'wheel_front_l', 'wheel_front_r', 'wheel_rear'];
 /** The shown lean follows the physics lean with this time constant (s): the bike tips in and out softly. */
 const LEAN_TAU = 0.22;
+/** The shown pitch and height on uneven ground follow the wheel probes with this time constant (s): kerbs roll in. */
+const PITCH_TAU = 0.06;
 
 /** Disco ball (node `disco`, sound Long John): spin (rad/s), mirror shimmer and its light dots. */
 const DISCO_SPIN = 1.3;
@@ -36,6 +38,8 @@ const DISCO_DOT = { angle: 0.06, penumbra: 0.35, distance: 22, decay: 1.6, inten
 export class BikeRig {
   readonly root = new Group();
   readonly leanGroup = new Group();
+  /** Between root and lean group: pitch about the sideways axis and height so both wheels sit on uneven ground. */
+  private readonly pitchGroup = new Group();
   /** This rig's own copies of the paint and lamp materials (null if the model has none). */
   paint: MeshStandardMaterial | null = null;
   lampFront: MeshStandardMaterial | null = null;
@@ -50,10 +54,13 @@ export class BikeRig {
   /** Disco ball spinning with its light dots (only bikes with a `disco` node). */
   discoOn = false;
   private lean = 0;
+  private pitch = 0;
+  private dy = 0;
   private snap = false;
 
   constructor(model: Object3D, readonly type: BikeType) {
-    this.root.add(this.leanGroup);
+    this.root.add(this.pitchGroup);
+    this.pitchGroup.add(this.leanGroup);
     this.leanGroup.add(model);
     model.updateMatrixWorld(true);
     model.traverse((o) => {
@@ -140,11 +147,17 @@ export class BikeRig {
   }
 
   /** Places the bike at its state and animates it; dt = seconds since the last call (wheel spin, lean easing). */
-  update(s: BikeState, lean: number, dt: number): void {
+  update(s: BikeState, lean: number, dt: number, ground: { pitch: number; dy: number } = { pitch: 0, dy: 0 }): void {
     this.root.position.set(s.x, s.y, s.z);
     this.root.rotation.y = s.heading;
     this.lean = this.snap ? lean : this.lean + (lean - this.lean) * (1 - Math.exp(-dt / LEAN_TAU));
+    const kp = this.snap ? 1 : 1 - Math.exp(-dt / PITCH_TAU);
+    this.pitch += (ground.pitch - this.pitch) * kp;
+    this.dy += (ground.dy - this.dy) * kp;
     this.snap = false;
+    // nose up = the forward axis (+z) turns towards +y = a negative rotation about +x
+    this.pitchGroup.rotation.x = -this.pitch;
+    this.pitchGroup.position.y = this.dy;
     this.leanGroup.rotation.z = this.lean;
     const yaw = -s.steer; // positive steer = right = towards −x
     for (const n of ['fork', 'bar']) {

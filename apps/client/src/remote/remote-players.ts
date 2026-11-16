@@ -68,6 +68,8 @@ export type RemoteOptions = {
   bikeModels?: ReadonlyMap<BikeType, Object3D>;
   bikeTypeOf?(bike: number): BikeType;
   bikeColorOf?(bike: number): number;
+  /** Pitch and height so a remote bike's wheels sit on uneven ground (absent: shown level). */
+  bikeGroundPose?(type: BikeType, s: BikeState): { pitch: number; dy: number };
   makeRig?: (type: BikeType) => RiderRig | null;
   occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
@@ -165,7 +167,7 @@ export class RemotePlayers {
       const rig = r.rig;
       if (rig) {
         rig.setColor(this.opts.bikeColorOf?.(s.bikeId) ?? 0xffffff);
-        rig.update(st, bikeLean(BIKE_SPECS[type], s.speed, s.steer), dt);
+        rig.update(st, bikeLean(BIKE_SPECS[type], s.speed, s.steer), dt, this.opts.bikeGroundPose?.(type, st));
         rig.setLights(night);
         if (r.fig.group.parent !== rig.leanGroup) rig.leanGroup.add(r.fig.group);
         r.fig.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],

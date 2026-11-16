@@ -39,6 +39,10 @@ const FRAME_TOP = 1.2;
 const OFFSET = 0.02;
 /** Surfaces whose normal points up more than this (slope ≤ maxSlope) are ground, not obstacles for the frame. */
 const WALKABLE_NY = Math.cos(T.maxSlope);
+/** Wheel ground probes look this far above and below the bike's ground height (m). */
+const WHEEL_PROBE = 0.5;
+/** Most the shown bike pitches on uneven ground (rad). */
+const MAX_PITCH = 0.4;
 /** Dynamic bodies lighter than this are shoved, not stopped at (kg). */
 const LIGHT_BODY_KG = 100;
 
@@ -248,6 +252,15 @@ export class RiddenBike {
     return bikeLean(this.spec, this.s.speed, this.s.steer);
   }
 
+  /**
+   * How the (always level) physics bike should be shown on uneven ground: pitch (rad, + = nose up) from the ground
+   * under the front and rear wheel, and dy (m) to lift or lower the model so both wheels touch it. Zero in the air or
+   * where a wheel finds no ground near the bike's height. Pass the (interpolated) state that is shown.
+   */
+  groundPose(s: BikeState = this.s): { pitch: number; dy: number } {
+    return bikeGroundPose(this.pw, this.spec.wheelbase, s, this.notMe);
+  }
+
   /** Removes the bike from the world. The instance must not be used afterwards. */
   dispose(): void {
     this.pw.world.removeCharacterController(this.kcc);
@@ -272,6 +285,32 @@ export function bikeLean(spec: BikeSpec, speed: number, steer: number): number {
   const curv = Math.tan(steer) / spec.wheelbase;
   const a = Math.atan((speed * speed * curv) / G);
   return Math.max(-max, Math.min(max, a));
+}
+
+/**
+ * How a level bike (wheelbase in m) at state `s` is shown on uneven ground: pitch (rad, + = nose up) from the ground
+ * under the front and rear wheel, and dy (m) to lift or lower the model so both wheels touch it. Zero in the air or
+ * where a wheel finds no ground near the bike's height. `filter` picks the colliders that count as ground (the own
+ * ridden bike passes one that skips itself; remote riders, which have no physics bike, use the static world).
+ */
+export function bikeGroundPose(
+  pw: PhysicsWorld, wheelbase: number, s: BikeState, filter?: (c: RAPIER.Collider) => boolean,
+): { pitch: number; dy: number } {
+  if (!s.grounded) return { pitch: 0, dy: 0 };
+  const half = wheelbase / 2, fx = Math.sin(s.heading), fz = Math.cos(s.heading);
+  const groundAt = (x: number, z: number): number | null => {
+    const { rapier: R, world } = pw;
+    const hit = world.castRayAndGetNormal(new R.Ray({ x, y: s.y + WHEEL_PROBE, z }, { x: 0, y: -1, z: 0 }), 2 * WHEEL_PROBE, true,
+      undefined, undefined, undefined, undefined, filter);
+    if (!hit || hit.normal.y < WALKABLE_NY) return null;
+    return s.y + WHEEL_PROBE - hit.timeOfImpact;
+  };
+  const front = groundAt(s.x + fx * half, s.z + fz * half);
+  const rear = groundAt(s.x - fx * half, s.z - fz * half);
+  if (front === null || rear === null) return { pitch: 0, dy: 0 };
+  const pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, Math.atan2(front - rear, wheelbase)));
+  const dy = Math.max(-WHEEL_PROBE / 2, Math.min(WHEEL_PROBE / 2, (front + rear) / 2 - s.y));
+  return { pitch, dy };
 }
 
 function yawQuat(h: number): { x: number; y: number; z: number; w: number } {

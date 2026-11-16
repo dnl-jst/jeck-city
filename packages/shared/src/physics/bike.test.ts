@@ -136,6 +136,36 @@ describe('ridden bike', () => {
     }
   });
 
+  test('shown pitch follows the ground under both wheels on a ramp and at a kerb', async () => {
+    const a = 12 * DEG, top = 20 * Math.tan(a);
+    const g = flat();
+    const v = [...g.vertices, -50, 0, 3, 50, 0, 3, 50, top, 23, -50, top, 23];
+    const idx = [...g.indices, 4, 6, 5, 4, 7, 6];
+    const pw = await createPhysicsWorld({ vertices: new Float32Array(v), indices: new Uint32Array(idx), boundary: g.boundary });
+    const b = new RiddenBike(pw, 'dutch', { x: 0, y: 0, z: 0, heading: 0 }, 0);
+    pw.step();
+    expect(b.groundPose().pitch).toBeCloseTo(0, 3);
+    ride(pw, b, () => go({ pedal: b.state().z < 10 ? 1 : -1 }), 3);
+    expect(b.state().z).toBeGreaterThan(8);
+    const up = b.groundPose();
+    expect(up.pitch).toBeCloseTo(a, 2);
+    // facing down the ramp: nose down
+    expect(b.groundPose({ ...b.state(), heading: Math.PI }).pitch).toBeCloseTo(-a, 2);
+    // straddling the ramp foot: rear wheel on the flat, front wheel on the ramp, lifted half way
+    const foot = b.groundPose({ ...b.state(), z: 3, y: 0 });
+    expect(foot.pitch).toBeGreaterThan(0.02);
+    expect(foot.pitch).toBeLessThan(a);
+
+    const pk = await createPhysicsWorld(flat());
+    block(pk, 3, 60, 0.12);
+    const k = new RiddenBike(pk, 'dutch', { x: 0, y: 0, z: 3, heading: 0 }, 0);
+    pk.step();
+    // front wheel up the kerb, rear wheel on the road
+    const kerb = k.groundPose();
+    expect(kerb.pitch).toBeCloseTo(Math.atan2(0.12, 1.12), 2);
+    expect(kerb.dy).toBeCloseTo(0.06, 2);
+  });
+
   test('stops at a 0.4 m step', async () => {
     const pw = await createPhysicsWorld(flat());
     block(pw, 3, 60, 0.4);
