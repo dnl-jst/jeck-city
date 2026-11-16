@@ -67,6 +67,7 @@ const qmul = (a: Quat, b: Quat): Quat => ({
 const qconj = (q: Quat): Quat => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
 const poseOf = (p: CarPose | PropPose): CarPose => ({ x: p.x, y: p.y, z: p.z, qx: p.qx, qy: p.qy, qz: p.qz, qw: p.qw });
 const carKey = (p: CarPose): string => `${p.x},${p.y},${p.z},${p.qx},${p.qy},${p.qz},${p.qw}`;
+const bikeKey = (p: BikePose): string => `${p.x},${p.y},${p.z},${p.heading}`;
 const bikePoseOf = (p: BikePose): BikePose => ({ x: p.x, y: p.y, z: p.z, heading: p.heading });
 const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bike === b.bike;
 
@@ -121,7 +122,7 @@ export class OnlineSession implements Session {
   private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
   /** Resting car poses of the slow state last seen, by car ("x,y,z,qx,qy,qz,qw"; see placeRestingCars). */
   private readonly carRest = new Map<number, string>();
-  /** Resting bike poses from the slow state last put into the prediction world, by bike ("x,y,z,heading"). */
+  /** Resting bike poses of the slow state last seen, by bike ("x,y,z,heading"; see placeRestingBikes). */
   private readonly bikeRest = new Map<number, string>();
   /** The station the own car should play (undefined: none chosen in this car) and seconds since it was last sent. */
   private radioWant: StationId | null | undefined = undefined;
@@ -430,9 +431,10 @@ export class OnlineSession implements Session {
     const bikePoses = new Map<number, BikePose>();
     for (const b of bikes.values()) bikePoses.set(b.id, bikePoseOf(b));
     for (const r of riders.values()) if (r.slot !== this.me) bikePoses.set(r.bikeId, bikePoseOf(r));
+    // as cars: only a resting pose not seen before (one seen while ridden or streamed is from before it moved)
     this.sim.setBikeProxies(bikePoses, (i) => {
       const b = state.bikes?.get(String(i));
-      return b && b.rider < 0 ? bikePoseOf(b) : null;
+      return b && b.rider < 0 && this.bikeRest.get(i) !== bikeKey(b) ? bikePoseOf(b) : null;
     });
     this.placeRestingBikes(bikePoses);
 
@@ -453,18 +455,18 @@ export class OnlineSession implements Session {
 
   /**
    * Unridden bikes the slow state reports away from their spot (moved before we joined, or come to rest): placed there
-   * once per new resting pose; a bike that left the slow state went back to its manifest spot (idle reset).
+   * once per new resting pose; a bike that left the slow state went back to its manifest spot (idle reset). As with
+   * cars, a pose seen while the bike was ridden or streamed only counts as seen (the server writes it at rest).
    */
   private placeRestingBikes(streamed: ReadonlyMap<number, BikePose>): void {
-    const bikes = this.sim.bikes, seen = new Set<number>();
+    const bikes = this.sim.bikes, seen = new Set<number>(), own = this.sim.player(this.me).bikeId;
     this.link.state.bikes?.forEach((b, key) => {
       const i = Number(key);
       seen.add(i);
-      if (b.rider >= 0 || streamed.has(i)) return;
-      const k = `${b.x},${b.y},${b.z},${b.heading}`;
+      const k = bikeKey(b);
       if (this.bikeRest.get(i) === k) return;
       this.bikeRest.set(i, k);
-      bikes.place(i, bikePoseOf(b));
+      if (b.rider < 0 && !streamed.has(i) && own !== i) bikes.place(i, bikePoseOf(b));
     });
     for (const i of [...this.bikeRest.keys()]) {
       if (seen.has(i)) continue;

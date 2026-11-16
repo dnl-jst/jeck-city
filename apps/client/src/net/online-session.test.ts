@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import {
   buildSnapshot, decodeInputs, decodeSnapshot, encodeInputs, encodeSnapshot, headingOf, Interest, NEUTRAL_INPUT,
-  WorldSim, type CarPose, type InputPacket, type PlayerInput, type SimEvent, type WorldAssets,
+  WorldSim, type BikePose, type CarPose, type InputPacket, type PlayerInput, type SimEvent, type WorldAssets,
 } from '@nn/shared';
 import { fixtureAssets } from '../../../../packages/shared/src/sim/fixture.test-util';
 import { ServerClock } from './clock';
@@ -57,6 +57,7 @@ class FakeNet {
   private readonly listeners = new Set<(s: ReturnType<typeof decodeSnapshot> & object) => void>();
   private mirror = { players: new Map(), cars: new Map(), bikes: new Map(), lamps: new Map() };
   private lastCars = new Map<string, Pose>();
+  private lastBikes = new Map<string, BikePose>();
   /** Cars left out of the snapshots (as if out of the client's interest). */
   hiddenCars = new Set<number>();
 
@@ -160,10 +161,15 @@ class FakeNet {
     this.lastCars = cars;
     const lamps = new Map<string, unknown>();
     for (const i of s.lampsDown()) if (s.lampState(i) === 'lying') lamps.set(String(i), s.props.lampPose(i));
-    const bikes = new Map<string, unknown>();
+    // likewise a bike's pose: when the entry appears and while it is unridden and not rolling
+    const bikes = new Map<string, BikePose & { rider: number }>(), rolling = new Set(s.bikes.awake());
     s.bikes.poses.forEach((b, i) => {
-      if (s.bikes.rider[i] !== null || s.bikes.isMoved(i)) bikes.set(String(i), { rider: s.bikes.rider[i] ?? -1, ...b });
+      if (s.bikes.rider[i] === null && !s.bikes.isMoved(i)) return;
+      const prev = this.lastBikes.get(String(i));
+      const at = !prev || (s.bikes.rider[i] === null && !rolling.has(i)) ? b : prev;
+      bikes.set(String(i), { rider: s.bikes.rider[i] ?? -1, x: at.x, y: at.y, z: at.z, heading: at.heading });
     });
+    this.lastBikes = bikes;
     return { players, cars, bikes, lamps };
   }
 }
@@ -403,6 +409,53 @@ describe('OnlineSession bikes', () => {
     expect(p95(frames.map((f) => f.predErrorM))).toBeLessThan(0.2);
     const p = client.player(ME).pos;
     expect(Math.hypot(p.x + 60, p.z + 80)).toBeGreaterThan(5);
+  }, 60_000);
+
+  test('getting off a moved bike: it stays where it was left (the stale slow-state pose is not placed)', async () => {
+    const { net, session, client, server } = await setup(openLawnBike(), { x: -59, z: -80 }, 75);
+    const rnd = prng(14);
+    play(net, session, 500, () => N, rnd);
+    play(net, session, 100, () => ({ ...N, use: true }), rnd);
+    expect(client.player(ME).mode).toBe('ride');
+    play(net, session, 3000, () => ({ ...N, forward: 1, yaw: 0 }), rnd);
+    // brake (back-pedal) until it stops, without pushing it backwards
+    play(net, session, 3000, () => ({ ...N, forward: (client.player(ME).bike?.speed ?? 0) > 0.1 ? -1 : 0, yaw: 0 }), rnd);
+    expect(Math.abs(client.player(ME).bike!.speed)).toBeLessThan(0.5);
+    const left = { ...client.player(ME).bike! }, home = { x: -60, z: -80 };
+    expect(Math.hypot(left.x - home.x, left.z - home.z)).toBeGreaterThan(5);
+    play(net, session, 1, () => ({ ...N, use: true }), rnd); // one frame: a second pulse would get back on
+    let worst = 0;
+    play(net, session, 3000, () => N, rnd, () => {
+      const b = client.bikes.poses[0]!;
+      worst = Math.max(worst, Math.hypot(b.x - left.x, b.z - left.z));
+      return false;
+    });
+    expect(client.player(ME).mode).toBe('walk');
+    expect(server.player(ME).mode).toBe('walk');
+    expect(worst).toBeLessThan(1);
+    const c = client.bikes.poses[0]!, sv = server.bikes.poses[0]!;
+    expect(Math.hypot(c.x - sv.x, c.z - sv.z)).toBeLessThan(0.05);
+  }, 60_000);
+
+  test('jumping off a moving bike: it rolls on and never snaps back to where it was mounted', async () => {
+    const { net, session, client, server } = await setup(openLawnBike(), { x: -59, z: -80 }, 75);
+    const rnd = prng(15);
+    play(net, session, 500, () => N, rnd);
+    play(net, session, 100, () => ({ ...N, use: true }), rnd);
+    play(net, session, 3000, () => ({ ...N, forward: 1, yaw: 0 }), rnd);
+    expect(client.player(ME).bike!.speed).toBeGreaterThan(4);
+    play(net, session, 1, () => ({ ...N, use: true }), rnd);
+    let nearest = Infinity;
+    play(net, session, 4000, () => N, rnd, () => {
+      const b = client.bikes.poses[0]!;
+      nearest = Math.min(nearest, Math.hypot(b.x + 60, b.z + 80));
+      return false;
+    });
+    expect(server.player(ME).mode).toBe('walk');
+    expect(server.bikes.awake()).toEqual([]);
+    expect(nearest).toBeGreaterThan(5);
+    const c = client.bikes.poses[0]!, sv = server.bikes.poses[0]!;
+    expect(Math.hypot(c.x - sv.x, c.z - sv.z)).toBeLessThan(0.05);
   }, 60_000);
 
   test('denied mount is rolled back', async () => {
