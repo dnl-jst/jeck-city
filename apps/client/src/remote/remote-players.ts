@@ -225,7 +225,7 @@ export class RemotePlayers {
   /** Back into the pool: hidden, standing, in the scene again (off a rig). */
   private freeFigure(f: Figure): void {
     f.fig.visible = false;
-    f.fig.setDown(0);
+    f.fig.reset();
     if (f.fig.group.parent !== this.scene) this.scene.add(f.fig.group);
     this.freeFigures.push({ fig: f.fig, model: f.model });
   }

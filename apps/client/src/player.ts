@@ -595,6 +595,15 @@ export class PlayerFigure {
     this.hands.forEach((h) => h.quaternion.identity());
   }
 
+  /** Standing at once: no fall in progress, not knocked down (a pooled figure handed to another player). */
+  reset(): void {
+    this.fallT = -1;
+    this.upAt = Infinity;
+    this.down = this.downTarget = 0;
+    this.body.rotation.set(0, 0, 0);
+    this.body.position.set(0, 0, 0);
+  }
+
   /** Starts getting up now (if lying). */
   getUp(): void {
     if (this.fallT >= 0) this.upAt = Math.min(this.upAt, this.fallT);

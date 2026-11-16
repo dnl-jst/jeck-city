@@ -165,4 +165,19 @@ describe('RemotePlayers', () => {
     for (let k = 0; k < 30; k++) frame([walker(2, 4, 3)]);
     expect(tilt()).toBeGreaterThan(1);
   });
+
+  test('a pooled figure is reused standing: no fall or knock-down carried over from its last player', () => {
+    const { frame, scene } = setup();
+    const figs = () => scene.children.filter((c) => c.type === 'Group' && c.visible);
+    const tilt = () => { let m = 0; figs()[0]!.traverse((o) => { m = Math.max(m, Math.abs(o.rotation.x)); }); return m; };
+    // thrown off a bike (falling) and knocked down: lying when the player leaves
+    for (let k = 0; k < 30; k++) frame([walker(2, 4, k < 10 ? 3 : 2)]);
+    expect(tilt()).toBeGreaterThan(1);
+    frame([]);
+    expect(figs()).toHaveLength(0);
+    // the next player gets the same figure, upright from its first frame
+    frame([walker(5, 8, 0)]);
+    expect(figs()).toHaveLength(1);
+    expect(tilt()).toBeLessThan(0.5);
+  });
 });
