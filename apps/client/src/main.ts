@@ -25,6 +25,7 @@ import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
 import { GameAudio } from './audio/game-audio';
+import { RemoteAudio } from './audio/remote-audio';
 import { RadioWheel } from './radio-wheel';
 import { MapGrid } from './map/grid';
 import { StreetTracker } from './map/street';
@@ -51,6 +52,8 @@ declare global {
     __nnConn?: () => Connection | null;
     /** Online, dev/debug: the other players as sampled for the current frame (walkers, cars, riders). */
     __nnRemote?: () => unknown;
+    /** Online, dev/debug: remote car sound voices (engines, horns, the remote radio's station, engine fade levels by car). */
+    __nnRemoteAudio?: () => { engines: number; horns: number; radio: StationId | null; levels: [number, number][] };
     /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
     __nnWheelNudge?: (dx: number, dy: number) => void;
   }
@@ -123,7 +126,9 @@ const radio = new Radio(() => new Audio(), {
   onPlaying: () => gameAudio.radioEvents.onPlaying(),
   onUnreachable: () => gameAudio.radioEvents.onUnreachable(),
 });
-const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t) });
+// the other players' cars: a second stream element per remote radio, routed through Web Audio (the own radio stays plain)
+const remoteAudio = new RemoteAudio(mixer, () => new Audio());
+const gameAudio = new GameAudio({ mixer, radio, tuner: new RadioTuner(), flash: (t) => hud.flash(t), remote: remoteAudio });
 const radioWheel = new RadioWheel(document.body);
 gameAudio.load().catch(console.error);
 // no `once`: a later rejected play()/resume() is retried on the next gesture (unlock is idempotent)
@@ -352,6 +357,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   if (import.meta.env.DEV || debug) window.__nnConn = () => connection;
   if (import.meta.env.DEV || debug) window.__nnRemote = () => session.remote?.();
+  if (import.meta.env.DEV || debug) window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

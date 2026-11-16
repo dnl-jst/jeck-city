@@ -18,6 +18,7 @@ import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
+import { RemoteCarFeed } from './audio/remote-audio';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -95,6 +96,8 @@ export class Game {
   private readonly qc = new Quaternion();
   /** Other players' character templates by variant: loaded, being loaded, or failed (null). */
   private readonly figureTemplates = new Map<CharacterVariant, Object3D | null | 'loading'>();
+  /** Remote cars for the sound (accel estimated from their speed). */
+  private readonly carFeed = new RemoteCarFeed();
 
   constructor(readonly session: Session, m: WorldManifest, private readonly ctx: GameContext) {
     const { scene, camera, input, devCam } = ctx;
@@ -245,6 +248,8 @@ export class Game {
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
     const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw, horn: honk, bell };
+    // online, a server correction can put the ignition straight to 'running' without the event: the state counts too
+    if (this.mode === 'drive' && this.engine === 'running') audio?.engineRunning();
     let radio: StationId | null | undefined;
     if (this.mode === 'drive' && audio && audio.station !== this.sentRadio) radio = this.sentRadio = audio.station;
     this.handle(this.session.frame(dt, cmd, radio));
@@ -322,6 +327,9 @@ export class Game {
     const me = this.session.me;
     for (const e of events) {
       if (e.t === 'lamp') this.fallen.push(e.i);
+      else if (e.t === 'bell') { if (e.id !== me) audio?.bellAt(e.x, e.z); }
+      else if (e.t === 'impact') audio?.impactAt(e.x, e.z, e.strength);
+      else if (e.t === 'knock') this.knockSound(e.id);
       else if (e.t === 'enter' && e.id === me) this.enteredCar(e.car);
       else if (e.t === 'exit' && e.id === me) this.leftCar(e.car);
       else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
@@ -336,6 +344,20 @@ export class Game {
         else audio?.engineRunning();
       }
     }
+  }
+
+  /** The sound of a person knocked down, where they are (the own player, or a remote walker or rider). */
+  private knockSound(id: number): void {
+    const audio = this.ctx.audio;
+    if (!audio) return;
+    if (id === this.session.me) {
+      const f = this.focus();
+      audio.knockAt(f.x, f.z);
+      return;
+    }
+    const r = this.session.remote?.();
+    const at = r?.walkers.get(`p${id}`) ?? r?.riders.get(`r${id}`);
+    if (at) audio.knockAt(at.x, at.z);
   }
 
   private enteredCar(car: number): void {
@@ -474,6 +496,7 @@ export class Game {
       const { walkers, cars, riders } = this.session.remote!();
       const { names, variants, cars: info } = this.session.roster!();
       this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants);
+      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt), dt);
 
     }
     if (audio) {

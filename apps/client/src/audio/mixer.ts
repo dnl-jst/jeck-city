@@ -1,5 +1,6 @@
 import { synthBell, synthTick } from './bike-sound';
 import { synthHorn } from './horn';
+import { REMOTE_RADIO_LOWPASS_HZ } from '@nn/shared';
 import { SOUNDS, type FileSoundId, type SoundId, type SynthSoundId } from './sounds';
 
 /** All mix levels in one place; callers multiply their voice gains by these. */
@@ -31,6 +32,18 @@ export interface LoopVoice {
   stop(): void;
 }
 
+/** A loop placed in the world (HRTF panner, inverse distance falloff). */
+export interface PositionalLoopVoice extends LoopVoice {
+  setPosition(x: number, z: number): void;
+}
+
+/** A radio stream element routed through Web Audio: lowpass, panner, gain. */
+export interface StreamOut {
+  setPosition(x: number, z: number): void;
+  setGain(g: number): void;
+  close(): void;
+}
+
 /** Time constant for parameter ramps (avoids clicks). */
 const RAMP = 0.03;
 /** In-car / outside transition: ramp over ~0.3 s. */
@@ -42,6 +55,19 @@ export interface ShotVoice {
 }
 
 const SILENT: LoopVoice = { setGain() {}, setRate() {}, stop() {} };
+const SILENT_AT: PositionalLoopVoice = { ...SILENT, setPosition() {} };
+
+function newPanner(ctx: AudioContext): PannerNode {
+  return new PannerNode(ctx, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 5, positionY: 0 });
+}
+
+/** Moves a panner to (x, 0, z); Firefox-style fallback where the AudioParams are missing. */
+function movePanner(p: PannerNode, x: number, z: number, t: number): void {
+  if (p.positionX) {
+    p.positionX.setTargetAtTime(x, t, RAMP);
+    p.positionZ.setTargetAtTime(z, t, RAMP);
+  } else p.setPosition(x, 0, z);
+}
 
 /**
  * Web Audio mixer for the game's recordings (never the radio — that stays on an HTMLAudioElement).
@@ -229,6 +255,79 @@ export class AudioMixer {
         gain.gain.setTargetAtTime(0, t, RAMP);
         src.stop(t + RAMP * 5);
         src.onended = () => gain.disconnect();
+      },
+    };
+  }
+
+  /** Like loop() on the sfx bus, but placed in the world at (x, z) (set it with setPosition). */
+  loopAt(id: SoundId): PositionalLoopVoice {
+    const ctx = this.ctx;
+    const buffer = this.buffers.get(id);
+    if (!ctx || !this.sfx || !buffer) return SILENT_AT;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = true;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const panner = newPanner(ctx);
+    src.connect(gain);
+    gain.connect(panner);
+    panner.connect(this.sfx);
+    src.start();
+    let stopped = false;
+    return {
+      setGain(g) {
+        if (!stopped) gain.gain.setTargetAtTime(g, ctx.currentTime, RAMP);
+      },
+      setRate(r) {
+        if (!stopped) src.playbackRate.setTargetAtTime(r, ctx.currentTime, RAMP);
+      },
+      setPosition(x, z) {
+        if (!stopped) movePanner(panner, x, z, ctx.currentTime);
+      },
+      stop() {
+        if (stopped) return;
+        stopped = true;
+        const t = ctx.currentTime;
+        gain.gain.setTargetAtTime(0, t, RAMP);
+        src.stop(t + RAMP * 5);
+        src.onended = () => {
+          gain.disconnect();
+          panner.disconnect();
+        };
+      },
+    };
+  }
+
+  /**
+   * Routes a stream element (crossOrigin 'anonymous') through lowpass, panner and gain on the sfx bus. Null before
+   * unlock. A stream the browser refuses for CORS reasons plays silence here, never unfiltered.
+   */
+  attachStream(el: HTMLMediaElement): StreamOut | null {
+    const ctx = this.ctx;
+    if (!ctx || !this.sfx) return null;
+    let src: MediaElementAudioSourceNode;
+    try {
+      src = ctx.createMediaElementSource(el);
+    } catch {
+      return null;
+    }
+    const lowpass = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: REMOTE_RADIO_LOWPASS_HZ });
+    const panner = newPanner(ctx);
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    src.connect(lowpass);
+    lowpass.connect(panner);
+    panner.connect(gain);
+    gain.connect(this.sfx);
+    return {
+      setPosition: (x, z) => movePanner(panner, x, z, ctx.currentTime),
+      setGain: (g) => gain.gain.setTargetAtTime(g, ctx.currentTime, RAMP),
+      close() {
+        src.disconnect();
+        lowpass.disconnect();
+        panner.disconnect();
+        gain.disconnect();
       },
     };
   }

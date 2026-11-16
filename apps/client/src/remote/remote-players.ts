@@ -1,7 +1,7 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
   BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
-  type SnapshotRider, type SnapshotWalker,
+  type SnapshotRider, type SnapshotWalker, type StationId,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
@@ -37,7 +37,11 @@ export interface CarView {
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
-export type RemoteCarInfo = { driver: number; level: 0 | 0.5 | 1 };
+export type RemoteCarInfo = {
+  driver: number; level: 0 | 0.5 | 1;
+  /** Ignition state and the radio station of the car (sound only; absent: off, none). */
+  engine?: 'off' | 'starting' | 'running'; radio?: StationId | null;
+};
 
 export type RemoteSampleIn = {
   walkers: ReadonlyMap<string, SnapshotWalker>; cars: ReadonlyMap<string, SnapshotCar>; riders?: ReadonlyMap<string, SnapshotRider>;

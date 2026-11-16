@@ -1,5 +1,5 @@
 import {
-  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, TICK_HZ, TUNING,
+  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, STATION_IDS, TICK_HZ, TUNING,
   type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PropPose, type SimEvent,
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
   type WorldSim,
@@ -110,7 +110,10 @@ export class OnlineSession implements Session {
   private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
   /** Resting bike poses from the slow state last put into the prediction world, by bike ("x,y,z,heading"). */
   private readonly bikeRest = new Map<number, string>();
-  /** Other riders' bells from the snapshots since the last frame (as `bell` events, id = slot). */
+  /** The station the own car should play (undefined: none chosen in this car) and seconds since it was last sent. */
+  private radioWant: StationId | null | undefined = undefined;
+  private radioAge = 0;
+  /** Other riders' bells and the server's knocks and impacts from the snapshots since the last frame (as `bell` events, id = slot). */
   private bells: SimEvent[] = [];
   private readonly offset: RenderOffset = { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 };
   /** Lamps down in the prediction world → the step the server last reported them fallen (or they fell locally). */
@@ -153,6 +156,24 @@ export class OnlineSession implements Session {
     return this.sample;
   }
 
+  /**
+   * The radio message can reach the server before the (queued) input that gets the player into the car: then it is
+   * dropped there. While driving, resend the wanted station until the slow state shows it.
+   */
+  private resyncRadio(dt: number): void {
+    let mine: string | null = null;
+    this.link.state.cars.forEach((c) => { if (c.driver === this.me) mine = c.radio; });
+    if (mine === null) {
+      this.radioWant = undefined;
+      return;
+    }
+    if (this.radioWant === undefined || (mine || null) === this.radioWant) return;
+    this.radioAge += dt;
+    if (this.radioAge < 0.5) return;
+    this.radioAge = 0;
+    this.link.sendRadio(this.radioWant);
+  }
+
   /** Names and car occupancy from the slow state, as of this frame. */
   roster(): Roster {
     return this.rosterNow;
@@ -186,7 +207,10 @@ export class OnlineSession implements Session {
     if (radioCmd !== undefined) {
       this.sim.setRadio(this.me, radioCmd);
       this.link.sendRadio(radioCmd);
+      this.radioWant = radioCmd;
+      this.radioAge = 0;
     }
+    this.resyncRadio(dt);
     this.updateRemote(ev);
     ev.push(...this.bells);
     this.bells = [];
@@ -200,7 +224,8 @@ export class OnlineSession implements Session {
       this.use = this.jump = this.bell = false;
       const seq = ++this.seq;
       for (const e of this.sim.step(new Map([[this.me, i]]))) {
-        ev.push(e);
+        // knocks and impacts come from the server's snapshots (the prediction would sound them a second time)
+        if (e.t !== 'knock' && e.t !== 'impact') ev.push(e);
         if (e.t === 'enter' && e.id === this.me) this.enterSeq = seq;
         else if (e.t === 'mount' && e.id === this.me) this.mountSeq = seq;
         else if (e.t === 'lamp') this.lampSeen.set(e.i, this.steps);
@@ -245,6 +270,8 @@ export class OnlineSession implements Session {
       for (const e of s.events) {
         if (e.t === 'lamp' && this.lampSeen.has(e.i)) this.lampSeen.set(e.i, this.steps);
         else if (e.t === 'bell' && e.slot !== this.me) this.bells.push({ t: 'bell', id: e.slot, x: e.x, z: e.z });
+        else if (e.t === 'impact') this.bells.push({ t: 'impact', x: e.x, z: e.z, strength: e.strength });
+        else if (e.t === 'knock') this.bells.push({ t: 'knock', id: e.slot, by: -1 });
       }
     }
     return this.reconcile(snaps[snaps.length - 1]!, ev);
@@ -348,7 +375,11 @@ export class OnlineSession implements Session {
     });
     state.cars.forEach((c, key) => {
       if (c.driver < 0) return;
-      info.set(Number(key), { driver: c.driver, level: !c.lights ? 0 : c.engine === 2 ? 1 : 0.5 });
+      info.set(Number(key), {
+        driver: c.driver, level: !c.lights ? 0 : c.engine === 2 ? 1 : 0.5,
+        engine: c.engine === 2 ? 'running' : c.engine === 1 ? 'starting' : 'off',
+        radio: STATION_IDS.includes(c.radio as StationId) ? (c.radio as StationId) : null,
+      });
       if (c.driver !== this.me) drivers.set(Number(key), c.driver);
     });
     this.sim.setRemoteDrivers(drivers);
