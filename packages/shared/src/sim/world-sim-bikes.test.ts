@@ -169,6 +169,15 @@ test('a moved bike goes home after RESET_AFTER_S without riders, only with nobod
   expect(sim.bikes.poses[0]).toMatchObject({ x: -6, z: -30, heading: 0 });
 }, 30_000);
 
+test('bell held every tick yields at most one event per 15 ticks', async () => {
+  const sim = await riderAndDriver();
+  const ticks: number[] = [];
+  for (let t = 0; t < 120; t++) {
+    if (sim.step(new Map([[1, { ...N, bell: true }], [2, N]])).some((e) => e.t === 'bell')) ticks.push(t);
+  }
+  expect(ticks).toEqual([0, 15, 30, 45, 60, 75, 90, 105]);
+}, 30_000);
+
 test('bell rings as a positional event while riding; the horn shows on the car while held', async () => {
   const sim = await riderAndDriver();
   const ev = sim.step(new Map([[1, { ...N, bell: true }], [2, { ...N, horn: true }]]));

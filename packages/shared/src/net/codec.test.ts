@@ -116,6 +116,20 @@ describe('snapshot', () => {
     ]);
   });
 
+  it('encodeSnapshot with 300 events round-trips (truncated to 255)', () => {
+    const s = makeSnapshot(2, 1, 0, false, 1, 1);
+    s.events = Array.from({ length: 300 }, (_, i) => ({ t: 'bell' as const, slot: i % 100, x: i, z: -i }));
+    const d = decodeSnapshot(encodeSnapshot(s))!;
+    expect(d).not.toBeNull();
+    expect(d.events).toHaveLength(255);
+    expect(d.events[254]).toEqual({ t: 'bell', slot: 54, x: 254, z: -254 });
+    expect(d.walkers).toHaveLength(2);
+    // walkers and riders (u8 counts) are cut the same way
+    const many = makeSnapshot(300, 0, 0, false, 300, 0);
+    const m = decodeSnapshot(encodeSnapshot(many))!;
+    expect([m.walkers.length, m.riders.length]).toEqual([255, 255]);
+  });
+
   it('own riding state round-trips', () => {
     const s = makeSnapshot(0, 0, 0, false);
     s.own = {

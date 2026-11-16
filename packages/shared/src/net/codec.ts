@@ -194,7 +194,16 @@ const writePose = (w: Writer, x: number, y: number, z: number, q: { x: number; y
 };
 
 
-export function encodeSnapshot(s: Snapshot): Uint8Array {
+/**
+ * Entity and event counts are u8 (walkers, riders, events) or u16 (cars, bikes, lamps) on the wire: longer lists are
+ * cut to that bound, so the counts always match what follows.
+ */
+export function encodeSnapshot(full: Snapshot): Uint8Array {
+  const s: Snapshot = {
+    ...full,
+    walkers: full.walkers.slice(0, 255), riders: full.riders.slice(0, 255), events: full.events.slice(0, 255),
+    cars: full.cars.slice(0, 65535), bikes: full.bikes.slice(0, 65535), lamps: full.lamps.slice(0, 65535),
+  };
   const own = s.own;
   const size =
     SNAP_HEADER + OWN_BASE + (own.car ? 4 * CAR_FIELDS.length : 0) + (own.bike ? 8 * BIKE_FIELDS.length : 0) +

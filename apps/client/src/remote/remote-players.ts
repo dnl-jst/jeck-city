@@ -1,6 +1,6 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
-  BIKE_SPECS, bikeLean, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
@@ -12,8 +12,8 @@ import { LABEL_GAP, NameLabel, type Label } from './name-label';
 const FIGURE_H = 1.8;
 /** A rider's head above the ground (m; seated a little higher than standing). */
 const RIDER_H = 1.9;
-/** Crank turns per metre ridden (wheel 0.35 m, gear 2.5, as the sim's bike). */
-const CRANK_PER_M = 1 / (0.35 * 2.5);
+/** Crank angle (rad) per metre ridden, as the sim's bike. */
+const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 /** Roof of a car above the road (m). */
 const ROOF_H = 1.5;
 /** A walker that moved further than this in one frame was teleported: no running animation for it. */

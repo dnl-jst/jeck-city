@@ -79,6 +79,8 @@ type Player = {
   fallTicks: number;
   /** Riding with the pedal input forward (the remote rig turns the crank). */
   pedalling: boolean;
+  /** Tick of the last bell rung (BELL_EVERY ticks apart at most: a held bell bit must not flood the snapshots). */
+  bellTick: number;
 };
 
 /** Ticks between two car proximity updates (0.5 s, as in single player). */
@@ -96,6 +98,8 @@ const FALL_TICKS = Math.round(TUNING.bike.getUpSeconds * TICK_HZ);
 /** The facing turns towards the walking direction at this rate (1/s; as the rendered figure) above FACE_MIN_SPEED (m/s). */
 const FACE_RATE = 12;
 const FACE_MIN_SPEED = 0.2;
+/** A rider's bell rings at most once per this many ticks (0.25 s). */
+const BELL_EVERY = 15;
 
 /**
  * The shared simulation: physics world, street props, the car pool and the players, advanced one fixed tick
@@ -159,7 +163,7 @@ export class WorldSim {
     const char = new Character(this.pw, { x: p.x, y: p.y + DROP, z: p.z });
     this.list.set(id, {
       char, car: null, yaw: manifest.spawn.heading, use: false, jump: false, bike: null, ridden: null, facing: manifest.spawn.heading, fallTicks: 0,
-      pedalling: false,
+      pedalling: false, bellTick: -Infinity,
     });
   }
 
@@ -448,7 +452,8 @@ export class WorldSim {
     } else if (pl.bike !== null) {
       const r = pl.ridden!.applyInput({ pedal: input.forward, steer: input.right, sprint: input.run, hop: jump });
       pl.pedalling = input.forward > 0;
-      if (input.bell) {
+      if (input.bell && this.tick - pl.bellTick >= BELL_EVERY) {
+        pl.bellTick = this.tick;
         const s = pl.ridden!.state();
         ev.push({ t: 'bell', id, x: s.x, z: s.z });
       }

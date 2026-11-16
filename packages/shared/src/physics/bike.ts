@@ -21,9 +21,9 @@ const KMH = 1 / 3.6;
 const G = 9.81;
 /** The front wheel angle eases towards the requested one with this time constant (s): steering builds up gently. */
 const STEER_TAU = 0.25;
-/** Pedal revolutions per wheel revolution are 1/GEAR; with a 0.35 m wheel. */
-const GEAR = 2.5;
-const WHEEL_R = 0.35;
+/** Pedal revolutions per wheel revolution are 1/BIKE_GEAR; with a BIKE_WHEEL_RADIUS m wheel (crank animation). */
+export const BIKE_GEAR = 2.5;
+export const BIKE_WHEEL_RADIUS = 0.35;
 
 /** Half width of the bike's frame collider for a type (wide trikes get a wider one). */
 export function bikeColliderRadius(spec: BikeSpec): number {
@@ -193,7 +193,7 @@ export class RiddenBike {
     s.x += m.x;
     s.y += m.y;
     s.z += m.z;
-    if (pedal > 0 && s.speed > 0) s.crank += (s.speed / WHEEL_R / GEAR) * DT;
+    if (pedal > 0 && s.speed > 0) s.crank += (s.speed / BIKE_WHEEL_RADIUS / BIKE_GEAR) * DT;
     this.body.setNextKinematicTranslation({ x: s.x, y: s.y + this.centre, z: s.z });
     this.body.setNextKinematicRotation(q);
     return { crashed, landed: !wasGrounded && s.grounded };

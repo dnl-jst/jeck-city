@@ -179,14 +179,9 @@ export class ParkedBikes {
   /** A followed bike the server no longer streams: dynamic again, at rest on `pose` (where the server says it stands). */
   release(id: number, pose: BikePose): void {
     if (!this.followed.delete(id)) return;
-    this.poses[id] = { ...pose };
     const b = this.bodies.get(id)!;
     b.setBodyType(this.pw.rapier.RigidBodyType.Dynamic, false);
-    b.setTranslation({ x: pose.x, y: pose.y + BOX_HALF_Y + 0.005, z: pose.z }, false);
-    b.setRotation(yawQuat(pose.heading), false);
-    b.setLinvel({ x: 0, y: 0, z: 0 }, false);
-    b.setAngvel({ x: 0, y: 0, z: 0 }, false);
-    b.sleep();
+    this.rest(id, pose);
   }
 
   /**
@@ -194,7 +189,11 @@ export class ParkedBikes {
    * stands). No-op while ridden or followed.
    */
   place(id: number, pose: BikePose): void {
-    if (this.rider[id] !== null || this.followed.has(id)) return;
+    if (this.rider[id] === null && !this.followed.has(id)) this.rest(id, pose);
+  }
+
+  /** Bike `id` on `pose`, its body (if any) there at rest and asleep. */
+  private rest(id: number, pose: BikePose): void {
     this.poses[id] = { ...pose };
     const b = this.bodies.get(id);
     if (!b) return;
