@@ -8,14 +8,17 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "dev": "npm run dev -w @nn/client",
-    "build": "npm run build -w @nn/client",
-    "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared && tsc --noEmit -p packages/pipeline",
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run build -w @nn/client && node scripts/precompress.mjs",
+    "start": "npm start -w @nn/server",
+    "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared && tsc --noEmit -p packages/pipeline && tsc --noEmit -p apps/server",
     "pipeline": "tsx packages/pipeline/src/main.ts",
     "screenshot": "node scripts/screenshot.mjs",
     "drive-check": "node scripts/drive-check.mjs",
     "accept": "node scripts/accept.mjs",
-    "ride-check": "node scripts/ride-check.mjs"
+    "ride-check": "node scripts/ride-check.mjs",
+    "mp-check": "node scripts/mp-check.mjs",
+    "loadtest": "tsx apps/server/src/bots/loadtest.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

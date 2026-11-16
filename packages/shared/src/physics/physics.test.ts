@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
@@ -75,6 +75,27 @@ describe('rapier', () => {
     const hit = pw.world.castRay(new R.Ray({ x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 }), 2, true, undefined, undefined, undefined, undefined, staticWorldFilter());
     expect(hit).not.toBeNull();
     expect(hit!.timeOfImpact).toBeCloseTo(1, 3);
+  });
+
+  test('a step does not rescan every body and collider handle (rapier.js soft-body remap), and the wrappers stay valid', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const R = pw.rapier, w = pw.world;
+    const scans = vi.spyOn(w.colliders, 'unmapRemovedColliders');
+    const box = w.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(0, 2, 0));
+    const c = w.createCollider(R.ColliderDesc.cuboid(0.5, 0.5, 0.5), box);
+    const free = w.createCollider(R.ColliderDesc.ball(0.2).setTranslation(3, 0.2, 3));
+    for (let i = 0; i < 60; i++) pw.step();
+    expect(scans).not.toHaveBeenCalled();
+    expect(box.translation().y).toBeCloseTo(0.5, 1);
+    expect(w.getCollider(c.handle)).toBe(c);
+    expect(w.getRigidBody(box.handle)).toBe(box);
+    w.removeCollider(free, false);
+    pw.step();
+    expect(w.getCollider(free.handle)).toBeFalsy();
+    w.removeRigidBody(box);
+    pw.step();
+    expect(w.getRigidBody(box.handle)).toBeFalsy();
+    expect(w.getCollider(c.handle)).toBeFalsy();
   });
 });
 
@@ -532,3 +553,108 @@ test.skipIf(!haveReal)(
   },
   15_000,
 );
+
+describe('multiplayer physics', () => {
+  test('car passes a standing character without stopping', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const ch = new Character(pw, { x: 0, y: 0, z: 22 });
+    const car = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    car.setOccupied(true);
+    for (let t = 0; t < 600 && car.pose().z < 18; t++) {
+      car.applyInput({ throttle: car.speed() * KMH < 30 ? 1 : 0, steer: 0, brake: false });
+      ch.applyInput(idle);
+      pw.step();
+    }
+    expect(car.speed() * KMH).toBeGreaterThan(27); // up to speed before the hit
+    runCar(pw, car, { throttle: 0.4, steer: 0, brake: false }, 1, () => ch.applyInput(idle));
+    expect(car.pose().z).toBeGreaterThan(26); // went through the spot where the person stood
+    expect(car.speed() * KMH).toBeGreaterThanOrEqual(25);
+  });
+
+  test('character cannot walk through a parked car', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    runCar(pw, car, { throttle: 0, steer: 0, brake: false }, 0.3);
+    expect(car.chassis.isSleeping()).toBe(true);
+    const ch = new Character(pw, { x: -4, y: 0, z: 0 });
+    runChar(pw, ch, { forward: 1, right: 0, run: false, yaw: Math.PI / 2 }, 3); // east, into the car's side
+    const gap = car.pose().x - ch.position().x;
+    expect(gap).toBeGreaterThanOrEqual(TUNING.vehicle.width / 2 + TUNING.character.radius - 0.05);
+  });
+
+  test('character save/restore round-trips mid-jump', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const ch = new Character(pw, { x: 0, y: 0, z: 0 });
+    runChar(pw, ch, idle, 0.3);
+    const inputs = (k: number): CharacterInput => ({ forward: 1, right: k % 7 < 3 ? 0.5 : -0.3, run: true, yaw: 0.1 * k, jump: k === 0 });
+    for (let k = 0; k < 8; k++) { ch.applyInput(inputs(k)); pw.step(); }
+    expect(ch.isGrounded()).toBe(false);
+    const s = ch.saveState();
+    const play = () => {
+      for (let k = 8; k < 38; k++) { ch.applyInput(inputs(k)); pw.step(); }
+      return { p: ch.position(), s: ch.saveState() };
+    };
+    const a = play();
+    ch.restoreState(s);
+    const b = play();
+    expect(Math.hypot(a.p.x - b.p.x, a.p.y - b.p.y, a.p.z - b.p.z)).toBeLessThan(1e-4);
+    expect(Math.abs(a.s.vy - b.s.vy)).toBeLessThan(1e-4);
+    expect(b.s.grounded).toBe(a.s.grounded);
+  });
+
+  test('knock: down for N ticks, no input effect, then walks again', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const ch = new Character(pw, { x: 0, y: 0, z: 0 });
+    runChar(pw, ch, idle, 0.3);
+    ch.knock({ x: 5, y: 3, z: 0 }, 60);
+    const fwdZ: CharacterInput = { forward: 1, right: 0, run: false, yaw: 0 }; // would walk along +z
+    const z0 = ch.position().z;
+    let airborne = false;
+    for (let k = 0; k < 60; k++) {
+      expect(ch.isDown()).toBe(true);
+      ch.applyInput(fwdZ);
+      pw.step();
+      if (!ch.isGrounded()) airborne = true;
+    }
+    expect(airborne).toBe(true);
+    expect(ch.isDown()).toBe(false);
+    const p = ch.position();
+    expect(Math.abs(p.z - z0)).toBeLessThan(1e-3); // input had no effect
+    expect(p.x).toBeGreaterThan(1); // flew along the knock velocity
+    expect(ch.isGrounded()).toBe(true); // landed
+    runChar(pw, ch, fwdZ, 1);
+    expect(ch.position().z - p.z).toBeGreaterThan(1);
+  });
+
+  test('push moves the character through the controller, not through walls', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const ch = new Character(pw, { x: 9, y: 0, z: 0 });
+    runChar(pw, ch, idle, 0.3);
+    ch.push(2, 0); // the wall face is at x = 10
+    runChar(pw, ch, idle, 0.1);
+    expect(ch.position().x).toBeLessThan(10 - TUNING.character.radius + 0.01);
+    ch.push(0, 0.5);
+    const z = ch.position().z;
+    runChar(pw, ch, idle, 0.1);
+    expect(ch.position().z - z).toBeCloseTo(0.5, 2);
+  });
+
+  test('vehicle save/restore replays within 1 cm', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    car.setOccupied(true);
+    const inp = (k: number): VehicleInput => ({ throttle: 1, steer: Math.sin(k / 20) * 0.6, brake: false });
+    for (let k = 0; k < 120; k++) { car.applyInput(inp(k)); pw.step(); }
+    const s = car.saveState();
+    const play = () => {
+      for (let k = 120; k < 140; k++) { car.applyInput(inp(k)); pw.step(); }
+      return { p: car.pose(), steer: car.steer() };
+    };
+    const a = play();
+    car.restoreState(s);
+    expect(car.steer()).toBe(s.steer);
+    const b = play();
+    expect(Math.hypot(a.p.x - b.p.x, a.p.y - b.p.y, a.p.z - b.p.z)).toBeLessThan(0.01);
+    expect(Math.abs(a.steer - b.steer)).toBeLessThan(1e-4);
+  });
+});

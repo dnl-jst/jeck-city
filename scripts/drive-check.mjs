@@ -1,4 +1,5 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
+// Runs offline (?offline=1: local simulation, no server); further query parameters in baseUrl are kept.
 // Scripted drive in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn (no ?cam), pick the parked car nearest to the spawn (must be within
 // the 2.7 m the pipeline guarantees), press E and check that this car is the one entered, wait for the engine (throttle
 // is dead until it runs), hold W (then W+D), and check that the car moved > 20 m, is not inside a building, stops, and
@@ -19,7 +20,11 @@ const STALL_MS = 10_000;
 const STEPS = { enter: 300, engine: 300, wheel: 300, away12: 900, away30: 1200, stop: 900, exit: 300 };
 
 async function drive(page, time, shot, wheelShot) {
-  await page.goto(`${base}?time=${time}&date=2026-06-15`);
+  const url = new URL(base);
+  url.searchParams.set('offline', '1');
+  url.searchParams.set('time', time);
+  url.searchParams.set('date', '2026-06-15');
+  await page.goto(url.href);
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
   const state = () => page.evaluate(() => window.__nnState());

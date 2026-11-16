@@ -1,48 +1,7 @@
 import { expect, test } from 'vitest';
 import { Quaternion, Vector3 } from 'three';
-import { VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
-import {
-  CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, canGetOut, exitSpot, glareFacing, headingOf, nearestEnterableCar,
-  needsCarRebuild, parkedPose, visibleCars,
-} from './car';
-
-test('nearest free car within 3 m', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, occupied: true }, { id: 2, x: 2.5, z: 0, occupied: false }])).toBe(2);
-});
-test('no car in range', () => expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 5, z: 0, occupied: false }])).toBeNull());
-test('picks the nearest of several free cars', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2.9, z: 0, occupied: false }, { id: 7, x: 0, z: -1.5, occupied: false }])).toBe(7);
-});
-
-// car facing south (+z): its left is east (+x), its right is west (−x), behind is north (−z)
-const car = { x: 10, z: 20, heading: 0 };
-test('exit 1.5 m to the left of the car when free', () => {
-  const p = exitSpot(car, () => true)!;
-  expect(p.x).toBeCloseTo(11.5);
-  expect(p.z).toBeCloseTo(20);
-});
-test('left blocked: exit right; both blocked: behind; all blocked: null', () => {
-  const right = exitSpot(car, (x) => x < 10)!;
-  expect(right.x).toBeCloseTo(8.5);
-  const behind = exitSpot(car, (x, z) => z < 18)!;
-  expect(behind.x).toBeCloseTo(10);
-  expect(behind.z).toBeLessThan(20 - 2.1); // clear of the 4.2 m long body
-  expect(exitSpot(car, () => false)).toBeNull();
-});
-
-test('headingOf inverts the yaw quaternion of a chassis', () => {
-  for (const h of [0, 1, -2.5, 3]) {
-    expect(headingOf({ qx: 0, qy: Math.sin(h / 2), qz: 0, qw: Math.cos(h / 2) })).toBeCloseTo(h);
-  }
-});
-
-test('getting out only below 2 m/s, forwards or reversing', () => {
-  expect(canGetOut(0)).toBe(true);
-  expect(canGetOut(1.9)).toBe(true);
-  expect(canGetOut(-1.9)).toBe(true);
-  expect(canGetOut(2.5)).toBe(false);
-  expect(canGetOut(-3)).toBe(false);
-});
+import { headingOf, parkedPose, terrainNormal, VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
+import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, glareFacing, lampPower, needsCarRebuild, visibleCars } from './car';
 
 test('visibleCars: indices of the cars within the render radius, in manifest order', () => {
   const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: -249 }, { x: 176, z: 176 }, { x: 177, z: 178 }];
@@ -63,6 +22,13 @@ test('visibleCars: physics-active and occupied cars are always drawn, whatever t
   const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: 400 }, { x: 10, z: 0 }];
   expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [2, 1, 3])).toEqual([0, 1, 2, 3]);
   expect(visibleCars(poses, 0, 0, CAR_RENDER_RADIUS, [])).toEqual([0, 3]);
+});
+
+test('lamp power: dark, flickering 0.25–0.6 while cranking (new each call), full once running', () => {
+  expect(lampPower(0, () => 1)).toBe(0);
+  expect(lampPower(0.5, () => 0)).toBeCloseTo(0.25);
+  expect(lampPower(0.5, () => 1)).toBeCloseTo(0.6);
+  expect(lampPower(1, () => 0)).toBe(1);
 });
 
 // headlight low beam: lamps 0.8 m above the road, so the road d m ahead lies at tangent -0.8/d below the axis
@@ -112,4 +78,21 @@ test('parked car rests on terrain and follows its slope', () => {
   expect(headingOf(p)).toBeCloseTo(0, 5);
   // heading kept on a slope
   expect(headingOf(parkedPose(40, 50, 1.2, t))).toBeCloseTo(1.2, 2);
+});
+
+test('parkedPose (@nn/shared, plain math) equals the former Three.js version', () => {
+  const up = new Vector3(0, 1, 0), n = new Vector3(), tilt = new Quaternion(), yaw = new Quaternion();
+  const cols = 101, rows = 101;
+  const heights = new Float32Array(cols * rows);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = 0.07 * c - 0.12 * r + 0.3 * Math.sin(c * 0.2) * Math.cos(r * 0.3);
+  const t: TerrainGrid = { x0: 0, z0: 0, cols, rows, datum: 0, heights };
+  for (const [x, z, h] of [[40, 50, 0], [12.3, 77.7, 1.2], [60.5, 20.25, -2.5], [80, 80, Math.PI]] as const) {
+    const p = parkedPose(x, z, h, t);
+    const tn = terrainNormal(t, x, z);
+    const q = tilt.setFromUnitVectors(up, n.set(tn.x, tn.y, tn.z)).multiply(yaw.setFromAxisAngle(up, h));
+    expect(p.qx).toBeCloseTo(q.x, 12);
+    expect(p.qy).toBeCloseTo(q.y, 12);
+    expect(p.qz).toBeCloseTo(q.z, 12);
+    expect(p.qw).toBeCloseTo(q.w, 12);
+  }
 });

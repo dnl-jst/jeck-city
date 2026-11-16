@@ -70,6 +70,21 @@ describe('fall and get up', () => {
     expect(f.busy).toBe(false);
   });
 
+  test('reset: standing at once, from a fall and from being knocked down', () => {
+    const f = new PlayerFigure(new Scene());
+    const still = { x: 0, y: 0, z: 0 };
+    f.fall(0);
+    f.update(0, 0, 0, still, 0.5);
+    f.reset();
+    expect(f.busy).toBe(false);
+    f.setDown(1);
+    for (let i = 0; i < 120; i++) f.update(0, 0, 0, still, 1 / 60);
+    expect(f.group.rotation.x).toBeCloseTo(-Math.PI / 2, 2);
+    f.reset();
+    f.update(0, 0, 0, still, 1 / 60);
+    expect(f.group.rotation.x).toBeCloseTo(0, 5);
+  });
+
   test('getUp ends a fall early', () => {
     const f = new PlayerFigure(new Scene());
     f.fall(0);

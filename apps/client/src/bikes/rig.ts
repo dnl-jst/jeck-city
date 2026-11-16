@@ -1,5 +1,9 @@
 import { Box3, Color, Group, Mesh, MeshStandardMaterial, Object3D, SpotLight, Vector3, type Material } from 'three';
 import type { BikeState, BikeType } from '@nn/shared';
+import type { Posture } from '../player';
+
+/** Upper-body posture of a rider per bike type. */
+export const RIDER_POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
 
 const DISCO_HUE = new Color();
 
@@ -212,11 +216,11 @@ export class BikeRig {
   }
 }
 
-/** Indices of the bikes within `radius` of (x, z), without `skip` (the ridden one). */
-export function visibleBikes(poses: readonly { x: number; z: number }[], x: number, z: number, radius: number, skip: number | null): number[] {
+/** Indices of the bikes within `radius` of (x, z), without those in `skip` (the ridden ones). */
+export function visibleBikes(poses: readonly { x: number; z: number }[], x: number, z: number, radius: number, skip: ReadonlySet<number>): number[] {
   const out: number[] = [];
   poses.forEach((p, i) => {
-    if (i !== skip && (p.x - x) ** 2 + (p.z - z) ** 2 <= radius * radius) out.push(i);
+    if (!skip.has(i) && (p.x - x) ** 2 + (p.z - z) ** 2 <= radius * radius) out.push(i);
   });
   return out;
 }

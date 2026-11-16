@@ -18,3 +18,17 @@ export function withDateParam(now: Date, s: string | null): Date {
   const out = new Date(y, m, d, now.getHours(), now.getMinutes(), now.getSeconds());
   return out.getFullYear() === y && out.getMonth() === m && out.getDate() === d ? out : now;
 }
+
+export type DevAllowed = { cam: boolean; fly: boolean; writeHooks: boolean };
+
+/**
+ * Which dev hooks apply. Offline: as before (`?cam` always, fly with `?debug=1`, write hooks in a dev build or with `?debug=1`). Online: everything
+ * only when the server runs in dev mode (`?cam` then teleports the player there with `devTeleport`).
+ */
+export function devAllowed(
+  mode: 'offline' | 'online', welcome: { devMode: boolean } | null, debug: boolean, devBuild = false,
+): DevAllowed {
+  if (mode === 'offline') return { cam: true, fly: debug, writeHooks: devBuild || debug };
+  const dev = welcome?.devMode === true;
+  return { cam: dev, fly: dev, writeHooks: dev };
+}

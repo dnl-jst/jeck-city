@@ -27,15 +27,27 @@ export function initRapier(): Promise<void> {
 }
 
 /**
- * Interaction groups (membership << 16 | filter). The city keeps the default (all bits). Street furniture (trees,
- * lamps; see StreetProps) is bit 1, car chassis bit 2, bikes bit 3. A knocked-down lamp no longer collides with car bodies (the
- * chassis would bulldoze it along); the wheel rays still roll over it.
+ * Interaction groups (membership << 16 | filter). Bit layout:
+ *   bit 0       the static city (keeps Rapier's default: member of all bits, collides with all)
+ *   bit 1  0x02 street furniture (trees, lamps, bike rack hoops; see StreetProps, BikeRacks)
+ *   bit 2  0x04 car chassis
+ *   bit 3  0x08 people (walking capsules and their kinematic stand-ins)
+ *   bit 4  0x10 bikes (ridden and parked)
+ * Cars ignore people in the solver (carHitsPeople handles that contact); everything else collides. A knocked-down
+ * lamp only collides with the city and furniture (filter bits 0–1): no car body bulldozes it along, and no bike or
+ * person is stopped by it; the wheel rays still roll over it.
  */
 export const PROP_GROUPS = 0x0002_ffff;
 export const LYING_PROP_GROUPS = 0x0002_0003;
-export const CAR_GROUPS = 0x0004_ffff;
-/** Bikes (ridden and parked): bit 3, collide with everything. */
-export const BIKE_GROUPS = 0x0008_ffff;
+/**
+ * Car chassis: bit 2, ignores bit 3 (people), so a car never gets stopped by a person in the solver; the character
+ * controller query still sees cars (it passes no groups), so a person cannot walk through one.
+ */
+export const CAR_GROUPS = 0x0004_fff7;
+/** People (capsules and their kinematic stand-ins): bit 3, ignore cars (bit 2). */
+export const CHARACTER_GROUPS = 0x0008_fffb;
+/** Bikes (ridden and parked): bit 4, collide with everything. */
+export const BIKE_GROUPS = 0x0010_ffff;
 
 /**
  * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars,
@@ -73,6 +85,7 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   await initRapier();
   const world = new RAPIER.World({ x: 0, y: TUNING.world.gravity, z: 0 });
   world.timestep = TUNING.world.dt;
+  skipSoftBodyRemap(world);
 
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
   const mesh = subdivideLargeTriangles(c.vertices, dropZeroAreaTriangles(c.vertices, c.indices), TUNING.world.maxTriangleEdge);
@@ -98,6 +111,20 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   };
   beforeStep.set(pw, hooks);
   return pw;
+}
+
+/**
+ * rapier.js 0.21 ends every World.step with mapNewSoftBodies(): it walks every rigid-body and collider handle through
+ * wasm→JS callbacks and filters both wrapper maps, to wrap the pieces soft-body tearing creates inside a step. With the
+ * city's ~14k street props that bookkeeping cost ~4 ms per step, while the physics itself took ~0.03 ms. This world
+ * has no soft bodies, so a step never creates or removes a body or collider; createRigidBody/createCollider and the
+ * remove calls keep the wrapper maps up to date themselves. The remap therefore only runs while soft bodies exist.
+ */
+function skipSoftBodyRemap(world: RAPIER.World): void {
+  const remap = world.mapNewSoftBodies.bind(world);
+  world.mapNewSoftBodies = () => {
+    if (world.softBodies.len() > 0) remap();
+  };
 }
 
 /**

@@ -1,0 +1,36 @@
+# Nippes Nights with Caddy (HTTPS via Let's Encrypt) on one server. See README "Mit Docker Compose und Caddy".
+#   cd deploy && cp .env.example .env    # set DOMAIN (and IMAGE/MAX_PLAYERS if needed)
+#   docker compose up -d
+#
+# The game container publishes no port: only Caddy reaches it over the compose network. That matters because the
+# server takes the player's address for its join limit from X-Forwarded-For, which only Caddy may set.
+services:
+  game:
+    image: ${IMAGE:-ghcr.io/dnl-jst/nippes-nights:latest}
+    restart: unless-stopped
+    environment:
+      MAX_PLAYERS: ${MAX_PLAYERS:-60}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    expose:
+      - "2567"
+    stop_grace_period: 10s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - game
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # certificates: keep this volume, or Let's Encrypt rate limits bite on rebuilds
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

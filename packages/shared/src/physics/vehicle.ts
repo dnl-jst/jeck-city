@@ -1,10 +1,16 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { CAR_SPECS, type CarSpec, type CarType } from './cartypes';
 import { TUNING } from './tuning';
-import { CAR_GROUPS, onBeforeStep, staticWorldFilter, type PhysicsWorld } from './world';
+import { CAR_GROUPS, onBeforeStep, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
 export type VehicleInput = { throttle: number; steer: number; brake: boolean };
+
+/** Pose, velocities (linear, angular) and front-wheel steering angle: enough to replay the car from this instant. */
+export type VehicleState = {
+  x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number;
+  vx: number; vy: number; vz: number; ax: number; ay: number; az: number; steer: number;
+};
 
 const T = TUNING.vehicle;
 const KMH = 1 / 3.6;
@@ -13,7 +19,7 @@ export const VEHICLE_REST_Y = -T.wheelY + T.suspensionRest - 9.81 / (4 * T.suspe
 /** Suspension length at rest (the ray length minus the wheel radius, loaded). */
 export const SUSPENSION_REST_LENGTH = T.suspensionRest - 9.81 / (4 * T.suspensionStiffness);
 /** Underside of the chassis collider above the ground (m). */
-const CLEARANCE = 0.22;
+export const CHASSIS_CLEARANCE = 0.22;
 
 /**
  * Chassis layout of a car type in the chassis frame (origin VEHICLE_REST_Y above the ground at the axle midpoint):
@@ -24,8 +30,8 @@ export function chassisLayout(spec: CarSpec): { centre: { x: number; y: number; 
   const y = SUSPENSION_REST_LENGTH + spec.wheelRadius - VEHICLE_REST_Y;
   const x = spec.track / 2, z = spec.wheelbase / 2;
   return {
-    centre: { x: 0, y: (CLEARANCE + spec.height) / 2 - VEHICLE_REST_Y, z: spec.bodyZ },
-    half: { x: spec.width / 2, y: (spec.height - CLEARANCE) / 2, z: spec.length / 2 },
+    centre: { x: 0, y: (CHASSIS_CLEARANCE + spec.height) / 2 - VEHICLE_REST_Y, z: spec.bodyZ },
+    half: { x: spec.width / 2, y: (spec.height - CHASSIS_CLEARANCE) / 2, z: spec.length / 2 },
     // Rapier order (and wheel index): front right, front left, rear right, rear left (+x = left)
     wheels: [{ x: -x, y, z }, { x, y, z }, { x: -x, y, z: -z }, { x, y, z: -z }],
   };
@@ -95,10 +101,13 @@ export class Vehicle {
     }
     this.ctrl = c;
 
-    // Wheel rays hit the city, other cars and street furniture (fallen lamps); never this chassis, characters (kinematic) or sensors.
-    const wheelFilter = staticWorldFilter(true, this.chassis, true);
+    // Wheel rays get no filter predicate: Rapier excludes the chassis itself, and the rays hit everything else. A JS
+    // predicate cannot work here in rapier.js 0.21: update_vehicle holds the collider set, so any Collider method called
+    // from the predicate throws ("recursive use of an object"), and a throwing predicate counts as "hit it". That was
+    // the old staticWorldFilter's fate (same results, bit for bit), at ~0.05 ms per thrown error, 8 per car and step.
     this.unsubscribe = onBeforeStep(pw, () => {
-      if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
+      // a kinematic chassis (a car the server streams, see CarPool.follow) is placed, not driven
+      if (!this.chassis.isSleeping() && this.chassis.isDynamic()) c.updateVehicle(TUNING.world.dt);
     });
   }
 
@@ -143,6 +152,28 @@ export class Vehicle {
     const p = this.chassis.translation();
     const q = this.chassis.rotation();
     return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+  }
+
+  /** Current steering angle of the front wheels (rad, positive turns left). */
+  steer(): number {
+    return this.steerAngle;
+  }
+
+  saveState(): VehicleState {
+    const p = this.chassis.translation(), q = this.chassis.rotation(), v = this.chassis.linvel(), a = this.chassis.angvel();
+    return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w, vx: v.x, vy: v.y, vz: v.z, ax: a.x, ay: a.y, az: a.z, steer: this.steerAngle };
+  }
+
+  /** Puts the car back into a saved state and wakes it. */
+  restoreState(s: VehicleState): void {
+    const b = this.chassis;
+    b.setTranslation({ x: s.x, y: s.y, z: s.z }, true);
+    b.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, true);
+    b.setLinvel({ x: s.vx, y: s.vy, z: s.vz }, true);
+    b.setAngvel({ x: s.ax, y: s.ay, z: s.az }, true);
+    this.steerAngle = s.steer;
+    for (let w = 0; w < 2; w++) this.ctrl.setWheelSteering(w, s.steer);
+    b.wakeUp();
   }
 
   /** Number of wheels whose ray currently touches something (0–4). */

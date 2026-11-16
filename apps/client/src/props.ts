@@ -348,6 +348,20 @@ export class Props {
     this.rebuild(this.loaded);
   }
 
+  /** Lamp i stands again: the dark single mesh goes, the lit instance is back. */
+  standUp(i: number): void {
+    const g = this.fallen.get(i);
+    if (!g) return;
+    this.scene.remove(g);
+    this.fallen.delete(i);
+    this.rebuild(this.loaded);
+  }
+
+  /** Indices of the lamps drawn knocked over. */
+  fallenLamps(): number[] {
+    return [...this.fallen.keys()];
+  }
+
   /** Moves the knocked-down lamps to their physics poses (origin at the foot of the post). */
   syncFallen(pose: (i: number) => PropPose): void {
     for (const [i, g] of this.fallen) {

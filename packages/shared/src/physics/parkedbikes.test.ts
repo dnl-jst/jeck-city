@@ -77,8 +77,8 @@ describe('parked bikes', () => {
     bikes.updatePhysics(0, 10);
     steps(pw, 30, () => bikes.sync());
     bikes.sync();
-    const ridden = bikes.mount(0);
-    expect(bikes.ridden).toBe(0);
+    const ridden = bikes.mount(0, 7);
+    expect(bikes.rider[0]).toBe(7);
     const ground = heightAt(t, 0, 10);
     expect(Math.abs(ridden.state().y - ground)).toBeLessThan(0.05);
     steps(pw, 10, () => ridden.applyInput({ pedal: 0, steer: 0, sprint: false, hop: false }));
@@ -88,10 +88,10 @@ describe('parked bikes', () => {
   test('dismount rolls out', async () => {
     const pw = await createPhysicsWorld(flat());
     const bikes = new ParkedBikes(pw, [bike(0, 0, 0, 0)]);
-    const ridden = bikes.mount(0);
+    const ridden = bikes.mount(0, 7);
     ridden.restore({ ...ridden.state(), speed: 20 * KMH });
     bikes.dismount(0, ridden);
-    expect(bikes.ridden).toBeNull();
+    expect(bikes.rider[0]).toBeNull();
     steps(pw, 600, () => bikes.sync());
     bikes.sync();
     expect(bikes.poses[0]!.z).toBeGreaterThan(2);
@@ -122,8 +122,43 @@ describe('parked bikes', () => {
     const bikes = new ParkedBikes(pw, [bike(0, 0), bike(3, 0)]);
     expect(bikes.nearestMountable({ x: 0.6, z: 0.4 })).toBe(0);
     expect(bikes.nearestMountable({ x: 10, z: 0 })).toBeNull();
-    bikes.mount(0);
+    bikes.mount(0, 7);
     expect(bikes.nearestMountable({ x: 1.2, z: 0 })).toBe(1);
+    expect(bikes.nearestRidden({ x: 1.2, z: 0 })).toBe(0);
+    expect(bikes.nearestRidden({ x: 3.5, z: 0 })).toBeNull();
+  });
+
+  test('several bikes ridden at once, one rider each', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 0), bike(3, 0), bike(6, 0)]);
+    const a = bikes.mount(0, 4);
+    bikes.mount(2, 9);
+    expect(bikes.riddenIds()).toEqual([0, 2]);
+    expect(bikes.rider).toEqual([4, null, 9]);
+    bikes.dismount(0, a);
+    expect(bikes.riddenIds()).toEqual([2]);
+  });
+
+  test('a followed bike is kinematic on the streamed pose, released it rests; reset puts a moved bike home', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 0, 0, 0)]);
+    bikes.updatePhysics(0, 0);
+    expect(bikes.isMoved(0)).toBe(false);
+    for (let k = 1; k <= 10; k++) {
+      bikes.follow(0, { x: 0.1 * k, y: 0, z: 0, heading: 0.05 * k });
+      pw.step();
+    }
+    expect(bikes.following().has(0)).toBe(true);
+    expect(bikes.body(0)!.isKinematic()).toBe(true);
+    expect(bikes.body(0)!.translation().x).toBeCloseTo(1, 3);
+    expect(bikes.awake()).toEqual([]); // followed bikes are not the sim's own moving bikes
+    bikes.release(0, { x: 2, y: 0, z: 0, heading: 0.5 });
+    expect(bikes.body(0)!.isDynamic()).toBe(true);
+    expect(bikes.poses[0]).toEqual({ x: 2, y: 0, z: 0, heading: 0.5 });
+    expect(bikes.isMoved(0)).toBe(true);
+    bikes.reset(0);
+    expect(bikes.isMoved(0)).toBe(false);
+    expect(bikes.body(0)!.translation().x).toBeCloseTo(0, 5);
   });
 });
 

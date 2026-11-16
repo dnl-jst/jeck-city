@@ -14,3 +14,6 @@ export * from './physics/biketypes';
 export * from './physics/cartypes';
 export * from './physics/bike';
 export * from './physics/parkedbikes';
+export * from './physics/surface';
+export * from './net';
+export * from './sim';

@@ -21,9 +21,9 @@ const KMH = 1 / 3.6;
 const G = 9.81;
 /** The front wheel angle eases towards the requested one with this time constant (s): steering builds up gently. */
 const STEER_TAU = 0.25;
-/** Pedal revolutions per wheel revolution are 1/GEAR; with a 0.35 m wheel. */
-const GEAR = 2.5;
-const WHEEL_R = 0.35;
+/** Pedal revolutions per wheel revolution are 1/BIKE_GEAR; with a BIKE_WHEEL_RADIUS m wheel (crank animation). */
+export const BIKE_GEAR = 2.5;
+export const BIKE_WHEEL_RADIUS = 0.35;
 
 /** Half width of the bike's frame collider for a type (wide trikes get a wider one). */
 export function bikeColliderRadius(spec: BikeSpec): number {
@@ -67,6 +67,9 @@ export class RiddenBike {
   private readonly centre = FOOT_R + FOOT_HALF + OFFSET;
   private readonly notMe: (c: RAPIER.Collider) => boolean;
   private s: BikeState;
+  /** Shove (m) waiting for the next step (a slow car pushing the bike). */
+  private pushX = 0;
+  private pushZ = 0;
 
   constructor(private readonly pw: PhysicsWorld, readonly type: BikeType, pose: { x: number; y: number; z: number; heading: number }, speed = 0) {
     const { rapier: R, world } = pw;
@@ -172,7 +175,8 @@ export class RiddenBike {
         dz = uz * toi + sz;
       }
     }
-    const want = { x: dx, y: s.vy * DT, z: dz };
+    const want = { x: dx + this.pushX, y: s.vy * DT, z: dz + this.pushZ };
+    this.pushX = this.pushZ = 0;
     this.kcc.computeColliderMovement(this.foot, want, this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.notMe);
     const m = this.kcc.computedMovement();
     this.s.grounded = this.kcc.computedGrounded() && s.vy <= 0;
@@ -193,7 +197,7 @@ export class RiddenBike {
     s.x += m.x;
     s.y += m.y;
     s.z += m.z;
-    if (pedal > 0 && s.speed > 0) s.crank += (s.speed / WHEEL_R / GEAR) * DT;
+    if (pedal > 0 && s.speed > 0) s.crank += (s.speed / BIKE_WHEEL_RADIUS / BIKE_GEAR) * DT;
     this.body.setNextKinematicTranslation({ x: s.x, y: s.y + this.centre, z: s.z });
     this.body.setNextKinematicRotation(q);
     return { crashed, landed: !wasGrounded && s.grounded };
@@ -218,16 +222,34 @@ export class RiddenBike {
 
   restore(st: BikeState): void {
     this.s = { ...st };
+    this.pushX = this.pushZ = 0;
     this.place();
+  }
+
+  /** The full state (client prediction: what WorldSim.replay starts from); same as state(). */
+  saveState(): BikeState {
+    return this.state();
+  }
+
+  /** Continues from a saved state; same as restore(). */
+  restoreState(st: BikeState): void {
+    this.restore(st);
+  }
+
+  /** Handles of the bike's colliders (wheel capsule and frame box). */
+  colliderHandles(): [number, number] {
+    return [this.foot.handle, this.frame.handle];
+  }
+
+  /** Shoves the bike by (dx, dz) m in the next step (collision-checked like its own movement). */
+  push(dx: number, dz: number): void {
+    this.pushX += dx;
+    this.pushZ += dz;
   }
 
   /** Visual lean (rad, + = to the right) from speed and steering, limited to the type's maxLeanDeg. */
   lean(): number {
-    const max = (this.spec.maxLeanDeg * Math.PI) / 180;
-    if (max === 0) return 0;
-    const curv = Math.tan(this.s.steer) / this.spec.wheelbase;
-    const a = Math.atan((this.s.speed * this.s.speed * curv) / G);
-    return Math.max(-max, Math.min(max, a));
+    return bikeLean(this.spec, this.s.speed, this.s.steer);
   }
 
   /**
@@ -236,23 +258,7 @@ export class RiddenBike {
    * where a wheel finds no ground near the bike's height. Pass the (interpolated) state that is shown.
    */
   groundPose(s: BikeState = this.s): { pitch: number; dy: number } {
-    if (!s.grounded) return { pitch: 0, dy: 0 };
-    const half = this.spec.wheelbase / 2, fx = Math.sin(s.heading), fz = Math.cos(s.heading);
-    const front = this.groundAt(s.x + fx * half, s.y, s.z + fz * half);
-    const rear = this.groundAt(s.x - fx * half, s.y, s.z - fz * half);
-    if (front === null || rear === null) return { pitch: 0, dy: 0 };
-    const pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, Math.atan2(front - rear, this.spec.wheelbase)));
-    const dy = Math.max(-WHEEL_PROBE / 2, Math.min(WHEEL_PROBE / 2, (front + rear) / 2 - s.y));
-    return { pitch, dy };
-  }
-
-  /** Ground height under (x, z) within WHEEL_PROBE of y, or null. */
-  private groundAt(x: number, y: number, z: number): number | null {
-    const { rapier: R, world } = this.pw;
-    const hit = world.castRayAndGetNormal(new R.Ray({ x, y: y + WHEEL_PROBE, z }, { x: 0, y: -1, z: 0 }), 2 * WHEEL_PROBE, true,
-      undefined, undefined, undefined, undefined, this.notMe);
-    if (!hit || hit.normal.y < WALKABLE_NY) return null;
-    return y + WHEEL_PROBE - hit.timeOfImpact;
+    return bikeGroundPose(this.pw, this.spec.wheelbase, s, this.notMe);
   }
 
   /** Removes the bike from the world. The instance must not be used afterwards. */
@@ -270,6 +276,41 @@ export class RiddenBike {
     this.body.setNextKinematicRotation(q);
     this.pw.world.propagateModifiedBodyPositionsToColliders();
   }
+}
+
+/** Visual lean (rad, + = right) of a bike of `spec` at `speed` (m/s) with the front wheel at `steer` (rad). */
+export function bikeLean(spec: BikeSpec, speed: number, steer: number): number {
+  const max = (spec.maxLeanDeg * Math.PI) / 180;
+  if (max === 0) return 0;
+  const curv = Math.tan(steer) / spec.wheelbase;
+  const a = Math.atan((speed * speed * curv) / G);
+  return Math.max(-max, Math.min(max, a));
+}
+
+/**
+ * How a level bike (wheelbase in m) at state `s` is shown on uneven ground: pitch (rad, + = nose up) from the ground
+ * under the front and rear wheel, and dy (m) to lift or lower the model so both wheels touch it. Zero in the air or
+ * where a wheel finds no ground near the bike's height. `filter` picks the colliders that count as ground (the own
+ * ridden bike passes one that skips itself; remote riders, which have no physics bike, use the static world).
+ */
+export function bikeGroundPose(
+  pw: PhysicsWorld, wheelbase: number, s: BikeState, filter?: (c: RAPIER.Collider) => boolean,
+): { pitch: number; dy: number } {
+  if (!s.grounded) return { pitch: 0, dy: 0 };
+  const half = wheelbase / 2, fx = Math.sin(s.heading), fz = Math.cos(s.heading);
+  const groundAt = (x: number, z: number): number | null => {
+    const { rapier: R, world } = pw;
+    const hit = world.castRayAndGetNormal(new R.Ray({ x, y: s.y + WHEEL_PROBE, z }, { x: 0, y: -1, z: 0 }), 2 * WHEEL_PROBE, true,
+      undefined, undefined, undefined, undefined, filter);
+    if (!hit || hit.normal.y < WALKABLE_NY) return null;
+    return s.y + WHEEL_PROBE - hit.timeOfImpact;
+  };
+  const front = groundAt(s.x + fx * half, s.z + fz * half);
+  const rear = groundAt(s.x - fx * half, s.z - fz * half);
+  if (front === null || rear === null) return { pitch: 0, dy: 0 };
+  const pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, Math.atan2(front - rear, wheelbase)));
+  const dy = Math.max(-WHEEL_PROBE / 2, Math.min(WHEEL_PROBE / 2, (front + rear) / 2 - s.y));
+  return { pitch, dy };
 }
 
 function yawQuat(h: number): { x: number; y: number; z: number; w: number } {

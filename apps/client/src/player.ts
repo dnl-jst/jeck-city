@@ -8,6 +8,8 @@ export const angleDelta = (a: number, b: number): number => Math.atan2(Math.sin(
 /** Seconds to tip over and to get up. */
 const FALL = 0.35;
 const GET_UP = 0.5;
+/** Knocked down by a car: seconds to fall over backwards and to get up again (setDown). */
+export const DOWN_IN_S = 0.25, DOWN_OUT_S = 0.3;
 
 export type Posture = 'upright' | 'sport' | 'race';
 /** Upper-body pitch on the bike (rad, forward): Dutch/cargo upright, MTB sport, road race. */
@@ -211,6 +213,9 @@ export class PlayerFigure {
   private fallT = -1;
   private upAt = Infinity;
   private model: SkinnedModel | null = null;
+  /** Knocked down (setDown): target (0 standing … 1 lying) and the smoothed amount. */
+  private downTarget = 0;
+  private down = 0;
 
   constructor(scene: Scene) {
     for (let i = 0; i < 2; i++) {
@@ -387,7 +392,11 @@ export class PlayerFigure {
     // amp: 0 standing … 1 walking; run: 0 walking … 1 running (both smoothed, so gaits blend)
     this.swingAmp += (Math.min(1, speed / 1.2) - this.swingAmp) * k;
     this.run += (Math.min(1, Math.max(0, (speed - WALK_TOP) / (RUN_FULL - WALK_TOP))) - this.run) * k;
-    const amp = this.swingAmp * (1 - this.air), run = this.run, air = this.air;
+    // knocked over (backwards, the whole figure about its feet): DOWN_IN_S down, DOWN_OUT_S back up
+    const dk = this.downTarget - this.down;
+    this.down += Math.sign(dk) * Math.min(Math.abs(dk), dt / (dk > 0 ? DOWN_IN_S : DOWN_OUT_S));
+    const lie = this.down;
+    const amp = this.swingAmp * (1 - this.air) * (1 - lie), run = this.run, air = this.air * (1 - lie);
     // one cycle = two steps; it covers more ground per cycle when running
     this.phase = (this.phase + (speed * dt * 2 * Math.PI) / (CYCLE_WALK + (CYCLE_RUN - CYCLE_WALK) * run)) % (2 * Math.PI);
     const t0 = this.phase / (2 * Math.PI);
@@ -433,9 +442,14 @@ export class PlayerFigure {
       this.hands[i]!.quaternion.identity();
       this.curlFingers(i, mix(0.3, 0.8, run));
     }
-    this.group.position.set(x, y, z);
-    this.group.rotation.set(0, this.heading, 0);
+    this.group.position.set(x, y + 0.12 * lie, z);
+    this.group.rotation.set(-(Math.PI / 2) * lie, this.heading, 0, 'YXZ');
     this.model?.apply();
+  }
+
+  /** Knocked down (1) or standing (0); the whole figure tips over backwards / gets up within DOWN_IN_S / DOWN_OUT_S. */
+  setDown(k: number): void {
+    this.downTarget = Math.max(0, Math.min(1, k));
   }
 
   /**
@@ -579,6 +593,15 @@ export class PlayerFigure {
     this.feet.forEach((f) => f.rotation.set(0.3, 0, 0));
     this.forearms.forEach((f) => f.quaternion.setFromEuler(new Euler(-0.3, 0, 0)));
     this.hands.forEach((h) => h.quaternion.identity());
+  }
+
+  /** Standing at once: no fall in progress, not knocked down (a pooled figure handed to another player). */
+  reset(): void {
+    this.fallT = -1;
+    this.upAt = Infinity;
+    this.down = this.downTarget = 0;
+    this.body.rotation.set(0, 0, 0);
+    this.body.position.set(0, 0, 0);
   }
 
   /** Starts getting up now (if lying). */

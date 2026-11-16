@@ -114,3 +114,79 @@ describe('street props', () => {
     expect(hit?.timeOfImpact).toBeCloseTo(7 - TUNING.props.trunkRadius * treeScale(-5, 7), 1);
   });
 });
+
+describe('lamp reset and follow', () => {
+  async function knocked() {
+    const { pw, props, car } = await scene([[0, 40]], []);
+    drive(pw, car, 50, 9);
+    expect(props.isStanding(0)).toBe(false);
+    return { pw, props, car };
+  }
+
+  test('standUp restores a knocked lamp', async () => {
+    const { pw, props, car } = await knocked();
+    car.dispose();
+    for (let t = 0; t < 5 * 60 && !props.isResting(0); t++) pw.step();
+    expect(props.isResting(0)).toBe(true);
+    props.standUp(0);
+    expect(props.isStanding(0)).toBe(true);
+    expect(props.isResting(0)).toBe(false);
+    const p = props.lampPose(0);
+    expect([p.x, p.y, p.z]).toEqual([0, 0, 40]);
+    expect(tilt(p)).toBeCloseTo(0, 5);
+    pw.step();
+    // solid again for scene queries with props, and a fast car breaks it once more
+    const { rapier: R, world } = pw;
+    const ray = new R.Ray({ x: 0, y: 1, z: 30 }, { x: 0, y: 0, z: 1 });
+    expect(world.castRay(ray, 20, true, undefined, undefined, undefined, undefined, staticWorldFilter(false, undefined, true))?.timeOfImpact).toBeCloseTo(10 - TUNING.props.lampRadius, 1);
+    const car2 = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    car2.setOccupied(true);
+    drive(pw, car2, 50, 9);
+    expect(props.takeFallen()).toContain(0);
+  });
+
+  test('knocked lamp comes to rest within 5 s', async () => {
+    const { pw, props, car } = await knocked();
+    car.dispose();
+    let t = 0;
+    while (!props.isResting(0) && t < 5 * 60) { pw.step(); t++; }
+    // 9 s of driving already passed; the post must settle within 5 s more
+    expect(props.isResting(0)).toBe(true);
+  });
+
+  test('damping starts only after the first second of the topple', async () => {
+    const { pw, props, car } = await scene([[0, 40]], []);
+    for (let i = 0; i < 540 && props.isStanding(0); i++) {
+      car.applyInput({ throttle: car.speed() * 3.6 < 50 ? 1 : 0, steer: 0, brake: false });
+      pw.step();
+    }
+    expect(props.isStanding(0)).toBe(false);
+    const b = props['bodies'].get(0)!;
+    for (let t = 0; t < 55; t++) {
+      pw.step();
+      expect(b.angularDamping()).toBe(0);
+      expect(b.linearDamping()).toBe(0);
+    }
+    for (let t = 0; t < 10; t++) pw.step();
+    expect(b.angularDamping()).toBeGreaterThan(0);
+  });
+
+  test('follow makes a lamp kinematic at the pose', async () => {
+    const { pw, props } = await scene([[0, 40]], []);
+    const pose = { x: 3, y: 0.2, z: 41, qx: 0, qy: 0, qz: Math.SQRT1_2, qw: Math.SQRT1_2 };
+    props.follow(0, pose);
+    expect(props.isStanding(0)).toBe(false);
+    expect(props.isResting(0)).toBe(false);
+    expect(props.lampPose(0).y).toBeCloseTo(0.2, 5);
+    expect(props.lampPose(0).z).toBeCloseTo(41, 5);
+    props.follow(0, { ...pose, x: 4 });
+    pw.step();
+    expect(props.lampPose(0).x).toBeCloseTo(4, 5);
+    expect(props.takeFallen()).toEqual([]);
+    // a fast car no longer treats it as a standing post
+    const car = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    car.setOccupied(true);
+    drive(pw, car, 50, 3);
+    expect(props.takeFallen()).toEqual([]);
+  });
+});

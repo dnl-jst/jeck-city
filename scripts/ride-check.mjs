@@ -1,4 +1,5 @@
 // Usage: node scripts/ride-check.mjs [baseUrl] [shotsDir]
+// Runs offline (?offline=1: local simulation, no server); further query parameters in baseUrl are kept.
 // Scripted bike ride in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn, turn towards the Long John
 // that always stands next to the spawn (bikes[0], type 3), press E and check that a Long John is ridden, pedal 6 s
 // (> 25 m, not inside a building), steer left towards the road, slow down and get off (on foot again, beside the
@@ -13,7 +14,11 @@ const STALL_MS = 10_000;
 const STEPS = { mount: 300, away: 900, turn: 300, stop: 900, off: 300 };
 
 async function ride(page, time, shot) {
-  await page.goto(`${base}?time=${time}&date=2026-06-15`);
+  const url = new URL(base);
+  url.searchParams.set('offline', '1');
+  url.searchParams.set('time', time);
+  url.searchParams.set('date', '2026-06-15');
+  await page.goto(url.href);
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 120_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error('world failed to load');
   const state = () => page.evaluate(() => window.__nnState());

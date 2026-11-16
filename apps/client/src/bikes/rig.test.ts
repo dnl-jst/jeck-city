@@ -104,8 +104,8 @@ describe('bike rig', () => {
 describe('visible bikes', () => {
   test('within the radius, minus the skipped one', () => {
     const poses = [{ x: 0, z: 0 }, { x: 50, z: 0 }, { x: 200, z: 0 }];
-    expect(visibleBikes(poses, 0, 0, 120, null)).toEqual([0, 1]);
-    expect(visibleBikes(poses, 0, 0, 120, 0)).toEqual([1]);
+    expect(visibleBikes(poses, 0, 0, 120, new Set())).toEqual([0, 1]);
+    expect(visibleBikes(poses, 0, 0, 120, new Set([0]))).toEqual([1]);
   });
 });
 

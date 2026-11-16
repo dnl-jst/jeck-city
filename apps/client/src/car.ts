@@ -4,71 +4,10 @@ import {
   Vector3, type Scene,
 } from 'three';
 import {
-  CAR_SPECS, carTypeOf, heightAt, SUSPENSION_REST_LENGTH, terrainNormal, TUNING, Vehicle, VEHICLE_REST_Y, type CarType, type PhysicsWorld,
-  type TerrainGrid, type WorldManifest,
+  CAR_SPECS, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
 } from '@nn/shared';
 
 type XZ = { x: number; z: number };
-export type CarPose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
-
-const poseUp = new Vector3(0, 1, 0), poseN = new Vector3(), poseTilt = new Quaternion(), poseYaw = new Quaternion();
-
-/**
- * Pose of a parked car at (x, z) facing heading: the chassis centre rests VEHICLE_REST_Y above the terrain,
- * tilted from upright onto the terrain normal (yaw first, then the tilt, so the heading is kept).
- */
-export function parkedPose(x: number, z: number, heading: number, t: TerrainGrid): CarPose {
-  const n = terrainNormal(t, x, z);
-  poseTilt.setFromUnitVectors(poseUp, poseN.set(n.x, n.y, n.z));
-  poseYaw.setFromAxisAngle(poseUp, heading);
-  const q = poseTilt.multiply(poseYaw);
-  return { x, y: heightAt(t, x, z) + VEHICLE_REST_Y, z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
-}
-
-/** Free car (not occupied) nearest to the player within maxDist, by id; null if none. */
-export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z: number; occupied: boolean }[], maxDist = 3): number | null {
-  let best: number | null = null;
-  let bestD = maxDist;
-  for (const c of cars) {
-    if (c.occupied) continue;
-    const d = Math.hypot(c.x - player.x, c.z - player.z);
-    if (d <= bestD) [best, bestD] = [c.id, d];
-  }
-  return best;
-}
-
-/** Getting out is only possible below this speed (m/s). */
-export const EXIT_MAX_SPEED = 2;
-export const canGetOut = (speed: number): boolean => Math.abs(speed) < EXIT_MAX_SPEED;
-
-/** Lateral distance of the exit spot from the car's centre line (m): 0.6 m clear of the 1.8 m wide body. */
-export const EXIT_SIDE = 1.5;
-/** Clearance of the fallback exit spot behind the car's body (m). */
-export const EXIT_BEHIND_CLEAR = 0.9;
-
-/**
- * Where the driver gets out: 1.5 m to the left of the car; if that spot is blocked, to the right;
- * else behind the car (half the body `length` + 0.9 m). null when all three are blocked.
- * Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
- */
-export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean, length: number = TUNING.vehicle.length): XZ | null {
-  const s = Math.sin(car.heading), c = Math.cos(car.heading);
-  const behind = length / 2 + EXIT_BEHIND_CLEAR;
-  const spots = [
-    { x: car.x + c * EXIT_SIDE, z: car.z - s * EXIT_SIDE },
-    { x: car.x - c * EXIT_SIDE, z: car.z + s * EXIT_SIDE },
-    { x: car.x - s * behind, z: car.z - c * behind },
-  ];
-  return spots.find((p) => isFree(p.x, p.z)) ?? null;
-}
-
-/** Heading (forward = (sin h, cos h)) of a chassis rotation. */
-export function headingOf(q: { qx: number; qy: number; qz: number; qw: number }): number {
-  // local +z rotated by q, projected onto x/z
-  const fx = 2 * (q.qx * q.qz + q.qw * q.qy);
-  const fz = 1 - 2 * (q.qx * q.qx + q.qy * q.qy);
-  return Math.atan2(fx, fz);
-}
 
 // ---------------------------------------------------------------- model
 
@@ -115,6 +54,9 @@ const BEAM_RANGE = 65;
 /** Red glow the tail lamps throw behind the car (cd per lamp): position lights at night, and brake lights. */
 export const TAIL_INTENSITY = 6;
 export const BRAKE_INTENSITY = 30;
+
+/** Lamp power 0..1 for an ignition light level: off, flickering while cranking (rand: 0..1), on. */
+export const lampPower = (level: 0 | 0.5 | 1, rand: () => number): number => (level === 0.5 ? 0.25 + 0.35 * rand() : level);
 
 /**
  * Low-beam pattern, linear 0..1, as a function of the direction off the beam axis given as tangents
@@ -279,6 +221,9 @@ class Glare {
   }
 }
 
+/** What the wheels follow: a Vehicle, or a stand-in built from a streamed car state. */
+export type WheelSource = { speed(): number; wheelSteering(w: number): number; wheelSuspension(w: number): number };
+
 /** Wheel nodes in Vehicle wheel order (0 front right, 1 front left, 2 rear right, 3 rear left). */
 const WHEEL_NODES = ['wheel_fr', 'wheel_fl', 'wheel_rr', 'wheel_rl'] as const;
 /** How far the suspension may visibly move a wheel from its rest position (m). */
@@ -357,14 +302,18 @@ export class DrivenCar {
   private readonly axisX = new Vector3(1, 0, 0);
   private readonly axisY = new Vector3(0, 1, 0);
 
-  constructor(scene: Scene, private readonly models?: CarModels) {
+  /**
+   * beams: false = another player's car: no spotlights (only the emissive lamp materials and glare sprites), so the
+   * scene's light count stays constant and no extra shadow maps are rendered.
+   */
+  constructor(scene: Scene, private readonly models?: CarModels, { beams = true }: { beams?: boolean } = {}) {
     this.group.visible = false;
     scene.add(this.group);
 
-    const map = beamTexture();
-    for (let k = 0; k < 2; k++) {
+    const map = beams ? beamTexture() : null;
+    for (let k = 0; k < (beams ? 2 : 0); k++) {
       const l = new SpotLight(0xffffff, 0, BEAM_RANGE, BEAM_ANGLE, 0, 2);
-      l.map = map;
+      l.map = map!;
       l.castShadow = true;
       l.shadow.mapSize.set(1024, 1024);
       l.shadow.camera.near = 0.3;
@@ -377,7 +326,7 @@ export class DrivenCar {
       this.beams.push(l);
     }
     // tail lamps: wide, soft red cones onto the road and whatever stands behind (no shadows, they are dim)
-    for (let k = 0; k < 2; k++) {
+    for (let k = 0; k < (beams ? 2 : 0); k++) {
       const l = new SpotLight(0xff2a14, 0, 18, 1.15, 1, 2);
       this.rig.add(l, l.target);
       this.tails.push(l);
@@ -394,13 +343,15 @@ export class DrivenCar {
   /** Spotlights and glare sprites at the lamps of the current model. */
   private placeLamps(l: Rig['lamps']): void {
     [l.fl, l.fr].forEach((p, k) => {
-      const b = this.beams[k]!, s = Math.sign(p.x) || 1;
+      const b = this.beams[k], s = Math.sign(p.x) || 1;
+      if (!b) return; // no spotlights (beams: false)
       // just ahead of the lamp glass, so the car's own body never shadows its beam
       b.position.set(p.x, p.y, p.z + 0.08);
       b.target.position.set(p.x + s * 0.6, p.y - Math.tan(BEAM_TILT) * 30, p.z + 30); // toe out a little
     });
     [l.rl, l.rr].forEach((p, k) => {
-      const t = this.tails[k]!;
+      const t = this.tails[k];
+      if (!t) return;
       t.position.set(p.x, p.y, p.z - 0.05);
       t.target.position.set(p.x + Math.sign(p.x) * 0.16, G - 0.6, p.z - 8);
     });
@@ -449,7 +400,7 @@ export class DrivenCar {
   }
 
   /** Wheels: spin with the speed (m/s), steer and follow each wheel's suspension; dt = frame time. */
-  setWheels(v: Vehicle, dt: number): void {
+  setWheels(v: WheelSource, dt: number): void {
     const r = this.current;
     if (!r) return;
     this.spin = (this.spin + (v.speed() * dt) / this.radius) % (Math.PI * 2);
@@ -488,10 +439,6 @@ export class DrivenCar {
 
 // ---------------------------------------------------------------- parked cars
 
-/** Physics bodies exist only for cars this close to the player (m)… */
-export const CAR_PHYSICS_NEAR = 150;
-/** …and are removed again beyond this distance (hysteresis). */
-export const CAR_PHYSICS_FAR = 200;
 /** Parked cars are drawn only within this distance of the camera (m)… */
 export const CAR_RENDER_RADIUS = 150;
 /** …and that set is rebuilt only after the camera moved more than this since the last rebuild (m). */
@@ -520,21 +467,23 @@ export const CAR_LOD_NEAR = 45;
 type Level = { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[]; used: number };
 
 /**
- * All manifest cars. Unoccupied ones within CAR_RENDER_RADIUS of the camera render as instanced meshes, one per
- * model part, type and level of detail (paint coloured per instance; updateVisibility packs them into the first
- * instance slots); a sleeping Rapier Vehicle exists only near the player. Poses of pushed cars live in `poses`,
- * so a car re-created after being disposed appears where it was left, not at its original spot.
+ * Draws the cars of the sim's CarPool. Those within CAR_RENDER_RADIUS of the camera render as instanced meshes, one
+ * per model part, type and level of detail (paint coloured per instance; update() packs them into the first instance
+ * slots); the own car and the ones other players drive are hidden (a DrivenCar draws them). Poses come from
+ * pool.poses, which the sim replaces (new object) whenever a car moves.
  */
 export class ParkedCars {
-  readonly poses: CarPose[];
-  readonly colors: number[];
-  readonly types: CarType[];
-  private readonly vehicles = new Map<number, Vehicle>();
   private readonly levels = new Map<CarType, [Level, Level]>();
-  private occupied: number | null = null;
+  /** The car the player drives: not drawn here. */
+  private own: number | null = null;
+  /** Cars other players drive: not drawn here either (a DrivenCar draws them). */
+  private hidden: ReadonlySet<number> = new Set();
   /** Instance slot of each car in its type's meshes, −1 while it is not drawn; and the level it is drawn at. */
   private readonly slots: Int32Array;
   private readonly level: Uint8Array;
+  /** Cars with an instance slot, and the pose object last written for each car. */
+  private shown: number[] = [];
+  private readonly drawn: (CarPose | null)[];
   private lastRebuild: XZ | null = null;
   private readonly m = new Matrix4();
   private readonly base = new Matrix4();
@@ -544,18 +493,17 @@ export class ParkedCars {
   private readonly zero = new Vector3(0, 0, 0);
   private readonly dirty = new Set<Level>();
 
-  constructor(scene: Scene, private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid, models?: CarModels) {
-    this.poses = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
-    this.colors = parked.map((c) => c.color);
-    this.types = parked.map((c) => carTypeOf(c.type));
-    this.slots = new Int32Array(parked.length).fill(-1);
-    this.level = new Uint8Array(parked.length);
+  constructor(scene: Scene, private readonly pool: CarPool, models?: CarModels) {
+    const n = pool.count;
+    this.slots = new Int32Array(n).fill(-1);
+    this.level = new Uint8Array(n);
+    this.drawn = new Array<CarPose | null>(n).fill(null);
     for (const [type, m] of models ?? []) {
-      const n = Math.max(1, this.types.filter((t) => t === type).length);
+      const count = Math.max(1, pool.types.filter((t) => t === type).length);
       const make = (model: Object3D, tag: string): Level => {
         const parts = modelParts(model);
         const meshes = parts.map((part, k) => {
-          const im = new InstancedMesh(part.geometry, instanceMaterial(part.material), n);
+          const im = new InstancedMesh(part.geometry, instanceMaterial(part.material), count);
           im.name = `car_${type}_${tag}_${k}`;
           im.count = 0;
           im.castShadow = im.receiveShadow = true;
@@ -570,34 +518,63 @@ export class ParkedCars {
     }
   }
 
-  /** Cars that must have an instance slot regardless of distance: physics-active ones and the occupied one. */
+  get count(): number {
+    return this.pool.count;
+  }
+
+  /** Hides car i (the one the player now drives; null = none) and shows the previous one again. */
+  setOwn(i: number | null): void {
+    const old = this.own;
+    this.own = i;
+    for (const c of [old, i]) if (c !== null) this.drawn[c] = null; // rewritten (scale) by the next update()
+  }
+
+  /** Hides the cars other players drive (replaces the previous set; a car that left it is drawn again). */
+  setHidden(ids: ReadonlySet<number>): void {
+    const old = this.hidden;
+    if (old.size === ids.size && [...ids].every((i) => old.has(i))) return;
+    this.hidden = new Set(ids);
+    for (const c of [...old, ...ids]) this.drawn[c] = null;
+  }
+
+  /** Cars that must have an instance slot regardless of distance: those with physics (near a player) or a driver. */
   private always(): number[] {
-    return this.occupied === null ? [...this.vehicles.keys()] : [...this.vehicles.keys(), this.occupied];
+    const out: number[] = [];
+    for (let i = 0; i < this.pool.count; i++) if (this.pool.vehicle(i) || this.pool.driver[i] !== null) out.push(i);
+    return out;
   }
 
   /**
-   * Draws only the cars within CAR_RENDER_RADIUS of the camera at (x, z) plus every physics-active and the occupied
-   * car; rebuilt after CAR_REBUILD_MOVE of movement or when one of those always-drawn cars has no slot yet.
+   * Per frame, with the camera at (x, z): draws the cars within CAR_RENDER_RADIUS plus every always-drawn one
+   * (rebuilt after CAR_REBUILD_MOVE of movement or when an always-drawn car has no slot yet), and rewrites the
+   * matrices of the drawn cars whose pose changed.
    */
-  updateVisibility(x: number, z: number): void {
+  update(x: number, z: number): void {
     const always = this.always();
-    if (!needsCarRebuild(this.lastRebuild, x, z) && always.every((i) => this.slots[i]! >= 0)) return;
+    if (needsCarRebuild(this.lastRebuild, x, z) || !always.every((i) => this.slots[i]! >= 0 || !this.levels.has(this.pool.types[i]!))) {
+      this.rebuild(x, z, always);
+    }
+    for (const i of this.shown) if (this.pool.poses[i] !== this.drawn[i]) this.writeMatrix(i);
+    this.flush();
+  }
+
+  private rebuild(x: number, z: number, always: number[]): void {
     this.lastRebuild = { x, z };
-    const shown = visibleCars(this.poses, x, z, CAR_RENDER_RADIUS, always);
+    this.shown = visibleCars(this.pool.poses, x, z, CAR_RENDER_RADIUS, always);
     this.slots.fill(-1);
     for (const lv of this.levels.values()) for (const l of lv) l.used = 0;
     const col = new Color();
-    for (const i of shown) {
-      const lv = this.levels.get(this.types[i]!);
+    for (const i of this.shown) {
+      const lv = this.levels.get(this.pool.types[i]!);
       if (!lv) continue;
-      const s = this.poses[i]!;
+      const s = this.pool.poses[i]!;
       // the margin keeps cars on the full model until the next rebuild, however the camera moved meanwhile
       const near = Math.hypot(s.x - x, s.z - z) < CAR_LOD_NEAR + CAR_REBUILD_MOVE;
       const l = lv[near ? 0 : 1];
       const k = l.used++;
       this.slots[i] = k;
       this.level[i] = near ? 0 : 1;
-      l.meshes.forEach((im, j) => { if (l.paint[j]) im.setColorAt(k, col.setHex(this.colors[i]!)); });
+      l.meshes.forEach((im, j) => { if (l.paint[j]) im.setColorAt(k, col.setHex(this.pool.colors[i]!)); });
       this.writeMatrix(i);
     }
     for (const lv of this.levels.values()) {
@@ -613,17 +590,14 @@ export class ParkedCars {
     this.dirty.clear();
   }
 
-  get count(): number {
-    return this.poses.length;
-  }
-
   private writeMatrix(i: number): void {
     const k = this.slots[i]!;
-    const lv = this.levels.get(this.types[i]!);
+    const lv = this.levels.get(this.pool.types[i]!);
     if (k < 0 || !lv) return;
     const l = lv[this.level[i]!]!;
-    const s = this.poses[i]!;
-    this.base.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.occupied ? this.zero : this.one);
+    const s = this.pool.poses[i]!;
+    this.drawn[i] = s;
+    this.base.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own || this.hidden.has(i) ? this.zero : this.one);
     l.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(this.base).multiply(l.parts[j]!.local)));
     this.dirty.add(l);
   }
@@ -636,72 +610,5 @@ export class ParkedCars {
       }
     }
     this.dirty.clear();
-  }
-
-  /** Creates physics cars within CAR_PHYSICS_NEAR of (x, z) and disposes those beyond CAR_PHYSICS_FAR (keeping their pose). */
-  updateProximity(x: number, z: number): void {
-    for (let i = 0; i < this.poses.length; i++) {
-      const s = this.poses[i]!;
-      const d = Math.hypot(s.x - x, s.z - z);
-      const v = this.vehicles.get(i);
-      if (!v && d <= CAR_PHYSICS_NEAR) this.vehicles.set(i, this.spawn(i));
-      else if (v && d > CAR_PHYSICS_FAR && i !== this.occupied) {
-        this.poses[i] = v.pose();
-        v.dispose();
-        this.vehicles.delete(i);
-      }
-    }
-  }
-
-  /** A sleeping Vehicle at the car's stored pose (its original spot or where it was pushed to). */
-  private spawn(i: number): Vehicle {
-    const s = this.poses[i]!;
-    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y }, this.types[i]);
-    // tilted on a slope (or left tilted after a push): keep the stored rotation
-    if (Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
-    return v;
-  }
-
-  /** Copies the poses of awake (pushed or driven) cars into the instances. */
-  sync(): void {
-    for (const [i, v] of this.vehicles) {
-      if (v.chassis.isSleeping()) continue;
-      this.poses[i] = v.pose();
-      if (i !== this.occupied) this.writeMatrix(i);
-    }
-    this.flush();
-  }
-
-  /** Cars for nearestEnterableCar. */
-  candidates(): { id: number; x: number; z: number; occupied: boolean }[] {
-    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, occupied: id === this.occupied }));
-  }
-
-  /** Takes car i: hides its instance and returns its (occupied, awake) Vehicle. */
-  enter(i: number): Vehicle {
-    let v = this.vehicles.get(i);
-    if (!v) this.vehicles.set(i, (v = this.spawn(i)));
-    this.occupied = i;
-    v.setOccupied(true);
-    this.writeMatrix(i);
-    this.flush();
-    return v;
-  }
-
-  /** Leaves the occupied car where it is: parking brake on, instance shown again. */
-  exit(): void {
-    const i = this.occupied;
-    if (i === null) return;
-    const v = this.vehicles.get(i)!;
-    v.setOccupied(false);
-    this.poses[i] = v.pose();
-    this.occupied = null;
-    this.writeMatrix(i);
-    this.flush();
-  }
-
-  /** Number of physics cars (debug/tests). */
-  physicsCount(): number {
-    return this.vehicles.size;
   }
 }

@@ -1,0 +1,8 @@
+# Caddy in front of the Nippes Nights container (docker run -p 127.0.0.1:2567:2567 ...).
+# The container port stays private: the server takes the client address for its per-address join limit from the
+# X-Forwarded-For header, which Caddy sets. WebSockets (the game connection) pass through reverse_proxy without any
+# further configuration. The server serves its own pre-compressed .br/.gz files; Caddy only compresses what is left.
+nippes.example.org {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:2567
+}

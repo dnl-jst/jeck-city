@@ -6,6 +6,7 @@ import { stationLabel, type RadioTuner, type StationId } from './stations';
 import { VehicleSound } from './vehicle-sound';
 import { BikeSound } from './bike-sound';
 import { HornState } from './horn';
+import type { RemoteAudio, RemoteCarIn } from './remote-audio';
 
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
@@ -61,7 +62,7 @@ export class GameAudio {
   private muted = false;
   private wasGrounded = true;
 
-  constructor(private readonly d: { mixer: AudioMixerLike; radio: RadioLike; tuner: RadioTuner; flash(text: string): void; rand?: () => number }) {
+  constructor(private readonly d: { mixer: AudioMixerLike; radio: RadioLike; tuner: RadioTuner; flash(text: string): void; rand?: () => number; remote?: RemoteAudio }) {
     this.rand = d.rand ?? Math.random;
     this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'sfx') });
     this.tramBell = new TramBell(this.rand);
@@ -95,11 +96,13 @@ export class GameAudio {
     this.muted = !this.muted;
     this.d.mixer.setMuted(this.muted);
     this.d.radio.setMuted(this.muted);
+    this.d.remote?.setMuted(this.muted);
     this.d.flash(this.muted ? 'Ton aus' : 'Ton an');
   }
 
   /** Tab hidden: radio off and the audio context suspended; back on when visible (radio only in a car). */
   setHidden(hidden: boolean): void {
+    this.d.remote?.setHidden(hidden);
     if (hidden) {
       this.stopStatic();
       this.d.radio.suspend();
@@ -232,6 +235,28 @@ export class GameAudio {
   /** Fell off the bike. */
   crashBike(): void {
     this.d.mixer.oneShot('impact2', { gain: MIX.impact * 0.7 });
+  }
+
+  /** Online, every frame: the other players' cars (engines, horns, radio) around `listener`. */
+  remoteCars(listener: { x: number; z: number }, cars: readonly RemoteCarIn[], dt: number): void {
+    if (this.loaded && this.unlocked) this.d.remote?.update(listener, cars, Math.min(dt, MAX_DT));
+  }
+
+  /** Another rider's bell at (x, z). */
+  bellAt(x: number, z: number): void {
+    this.d.mixer.oneShot('bikeBell', { gain: MIX.bikeBell, at: { x, z } });
+  }
+
+  /** A car hit someone at (x, z); strength: the car's speed (m/s). */
+  impactAt(x: number, z: number, strength: number): void {
+    const hit = Math.min(1, Math.max(0.35, strength / 20));
+    const id: SoundId = hit >= 0.7 ? 'impact3' : hit >= 0.45 ? 'impact2' : 'impact1';
+    this.d.mixer.oneShot(id, { gain: hit * MIX.impact, at: { x, z } });
+  }
+
+  /** Someone was knocked down at (x, z). */
+  knockAt(x: number, z: number): void {
+    this.d.mixer.oneShot('impact1', { gain: 0.5 * MIX.impact, at: { x, z } });
   }
 
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
