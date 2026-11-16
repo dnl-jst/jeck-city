@@ -12,85 +12,106 @@ const WALK_MIN_SPEED = 0.3;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
 
+type Entry<T> = { key: string; x: number; z: number; v: T };
+
 /**
- * Snapshot of the world for player `id`: own state in full, and what the interest set of that client contains:
+ * What all snapshots of one round share, built once per round instead of once per client: people on foot or down,
+ * riders, moving unridden bikes, cars that are driven or awake, tipping lamps, and the round's events. `owner`/`car`
+ * let each client's snapshot leave out its own entries.
+ */
+export type SnapshotRound = {
+  tick: number;
+  walkers: (Entry<SnapshotWalker> & { owner: PlayerId })[];
+  riders: (Entry<SnapshotRider> & { owner: PlayerId })[];
+  bikes: Entry<SnapshotBike>[];
+  cars: Entry<SnapshotCar>[];
+  lamps: Entry<SnapshotLamp>[];
+  events: SimEvent[];
+  slotOf: (id: PlayerId) => number;
+};
+
+/** The shared part of a snapshot round (see SnapshotRound); pass it to snapshotFor for each client. */
+export function snapshotRound(sim: WorldSim, events: SimEvent[], slotOf: (id: PlayerId) => number): SnapshotRound {
+  const walkers: SnapshotRound['walkers'] = [];
+  for (const other of sim.players()) {
+    const p = sim.player(other);
+    if (p.mode === 'drive' || p.mode === 'ride') continue; // represented by the car or the rider entry
+    const slot = slotOf(other);
+    const speed = Math.hypot(p.vel.x, p.vel.z);
+    const state: WalkerState = p.falling ? 3 : p.mode === 'down' ? 2 : speed > WALK_MIN_SPEED ? 1 : 0;
+    walkers.push({ key: `p${slot}`, x: p.pos.x, z: p.pos.z, owner: other, v: { slot, x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw, speed, state } });
+  }
+
+  const riders: SnapshotRound['riders'] = [];
+  for (const { id: other, bike } of sim.riders()) {
+    const slot = slotOf(other);
+    const s = bike.state();
+    const p = sim.player(other);
+    riders.push({
+      key: `r${slot}`, x: s.x, z: s.z, owner: other,
+      v: { slot, bikeId: p.bikeId!, x: s.x, y: s.y, z: s.z, heading: s.heading, speed: s.speed, steer: s.steer, pedalling: p.pedalling, airborne: !s.grounded },
+    });
+  }
+
+  const bikes: SnapshotRound['bikes'] = [];
+  // (a body that just appeared settles for a moment at its spot: only bikes away from it count as moving)
+  for (const i of sim.bikes.awake()) {
+    if (!sim.bikes.isMoved(i)) continue;
+    const p = sim.bikes.poses[i]!;
+    bikes.push({ key: `b${i}`, x: p.x, z: p.z, v: { id: i, x: p.x, y: p.y, z: p.z, heading: p.heading } });
+  }
+
+  const cars: SnapshotRound['cars'] = [];
+  const carIds = new Set(sim.cars.awake());
+  sim.cars.driver.forEach((d, i) => { if (d !== null) carIds.add(i); });
+  for (const i of [...carIds].sort((a, b) => a - b)) {
+    const v = sim.cars.vehicle(i);
+    if (!v) continue;
+    const s = v.saveState();
+    cars.push({
+      key: `c${i}`, x: s.x, z: s.z,
+      v: {
+        id: i, x: s.x, y: s.y, z: s.z, qx: s.qx, qy: s.qy, qz: s.qz, qw: s.qw, vx: s.vx, vy: s.vy, vz: s.vz,
+        steer: s.steer, brakeLight: sim.braking(i), hasDriver: sim.cars.driver[i] !== null, horn: sim.horning(i),
+      },
+    });
+  }
+
+  const lamps: SnapshotRound['lamps'] = [];
+  for (const i of sim.lampsDown()) {
+    if (sim.lampState(i) !== 'tipping') continue;
+    const p = sim.props.lampPose(i);
+    lamps.push({ key: `l${i}`, x: p.x, z: p.z, v: { i, ...p } });
+  }
+
+  return { tick: sim.tick, walkers, riders, bikes, cars, lamps, events, slotOf };
+}
+
+/**
+ * Snapshot of `round` for player `id`: own state in full, and what the interest set of that client contains:
  * other people on foot or down, cars that are driven or awake (not the player's own), other riders, unridden bikes
  * that move (away from their manifest spot), tipping lamps, and events with a position in range (a `knock` on the player themself always; the own
  * bell never). `interest` is that client's persistent state.
  */
-export function buildSnapshot(
-  sim: WorldSim, id: PlayerId, interest: Interest, ackSeq: number, events: SimEvent[], slotOf: (id: PlayerId) => number,
-): Snapshot {
+export function snapshotFor(round: SnapshotRound, sim: WorldSim, id: PlayerId, interest: Interest, ackSeq: number): Snapshot {
+  const { slotOf } = round;
   const me = sim.player(id);
   const focus = me.pos;
 
   const entities: InterestEntity[] = [];
-  const walkers = new Map<string, SnapshotWalker>();
-  for (const other of sim.players()) {
-    if (other === id) continue;
-    const p = sim.player(other);
-    if (p.mode === 'drive' || p.mode === 'ride') continue; // represented by the car or the rider entry
-    const slot = slotOf(other);
-    const key = `p${slot}`;
-    const speed = Math.hypot(p.vel.x, p.vel.z);
-    const state: WalkerState = p.falling ? 3 : p.mode === 'down' ? 2 : speed > WALK_MIN_SPEED ? 1 : 0;
-    walkers.set(key, { slot, x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw, speed, state });
-    entities.push({ key, x: p.pos.x, z: p.pos.z });
-  }
-
-  const riders = new Map<string, SnapshotRider>();
-  for (const { id: other, bike } of sim.riders()) {
-    if (other === id) continue;
-    const slot = slotOf(other);
-    const key = `r${slot}`;
-    const s = bike.state();
-    riders.set(key, {
-      slot, bikeId: sim.player(other).bikeId!, x: s.x, y: s.y, z: s.z, heading: s.heading, speed: s.speed, steer: s.steer,
-      pedalling: sim.player(other).pedalling, airborne: !s.grounded,
-    });
-    entities.push({ key, x: s.x, z: s.z });
-  }
-
-  const bikes = new Map<string, SnapshotBike>();
-  // (a body that just appeared settles for a moment at its spot: only bikes away from it count as moving)
-  for (const i of sim.bikes.awake()) {
-    if (!sim.bikes.isMoved(i)) continue;
-    const key = `b${i}`;
-    const p = sim.bikes.poses[i]!;
-    bikes.set(key, { id: i, x: p.x, y: p.y, z: p.z, heading: p.heading });
-    entities.push({ key, x: p.x, z: p.z });
-  }
-
-  const cars = new Map<string, SnapshotCar>();
-  const carIds = new Set(sim.cars.awake());
-  sim.cars.driver.forEach((d, i) => { if (d !== null) carIds.add(i); });
-  for (const i of [...carIds].sort((a, b) => a - b)) {
-    if (i === me.carId) continue;
-    const v = sim.cars.vehicle(i);
-    if (!v) continue;
-    const s = v.saveState();
-    const key = `c${i}`;
-    const hasDriver = sim.cars.driver[i] !== null;
-    cars.set(key, {
-      id: i, x: s.x, y: s.y, z: s.z, qx: s.qx, qy: s.qy, qz: s.qz, qw: s.qw, vx: s.vx, vy: s.vy, vz: s.vz,
-      steer: s.steer, brakeLight: sim.braking(i), hasDriver, horn: sim.horning(i),
-    });
-    entities.push({ key, x: s.x, z: s.z });
-  }
-
-  const lamps = new Map<string, SnapshotLamp>();
-  for (let i = 0; i < sim.props.count; i++) {
-    if (sim.lampState(i) !== 'tipping') continue;
-    const key = `l${i}`;
-    lamps.set(key, { i, ...sim.props.lampPose(i) });
-    entities.push({ key, x: sim.props.lampPose(i).x, z: sim.props.lampPose(i).z });
-  }
+  const add = (es: Entry<unknown>[]) => { for (const e of es) entities.push(e); };
+  for (const w of round.walkers) if (w.owner !== id) entities.push(w);
+  for (const r of round.riders) if (r.owner !== id) entities.push(r);
+  add(round.bikes);
+  const ownCar = me.carId === null ? null : `c${me.carId}`;
+  for (const c of round.cars) if (c.key !== ownCar) entities.push(c);
+  add(round.lamps);
 
   const inside = interest.update(focus, entities);
   const near = (x: number, z: number): boolean => Math.hypot(x - focus.x, z - focus.z) <= INTEREST_RADIUS;
 
   const out: SnapshotEvent[] = [];
-  for (const e of events) {
+  for (const e of round.events) {
     if (e.t === 'knock') {
       if (e.id === id) out.push({ t: 'knock', slot: slotOf(id) });
       else if (inside.has(`p${slotOf(e.id)}`)) out.push({ t: 'knock', slot: slotOf(e.id) });
@@ -108,10 +129,17 @@ export function buildSnapshot(
     mode: MODE[me.mode], engine: ENGINE[me.engine], carId: me.carId ?? 0, char: me.char, car: me.car,
     bikeId: me.bikeId ?? 0, fallTicks: me.fallTicks, bike: me.bike,
   };
-  const pick = <T>(m: Map<string, T>): T[] => [...m].filter(([k]) => inside.has(k)).map(([, v]) => v);
+  // (own entries never got into `inside`)
+  const pick = <T>(es: Entry<T>[]): T[] => { const r: T[] = []; for (const e of es) if (inside.has(e.key)) r.push(e.v); return r; };
   return {
-    serverTick: sim.tick, ackSeq, own, walkers: pick(walkers), cars: pick(cars), riders: pick(riders), bikes: pick(bikes),
-    lamps: pick(lamps), events: out,
+    serverTick: round.tick, ackSeq, own, walkers: pick(round.walkers), cars: pick(round.cars), riders: pick(round.riders),
+    bikes: pick(round.bikes), lamps: pick(round.lamps), events: out,
   };
+}
 
+/** Snapshot of the world for player `id` (one client; a server with many builds the round once, see snapshotRound). */
+export function buildSnapshot(
+  sim: WorldSim, id: PlayerId, interest: Interest, ackSeq: number, events: SimEvent[], slotOf: (id: PlayerId) => number,
+): Snapshot {
+  return snapshotFor(snapshotRound(sim, events, slotOf), sim, id, interest, ackSeq);
 }

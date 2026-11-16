@@ -1,9 +1,9 @@
 import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  buildSnapshot, CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
-  parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, TICK_HZ, WorldSim,
-  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type WorldAssets,
+  CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
+  parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
+  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
 import { LagLine } from './fake-lag';
@@ -74,8 +74,8 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   private lastWarnMs = -Infinity;
   private lastTickMs: number | null = null;
   private readonly stats = new TickStats();
-  /** Sim events since the last snapshot round; every client's snapshot gets all of them. */
-  private events: SimEvent[] = [];
+  /** Sim events of the last SNAPSHOT_EVERY ticks, by tick % SNAPSHOT_EVERY: a client's snapshot gets all of them. */
+  private readonly recentEvents: SimEvent[][] = Array.from({ length: SNAPSHOT_EVERY }, () => []);
 
   async onCreate(): Promise<void> {
     const { cfg, assets } = this.deps;
@@ -218,9 +218,15 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     return this.seats.get(sessionId)?.slot;
   }
 
-  /** /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks. */
-  health(): Health {
-    return this.stats.health(this.seats.size);
+  /**
+   * /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks, plus the totals since start
+   * (ticks run, steps dropped) and the process' resident memory.
+   */
+  health(): Health & { ticks: number; droppedTotal: number; rssMb: number } {
+    return {
+      ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
+      rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
+    };
   }
 
   /** Runs `action` now, or after the simulated inbound lag (dev). Order per client is kept. */
@@ -288,24 +294,35 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const inputs = new Map<PlayerId, PlayerInput>();
     for (const s of seats) inputs.set(s.slot, s.queue.next());
     const t0 = performance.now();
-    for (const e of this.sim.step(inputs)) this.events.push(e);
-    if (this.sim.tick % SNAPSHOT_EVERY === 0) {
-      this.syncState();
-      this.sendSnapshots();
-    }
+    const events = this.sim.step(inputs);
+    const phase = this.sim.tick % SNAPSHOT_EVERY;
+    this.recentEvents[phase] = events;
+    if (phase === 0) this.syncState();
+    this.sendSnapshots(phase);
     this.stats.record(performance.now() - t0);
   }
 
-  /** One snapshot per connected client: its own state in full, the rest within its interest set. */
-  private sendSnapshots(): void {
-    const events = this.events;
-    this.events = [];
+  /**
+   * Snapshots for the clients whose turn it is: every client gets one each SNAPSHOT_EVERY ticks, in the tick phase
+   * slot % SNAPSHOT_EVERY, so the work is spread over all ticks. Its own state in full, the rest within its interest
+   * set, and the events of the ticks since its last snapshot.
+   */
+  private sendSnapshots(phase: number): void {
+    let round: SnapshotRound | null = null;
     for (const seat of this.seats.values()) {
-      if (seat.away) continue;
-      const snap = buildSnapshot(this.sim, seat.slot, seat.interest, seat.queue.ackSeq, events, (id) => id);
+      if (seat.away || seat.slot % SNAPSHOT_EVERY !== phase) continue;
+      round ??= snapshotRound(this.sim, this.eventsSince(phase), (id) => id);
+      const snap = snapshotFor(round, this.sim, seat.slot, seat.interest, seat.queue.ackSeq);
       const bytes = encodeSnapshot(snap);
       this.outbound(seat, () => seat.client.sendBytes('s', bytes));
     }
+  }
+
+  /** The events of the last SNAPSHOT_EVERY ticks in order, the current tick (phase `phase`) last. */
+  private eventsSince(phase: number): SimEvent[] {
+    const out: SimEvent[] = [];
+    for (let k = 1; k <= SNAPSHOT_EVERY; k++) out.push(...this.recentEvents[(phase + k) % SNAPSHOT_EVERY]!);
+    return out;
   }
 
   /** Mirrors players, moved or driven cars, moved or ridden bikes and lying lamps into the schema state. */

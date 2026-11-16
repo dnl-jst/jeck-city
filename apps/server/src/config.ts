@@ -22,7 +22,7 @@ export type Config = {
   fakeLag: FakeLag | null;
   /** Seconds a dropped player keeps their figure and car . */
   reconnectS: number;
-  /** Joins allowed per address in a sliding 60 s window. */
+  /** Joins allowed per address in a sliding 60 s window; NN_JOIN_PER_MIN raises it, in dev only (load test: all bots share one address). */
   joinPerMin: number;
 };
 
@@ -75,7 +75,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
     clientDir: env.NN_CLIENT_DIR || defaultClientDir(),
     fakeLag: dev && env.NN_FAKE_LAG ? parseFakeLag(env.NN_FAKE_LAG) : null,
     reconnectS: RECONNECT_S,
-    joinPerMin: JOIN_PER_IP_PER_MIN,
+    joinPerMin: dev ? intEnv(env, 'NN_JOIN_PER_MIN', JOIN_PER_IP_PER_MIN, 1, 100_000) : JOIN_PER_IP_PER_MIN,
     ...overrides,
   };
 }

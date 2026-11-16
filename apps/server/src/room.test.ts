@@ -412,12 +412,15 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect((await fetch(`http://127.0.0.1:${srv.port}/missing.js`)).status).toBe(404);
   });
 
-  it('/healthz reports players, tick p95 and dropped steps', async () => {
+  it('/healthz reports players, tick p95, dropped steps and memory', async () => {
     await join('Anna');
     const r = await fetch(`http://127.0.0.1:${srv.port}/healthz`);
     expect(r.status).toBe(200);
-    const h = (await r.json()) as { players: number; tickP95Ms: number; dropped: number };
+    const h = (await r.json()) as { players: number; tickP95Ms: number; dropped: number; ticks: number; droppedTotal: number; rssMb: number };
     expect(h.players).toBe(1);
+    expect(h.ticks).toBeGreaterThan(0);
+    expect(Number.isInteger(h.droppedTotal)).toBe(true);
+    expect(h.rssMb).toBeGreaterThan(10);
     expect(h.tickP95Ms).toBeGreaterThanOrEqual(0);
     expect(Number.isInteger(h.dropped)).toBe(true);
     await leaveAll();
