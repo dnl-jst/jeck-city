@@ -151,6 +151,14 @@ describe('RemoteRadio', () => {
     expect(e2[0]!.src).toBe('');
   });
 
+  test('an element the mixer cannot route marks the station silent: no new element every frame', () => {
+    const { audio, els } = setup(false);
+    for (let i = 0; i < 5; i++) audio.update(L, [car(1, 10, { radio: 'einslive' })], 0.016);
+    expect(els.length).toBe(1);
+    expect(audio.radio.isSilenced('einslive')).toBe(true);
+    expect(audio.stats.radio).toBeNull();
+  });
+
   test('muted: remote radio silent', () => {
     const { audio, els } = setup();
     audio.update(L, [car(1, 10, { radio: 'einslive' })], 0.016);

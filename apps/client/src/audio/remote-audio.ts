@@ -38,7 +38,7 @@ const clamp01 = (v: number): number => Math.min(1, Math.max(0, v));
 /**
  * The radio of another player's car: a second HTMLAudioElement with crossOrigin 'anonymous', through lowpass, panner
  * and gain (so it is muffled and positional). A station whose element errors is marked "no remote radio" for the
- * session and stays silent: it is never played unfiltered. The own radio is a different element, untouched.
+ * session and stays silent, as is one the mixer cannot route: it is never played unfiltered. The own radio is a different element, untouched.
  */
 export class RemoteRadio {
   private cur: { station: StationId; el: RemoteStreamEl; out: StreamOut } | null = null;
@@ -84,7 +84,11 @@ export class RemoteRadio {
     el.volume = 1;
     el.muted = this.muted;
     const out = this.deps.attach(el);
-    if (!out) return null;
+    if (!out) {
+      // not routable through the filter graph: silent for the session (and no new element every frame)
+      this.silent.add(station);
+      return null;
+    }
     const cur = { station, el, out };
     el.addEventListener('error', () => {
       if (this.cur !== cur) return;
