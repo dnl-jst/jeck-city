@@ -1,4 +1,5 @@
-import { FixedStepper, TUNING, type PlayerId, type PlayerInput, type SimEvent, type StationId, type WorldSim } from '@nn/shared';
+import type { RemoteCarInfo } from './remote/remote-players';
+import { FixedStepper, TUNING, type PlayerId, type PlayerInput, type SimEvent, type SnapshotCar, type SnapshotWalker, type StationId, type WorldSim } from '@nn/shared';
 
 /**
  * Where the game's world comes from: a WorldSim the client steps (offline) or, later, one that follows a server.
@@ -26,6 +27,9 @@ export interface Session {
   onCorrection: (() => void) | null;
   /** Added to the own figure's / car's rendered pose: position (m) and a rotation applied on top (online: a fading correction). */
   renderOffset(): RenderOffset;
+  /** Online only: other players, cars and names as of this frame. */
+  remote?(): { walkers: ReadonlyMap<string, SnapshotWalker>; cars: ReadonlyMap<string, SnapshotCar> };
+  roster?(): { names: ReadonlyMap<number, string>; cars: ReadonlyMap<number, RemoteCarInfo> };
 }
 
 /** Position offset and rotation offset (quaternion, applied before the pose's own rotation). */

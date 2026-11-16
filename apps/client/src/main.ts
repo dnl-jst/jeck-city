@@ -178,6 +178,12 @@ renderer.setAnimationLoop((t: number) => {
       props.knockDown(i);
       lighting.lampOut(i);
     }
+    // lamps the server (or its reset) stood up again, or a predicted knock it never confirmed
+    for (const i of props.fallenLamps()) {
+      if (!game.session.sim.props.isStanding(i)) continue;
+      props.standUp(i);
+      lighting.lampOn(i);
+    }
     props.syncFallen((i) => game!.session.sim.props.lampPose(i));
     radioWheel.render({ ...game.wheelState, current: gameAudio.station });
     if (maps) {

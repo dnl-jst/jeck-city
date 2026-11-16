@@ -162,6 +162,11 @@ export class Lighting {
     this.poolAt = null; // reassign the pool on the next update
   }
 
+  /** Lamp i stands again (server reset): it gets a light back. */
+  lampOn(i: number): void {
+    if (this.out.delete(i)) this.poolAt = null;
+  }
+
   update(sun: SunState, cameraPos: Vector3): void {
     const night = sun.nightFactor;
     const mood = moodAt((sun.altitude * 180) / Math.PI);

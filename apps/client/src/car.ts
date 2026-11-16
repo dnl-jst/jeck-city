@@ -271,7 +271,11 @@ export class DrivenCar {
   private readonly headMat = new MeshStandardMaterial({ color: 0xe8e6dc, emissive: 0xfff1d6, roughness: 0.2 });
   private readonly tailMat = new MeshStandardMaterial({ color: 0x7a0e0e, emissive: 0xff1a0a, roughness: 0.3 });
 
-  constructor(scene: Scene) {
+  /**
+   * beams: false = another player's car: no spotlights (only the emissive lamp materials and glare sprites), so the
+   * scene's light count stays constant and no extra shadow maps are rendered.
+   */
+  constructor(scene: Scene, { beams = true }: { beams?: boolean } = {}) {
     const g = carGeometries();
     const parts = [new Mesh(g.paint, this.paint), new Mesh(g.trim, trimMaterial()), new Mesh(g.head, this.headMat), new Mesh(g.tail, this.tailMat)];
     for (const m of parts) { m.castShadow = true; m.receiveShadow = true; }
@@ -279,10 +283,10 @@ export class DrivenCar {
     this.group.visible = false;
     scene.add(this.group);
 
-    const map = beamTexture();
-    for (const s of [1, -1]) {
+    const map = beams ? beamTexture() : null;
+    for (const s of beams ? [1, -1] : []) {
       const l = new SpotLight(0xffffff, 0, BEAM_RANGE, BEAM_ANGLE, 0, 2);
-      l.map = map;
+      l.map = map!;
       // just ahead of the lamp glass, so the car's own body never shadows its beam
       l.position.set(s * 0.6, G + 0.8, 2.2);
       l.target.position.set(s * 0.6 + s * 0.6, G + 0.8 - Math.tan(BEAM_TILT) * 30, 2.2 + 30); // toe out a little
@@ -298,7 +302,7 @@ export class DrivenCar {
       this.beams.push(l);
     }
     // tail lamps: wide, soft red cones onto the road and whatever stands behind (no shadows, they are dim)
-    for (const s of [1, -1]) {
+    for (const s of beams ? [1, -1] : []) {
       const l = new SpotLight(0xff2a14, 0, 18, 1.15, 1, 2);
       l.position.set(s * 0.74, G + 0.76, -2.2);
       l.target.position.set(s * 0.9, G - 0.6, -10);
@@ -395,6 +399,8 @@ export class ParkedCars {
   private readonly trim: InstancedMesh;
   /** The car the player drives: not drawn here. */
   private own: number | null = null;
+  /** Cars other players drive: not drawn here either (a DrivenCar draws them). */
+  private hidden: ReadonlySet<number> = new Set();
   /** Instance slot of each car, −1 while it is not drawn. */
   private readonly slots: Int32Array;
   /** Cars with an instance slot, and the pose object last written for each car. */
@@ -432,6 +438,14 @@ export class ParkedCars {
     const old = this.own;
     this.own = i;
     for (const c of [old, i]) if (c !== null) this.drawn[c] = null; // rewritten (scale) by the next update()
+  }
+
+  /** Hides the cars other players drive (replaces the previous set; a car that left it is drawn again). */
+  setHidden(ids: ReadonlySet<number>): void {
+    const old = this.hidden;
+    if (old.size === ids.size && [...ids].every((i) => old.has(i))) return;
+    this.hidden = new Set(ids);
+    for (const c of [...old, ...ids]) this.drawn[c] = null;
   }
 
   /** Cars that must have an instance slot regardless of distance: those with physics (near a player) or a driver. */
@@ -481,7 +495,7 @@ export class ParkedCars {
     if (k < 0) return;
     const s = this.pool.poses[i]!;
     this.drawn[i] = s;
-    this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own ? this.zero : this.one);
+    this.m.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own || this.hidden.has(i) ? this.zero : this.one);
     this.paint.setMatrixAt(k, this.m);
     this.trim.setMatrixAt(k, this.m);
   }

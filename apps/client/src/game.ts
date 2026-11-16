@@ -10,6 +10,7 @@ import { PlayerFigure } from './player';
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
+import { RemotePlayers } from './remote/remote-players';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -33,6 +34,8 @@ export class Game {
   readonly cars: ParkedCars;
   readonly driven: DrivenCar;
   readonly follow: FollowCamera;
+  /** Other players (online only). */
+  private readonly remotes: RemotePlayers | null;
   readonly fly: FreeFly;
   /** Hold R in the car: radio wheel (tap R = next station). */
   readonly wheel = new WheelControl();
@@ -55,6 +58,8 @@ export class Game {
   /** On foot after the last step: velocity and ground contact (figure animation, footsteps). */
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private grounded = true;
+  /** Knocked down after the last step (the figure lies, input is ignored). */
+  private down = false;
   /** Seconds in the air on foot (for landing sounds). */
   private airTime = 0;
   /** Radio station last given to the sim for the own car (undefined: none yet in this car). */
@@ -78,6 +83,9 @@ export class Game {
     this.cars = new ParkedCars(scene, sim.cars);
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
+    this.remotes = session.remote ? new RemotePlayers(scene, this.cars, {
+      me: session.me, colorOf: (i) => sim.cars.colors[i]!, occluded: (a, b) => this.occluded(a, b),
+    }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
     session.onStep = () => this.sample();
@@ -169,6 +177,7 @@ export class Game {
       this.currPos = p.pos;
       this.vel = p.vel;
       this.grounded = p.char.grounded;
+      this.down = p.mode === 'down';
     }
     this.sampledCar = p.carId;
   }
@@ -197,6 +206,7 @@ export class Game {
       this.currPos = p.pos;
       this.vel = p.vel;
       this.grounded = p.char.grounded;
+      this.down = p.mode === 'down';
     }
   }
 
@@ -253,6 +263,7 @@ export class Game {
       const p = lerp3(this.prevPos, this.currPos, a);
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
+      this.figure.setDown(this.down ? 1 : 0);
       this.figure.update(p.x, p.y, p.z, v, dt);
       if (!this.flying) this.follow.update(p, 0, dt);
       const grounded = this.grounded;
@@ -282,6 +293,11 @@ export class Game {
           throttle: this.ctl.forward, handbrake: this.ctl.brake,
         }, dt);
       }
+    }
+    if (this.remotes) {
+      const { walkers, cars } = this.session.remote!();
+      const { names, cars: info } = this.session.roster!();
+      this.remotes.update({ walkers, cars }, names, info, this.ctx.camera, night, dt);
     }
     if (audio) {
       const f = this.focus();

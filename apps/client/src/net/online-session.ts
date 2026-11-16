@@ -7,6 +7,7 @@ import type { RenderOffset, Session } from '../session';
 import type { ServerClock } from './clock';
 import type { NetState, Welcome } from './connection';
 import { poseOps, SnapshotBuffer } from './interp';
+import type { RemoteCarInfo } from '../remote/remote-players';
 
 /** What OnlineSession uses of a Connection (tests put a fake server behind it). */
 export interface NetLink {
@@ -27,6 +28,9 @@ export type NetStats = { rttMs: number; snapshotAgeMs: number; predErrorM: numbe
 export type RemoteSample = {
   walkers: Map<string, SnapshotWalker>; cars: Map<string, SnapshotCar>; lamps: Map<string, SnapshotLamp>;
 };
+
+/** Slow-state facts the renderer needs: names by slot, and per car its driver (slot) and lamp level. */
+export type Roster = { names: Map<number, string>; cars: Map<number, RemoteCarInfo> };
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
@@ -87,6 +91,7 @@ export class OnlineSession implements Session {
   private readonly carBuf = new SnapshotBuffer<SnapshotCar>(poseOps());
   private readonly lampBuf = new SnapshotBuffer<SnapshotLamp>(poseOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), lamps: new Map() };
+  private readonly rosterNow: Roster = { names: new Map(), cars: new Map() };
   private readonly offset: RenderOffset = { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 };
   /** Lamps down in the prediction world → the step the server last reported them fallen (or they fell locally). */
   private readonly lampSeen = new Map<number, number>();
@@ -124,6 +129,11 @@ export class OnlineSession implements Session {
   /** Remote players, cars and tipping lamps as sampled for this frame (at the render tick). */
   remote(): RemoteSample {
     return this.sample;
+  }
+
+  /** Names and car occupancy from the slow state, as of this frame. */
+  roster(): Roster {
+    return this.rosterNow;
   }
 
   stats(): NetStats {
@@ -278,7 +288,15 @@ export class OnlineSession implements Session {
     const poses = new Map<number, CarPose>();
     for (const c of cars.values()) poses.set(c.id, poseOf(c));
     const drivers = new Map<number, PlayerId>();
-    state.cars.forEach((c, key) => { if (c.driver >= 0 && c.driver !== this.me) drivers.set(Number(key), c.driver); });
+    const { names, cars: info } = this.rosterNow;
+    names.clear();
+    info.clear();
+    state.players.forEach((p) => { names.set(p.slot, p.name); });
+    state.cars.forEach((c, key) => {
+      if (c.driver < 0) return;
+      info.set(Number(key), { driver: c.driver, level: !c.lights ? 0 : c.engine === 2 ? 1 : 0.5 });
+      if (c.driver !== this.me) drivers.set(Number(key), c.driver);
+    });
     this.sim.setRemoteDrivers(drivers);
     this.sim.setProxies(feet, poses, (i) => {
       const c = state.cars.get(String(i));
