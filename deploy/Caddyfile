@@ -1,0 +1,7 @@
+# Caddyfile for deploy/docker-compose.yml: HTTPS for $DOMAIN, everything to the game container.
+# WebSockets (the game connection) pass through reverse_proxy without further configuration. The game serves its own
+# pre-compressed .br/.gz files; `encode` only compresses what is left.
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy game:2567
+}
