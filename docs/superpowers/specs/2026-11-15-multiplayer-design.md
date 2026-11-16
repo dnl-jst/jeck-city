@@ -21,6 +21,7 @@ Alle Besucher der Seite („Lück“) sind gleichzeitig in Nippes. Man gibt eine
 - Echte Kollisionen zwischen Spielern (zu Fuß und im Auto); **der Server ist Schiedsrichter**.
 - Eigener Node-Server mit **Colyseus**, **kein Cloudflare, kein Next.js**. Ein gemeinsamer Raum „Nippes“.
 - Ausgelegt auf **100 gleichzeitige Spieler**; mehr Last wird durch einen stärkeren Server gelöst, nicht durch Umbau. Der Nutzer stellt den Server bereit.
+  - **Nachtrag 2026-11-16:** Ziel 60 Spieler pro Server auf 2 vCPU; 100 benötigen einen schnelleren Einzelkern, die Physik läuft single-threaded (Lasttest: `docs/superpowers/notes/2026-11-15-multiplayer-loadtest.md`). Standard `MAX_PLAYERS` = 60, per Umgebungsvariable bis 100.
 - Bezeichnung „Lück“/„Besucher“, keine Accounts, nichts wird gespeichert.
 - Tag/Nacht folgt der lokalen Uhrzeit des jeweiligen Besuchers (bleibt clientseitig, wird nicht synchronisiert).
 
@@ -32,6 +33,7 @@ Alle Besucher der Seite („Lück“) sind gleichzeitig in Nippes. Man gibt eine
 - Server-autoritative Physik für Spieler, alle Autos (auch geparkte) und Laternen; Client-Vorhersage für die eigene Figur / das eigene Auto mit Abgleich.
 - Zusammenstöße: Fußgänger schubsen sich; Auto trifft Fußgänger → er wird weggestoßen, fällt kurz hin, steht nach ~1 s wieder auf; Autos prallen voneinander ab; umgefahrene Laternen liegen für alle.
 - 100 Spieler auf einem 2-vCPU-Server, nachgewiesen per Bot-Lasttest.
+  - **Nachtrag 2026-11-16:** Ziel 60 Spieler pro Server auf 2 vCPU; 100 benötigen einen schnelleren Einzelkern, die Physik läuft single-threaded.
 - Ein Deployment-Artefakt (Docker-Image) + Anleitung.
 
 **Nicht-Ziele (diese Version)**
@@ -132,7 +134,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 ### 8.1 Beitreten
 - Namensdialog vor dem Laden (Overlay über Ladebildschirm, Enter bestätigt). Name 2–20 Zeichen nach Trimmen, Buchstaben/Ziffern/Leerzeichen/`-_.'`, einfacher Schimpfwortfilter (kleine deutsch+englisch Liste in `@nn/shared/net`, Normalisierung von Leetspeak/Umlauten), Dubletten → „Jupp 2“. Server prüft verbindlich, Client vorab für Fehlermeldung.
 - Protokoll-/Build-Abgleich beim Join; bei Abweichung: „Neue Version – bitte Seite neu laden.“
-- Voll (100): „Nippes ist gerade voll – versuch es gleich nochmal.“
+- Voll (`MAX_PLAYERS`, Standard 60): „Nippes ist gerade voll – versuch es gleich nochmal.“
 - Spawn: nächster freier Punkt (Kapsel ohne Überlappung) auf dem Spawn-Gehweg in 1.5-m-Schritten entlang der Straße, max. 60 m vom Manifest-Spawn.
 
 ### 8.2 Autos
@@ -163,7 +165,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 
 - **Ein Docker-Image** (`apps/server/Dockerfile`, Multi-Stage): baut Client + Server, liefert den Client statisch aus (gzip/brotli vorkomprimiert, lange Cache-Header für Assets mit Hash) und Colyseus-WebSockets auf **einem Port**.
 - TLS über vorgeschalteten Reverse-Proxy (Beispielkonfiguration für Caddy im Repo). Anbieter frei (Nutzer stellt Server); Mindestgröße 2 vCPU / 2 GB RAM. **Nutzer: Docker-Image + Beispielkonfiguration genügen**; keine konkrete Plattform/Domain einrichten.
-- Konfiguration per Umgebungsvariablen: `PORT`, `MAX_PLAYERS` (100), `PUBLIC_URL`, `LOG_LEVEL`.
+- Konfiguration per Umgebungsvariablen: `PORT`, `MAX_PLAYERS` (60, höchstens 100), `PUBLIC_URL`, `LOG_LEVEL`.
 - `/healthz` (200 + Spielerzahl, Tick-Dauer p95).
 - Logs: Join/Leave (ohne IP im Klartext), Tick-Überläufe, Fehler.
 - Lokale Entwicklung: `npm run dev` startet Client (Vite) + Server parallel; Client verbindet per Vite-Proxy auf denselben Origin.
@@ -186,6 +188,7 @@ apps/client/                  angepasst: Lobby/Namensdialog, Netzwerk-Client, Vo
 3. **Determinismus-Toleranz**: Client-Vorhersage vs. Server bei 0 ms Latenz → Positionsfehler nach 10 s geradeaus laufen/fahren < 1 cm.
 4. **Latenz-Test** (Playwright, 2 Browser, künstlich 150 ms RTT + 1 % Paketverlust): eigene Figur zeigt beim Laufen/Fahren keine Korrektursprünge > 0.2 m (p95), fremde Figur bewegt sich ohne Teleports.
 5. **Lasttest**: `npm run loadtest` startet 100 Bots (Node, Colyseus-Client) – 60 % laufen, 40 % fahren, alle in einem Radius von 300 m um den Spawn, 10 min. Auf einer 2-vCPU-Maschine: Tick p95 < 8 ms, < 1 % verworfene Ticks, Bandbreite p95 < 50 KB/s pro Client, Speicher stabil.
+   - **Nachtrag 2026-11-16:** Ziel 60 Spieler pro Server auf 2 vCPU; 100 benötigen einen schnelleren Einzelkern, die Physik läuft single-threaded. Der Lasttest läuft deshalb mit 60 Bots (gleiche Anteile) und prüft Tick p95 < 16,7 ms (das 60-Hz-Budget; die 8 ms entfallen), < 1 % verworfene Ticks, Bandbreite p95 < 50 KB/s pro Client und < 10 % RSS-Anstieg zwischen Minute 2 und 10.
 6. **Bestehende Checks** bleiben grün: `npm test`, `npm run typecheck`, `npm run drive-check` (Einzelspieler-Modus) und ein neuer `npm run mp-check` (zwei Headless-Clients gegen lokalen Server: beide spawnen, sehen sich, einer fährt 30 m).
 7. Nutzer prüft manuell mit zwei Rechnern (Mac + Linux-PC), ob es sich flüssig anfühlt.
 

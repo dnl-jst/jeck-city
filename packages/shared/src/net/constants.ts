@@ -2,7 +2,8 @@ export const PROTOCOL_VERSION = 2;
 export const TICK_HZ = 60;
 export const SNAPSHOT_EVERY = 3;
 export const MAX_INPUTS_PER_PACKET = 3;
-export const MAX_PLAYERS = 100;
+/** Default player cap per server: what 2 vCPU carry (load test 2026-11-16); MAX_PLAYERS (env) can raise it up to 100 on a faster core. */
+export const MAX_PLAYERS = 60;
 export const INTEREST_RADIUS = 250;
 export const INTEREST_RELEASE = 270;
 export const RECONNECT_S = 15;

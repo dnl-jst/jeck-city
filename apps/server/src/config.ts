@@ -28,6 +28,9 @@ export type Config = {
 
 type Env = Record<string, string | undefined>;
 
+/** Highest MAX_PLAYERS accepted from the environment (the default is MAX_PLAYERS = 60, sized for 2 vCPU). */
+export const PLAYER_LIMIT = 100;
+
 const repoPath = (p: string): string => fileURLToPath(new URL(`../../../${p}`, import.meta.url));
 
 /** apps/client/dist/world (built client) if it exists, else apps/client/public/world (pipeline output). */
@@ -67,7 +70,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
   const dev = env.NODE_ENV !== 'production';
   return {
     port: intEnv(env, 'PORT', 2567, 0, 65535),
-    maxPlayers: intEnv(env, 'MAX_PLAYERS', MAX_PLAYERS, 1, MAX_PLAYERS),
+    maxPlayers: intEnv(env, 'MAX_PLAYERS', MAX_PLAYERS, 1, PLAYER_LIMIT),
     publicUrl: env.PUBLIC_URL || null,
     logLevel,
     dev,

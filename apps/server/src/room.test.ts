@@ -99,7 +99,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect((await rejection(join(42 as unknown as string))).code).toBe(400);
   });
 
-  it('101st player is rejected (maxPlayers 2: the third)', async () => {
+  it('a player beyond maxPlayers is rejected (maxPlayers 2: the third)', async () => {
     await join('Anna');
     await join('Bert');
     const e = await rejection(join('Carl'));

@@ -1,12 +1,52 @@
 # Multiplayer load test (Task 15)
 
+## Decision 2026-11-16: 60 players per server on 2 vCPU
+
+The user lowered the target after the 100-bot results below.
+
+- The default cap is now **60 players** (`MAX_PLAYERS` = 60). The `MAX_PLAYERS` environment variable can raise it up to 100, but 100 needs a faster single core: the physics runs single-threaded.
+- No further physics optimisation for now.
+- New load-test criteria (`npm run loadtest`, default `--bots 60`):
+  - tick p95 < 16.7 ms (the 60 Hz budget; the old 8 ms target is dropped)
+  - dropped ticks < 1 %
+  - bandwidth p95 < 50 KB/s
+  - RSS growth from minute 2 to the end < 10 %
+
+### 10-minute run with 60 bots (30 walk, 24 drive, 6 ride; server on cores 0,1, bots on 2-5,8-11)
+
+| criterion | measured | limit | ok |
+|---|---|---|---|
+| tick p95 (p95 of 10 s windows) | 16.26 ms (max 16.88) | < 16.7 ms | yes |
+| dropped ticks | 1 of 36000 (0.003 %) | < 1 % | yes |
+| bandwidth p95 per client | 23.0 KB/s (worst client 28.0) | < 50 KB/s | yes |
+| RSS minute 2 → end | 572 → 639 MB (+11.7 %) | < 10 % | **NO** |
+| bots still connected | 60 of 60 | all | yes |
+
+The bot process sent 59.5 inputs/s per bot, with an event loop delay p99 of 11 ms.
+
+RSS over the run (time in s : MB):
+
+```
+10:660 … 70:692 | 80:538 90:567 120:572 | 130:626 150:637 … 300:638 … 600:639
+```
+
+- At about 75 s a large GC shrinks the heap.
+- The minute-2 sample (572 MB) falls into the regrowth after that GC.
+- From 150 s to the end, RSS stays flat at 637–639 MB (+0.3 %).
+
+So the failed criterion reflects where the baseline sample landed, not a leak. The criterion was **not** changed: as instructed, the numbers are reported. A baseline after the heap has settled, such as minute 3, would pass. That is for the reviewer or the user to decide.
+
+The tick p95 passes, but only just (16.26 ms against 16.67 ms; the worst window was 16.88 ms).
+
+## Earlier: the 100-player target
+
 Date: 2026-11-16. Branch `docs/multiplayer-spec`.
 
-## Result in short
+### Result in short
 
 100 bots for 10 minutes against the server on 2 cores: **bandwidth, memory and connection stability pass. Tick time and dropped ticks fail.** The tick p95 is 23 ms (the limit is 8 ms) and 3.7 % of ticks are dropped (the limit is 1 %). The remaining cost is the physics step itself (`WorldSim.step`, 13–15 ms per tick at 100 players). Most of it is Rapier's character controller on the DGM1 terrain. It cannot be fixed without changing the shared physics, which also changes single-player behaviour, so this needs a decision (see "Options").
 
-## Setup
+### Setup
 
 - Machine: AMD Ryzen 5 3600 (6 cores / 12 threads, up to 4.2 GHz), Node 24.
 - Server: `NODE_ENV=development PORT=2601 NN_JOIN_PER_MIN=1000 LOG_LEVEL=warn taskset -c 0,1 node --import tsx apps/server/src/main.ts`. This is the same as `npm start -w @nn/server`; `node --import tsx` was used so `--cpu-prof` can be added.
@@ -26,7 +66,7 @@ Date: 2026-11-16. Branch `docs/multiplayer-spec`.
   - RSS: minute 2 compared with the end.
   - Measuring starts 20 s after the last join.
 
-## Runs
+### Runs
 
 | run | bots | tick p95 | dropped | bandwidth p95 | RSS | notes |
 |---|---|---|---|---|---|---|
@@ -49,7 +89,7 @@ Per-tick split from temporary instrumentation in `stepOnce`, at 100 bots and aft
 
 At 50 bots the same split is `sim.step` 9.1 ms, snapshots 0.7 ms and syncState 1.1 ms.
 
-## Profile (`node --cpu-prof`, 100 bots)
+### Profile (`node --cpu-prof`, 100 bots)
 
 Baseline, as a share of all server CPU:
 - `stepOnce` 88 %. Of that, `WorldSim.step` 56 % and `sendSnapshots` 29.5 %.
@@ -64,7 +104,7 @@ After the snapshot fix:
 - Rapier world step 13 %.
 - 9 % idle.
 
-### Why the character controller is expensive (micro benchmarks, 50 capsules)
+#### Why the character controller is expensive (micro benchmarks, 50 capsules)
 
 | world | µs per `computeColliderMovement` |
 |---|---|
@@ -78,7 +118,7 @@ After the snapshot fix:
 
 The cost comes from Rapier's contact and shape-cast work against the composite ground shapes (heightfield + trimesh) under every capsule. Its size does not depend on the size of the heightfield: tiling it into 64 m or 128 m pieces changed nothing. The controller features (autostep, snap-to-ground) do not matter either. In the server the cost is about 150 µs per walker, because walkers slide along walls and push past each other. Bikes cost about the same per rider. With 50 walkers, 10 riders, 40 driven cars and the world step, that adds up to 13–15 ms.
 
-## What was changed
+### What was changed
 
 - `snapshotRound(sim, events, slotOf)` and `snapshotFor(round, sim, id, interest, ack)` in `@nn/shared/sim`.
   - Walkers, riders, moving bikes, cars and tipping lamps are collected once per round and filtered per client.
@@ -90,7 +130,7 @@ The cost comes from Rapier's contact and shape-cast work against the composite g
 - `/healthz` additionally reports `ticks`, `droppedTotal` and `rssMb`.
 - `NN_JOIN_PER_MIN`: raises the per-address join limit, **in dev only**. In production the limit stays at 5/min (test `config.test.ts`). The load test needs it because all bots join from 127.0.0.1.
 
-## Options (needs a decision)
+### Options (decided: option 1, see above)
 
 1. **Lower the capacity claim.** At 50 players the tick p95 is 12.5 ms with no dropped ticks; the p95 limit of 8 ms is still missed. The 8 ms target looks reachable at about 30 players on this CPU, and cloud cores are usually slower.
 2. **Relax the criterion.** For example: tick p95 below the 16.7 ms tick budget, and fewer than 1 % dropped ticks. Neither holds at 100 players today either; the average step is already 80–90 % of the budget.

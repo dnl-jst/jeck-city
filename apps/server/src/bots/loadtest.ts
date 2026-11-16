@@ -1,8 +1,9 @@
 /**
  * Load test against a dev server (devTeleport must be allowed):
- *   npm run loadtest -- [--url ws://localhost:2567] [--bots 100] [--minutes 10] [--seed 1]
+ *   npm run loadtest -- [--url ws://localhost:2567] [--bots 60] [--minutes 10] [--seed 1]
  * Bots: 50 % walk, 40 % drive, 10 % ride (per ten bots), all teleported within 300 m of the spawn. Every 10 s /healthz is polled.
- * At the end a table; the exit code is 1 when a criterion of spec 13.5 is missed. The server needs NN_JOIN_PER_MIN
+ * At the end a table; the exit code is 1 when a criterion of spec 13.5 (as amended 2026-11-16: 60 players on 2 vCPU,
+ * tick p95 within the 16.7 ms tick budget) is missed. The server needs NN_JOIN_PER_MIN
  * raised (all bots join from one address); it reads the world from the same files as the server (NN_WORLD_DIR).
  */
 import { readFileSync } from 'node:fs';
@@ -18,7 +19,8 @@ const POLL_S = 10;
 const BYTES_SKIP_S = 5;
 /** Seconds after the last join before tick times count. */
 const SETTLE_S = 20;
-const LIMITS = { tickP95Ms: 8, droppedPct: 1, kbPerS: 50, rssGrowthPct: 10 };
+/** Spec 13.5 as amended 2026-11-16: the tick p95 must fit the 60 Hz budget (1000/60 ms). */
+const LIMITS = { tickP95Ms: 1000 / 60, droppedPct: 1, kbPerS: 50, rssGrowthPct: 10 };
 
 type Health = { players: number; tickP95Ms: number; dropped: number; ticks: number; droppedTotal: number; rssMb: number };
 type Sample = { t: number; h: Health; connected: number; modes: string; kbps: number };
@@ -26,7 +28,7 @@ type Sample = { t: number; h: Health; connected: number; modes: string; kbps: nu
 const { values: args } = parseArgs({
   options: {
     url: { type: 'string', default: 'ws://localhost:2567' },
-    bots: { type: 'string', default: '100' },
+    bots: { type: 'string', default: '60' },
     minutes: { type: 'string', default: '10' },
     seed: { type: 'string', default: '1' },
   },
@@ -160,7 +162,7 @@ async function main(): Promise<number> {
   const sentPerS = bots.reduce((a, b) => a + b.bot.inputsSent, 0) / bots.length / ((performance.now() - t0) / 1000);
 
   const rows: [string, string, string, boolean][] = [
-    ['tick p95 (p95 of 10 s windows)', `${fmt(p95(tickP95s))} ms (max ${fmt(Math.max(...tickP95s))})`, `< ${LIMITS.tickP95Ms} ms`, p95(tickP95s) < LIMITS.tickP95Ms],
+    ['tick p95 (p95 of 10 s windows)', `${fmt(p95(tickP95s))} ms (max ${fmt(Math.max(...tickP95s))})`, `< ${fmt(LIMITS.tickP95Ms, 1)} ms`, p95(tickP95s) < LIMITS.tickP95Ms],
     ['dropped ticks', `${dropped} of ${ticks + dropped} (${fmt(droppedPct, 3)} %)`, `< ${LIMITS.droppedPct} %`, droppedPct < LIMITS.droppedPct],
     ['bandwidth p95 per client', `${fmt(kbP95, 1)} KB/s (worst client p95 ${fmt(Math.max(...perBotP95) / 1024, 1)})`, `< ${LIMITS.kbPerS} KB/s`, kbP95 < LIMITS.kbPerS],
     ['RSS minute 2 → end', rssGrowthPct === null ? `n/a (run ≥ 3 min), end ${last.rssMb} MB` : `${at2!.h.rssMb} → ${last.rssMb} MB (${fmt(rssGrowthPct, 1)} %)`, `< ${LIMITS.rssGrowthPct} %`, rssGrowthPct === null || rssGrowthPct < LIMITS.rssGrowthPct],
