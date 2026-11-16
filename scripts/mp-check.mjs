@@ -234,6 +234,9 @@ try {
   await a.until((s) => s.speed < 0.5, null, STEPS.stop, 'car did not stop');
   await a.page.keyboard.up('Space');
   const out = await useE(a, (s) => s.mode === 'walk', 'E did not get out of the car');
+  // the server must have applied the E press before the teleport: a fresh figure next to the bike that gets the
+  // still-queued E input would get on the bike right away (and the press below would get off again)
+  await b.until(() => window.__nnRemote().find((p) => p.name === 'Check A')?.mode === 'walk', null, STEPS.see, 'B did not see A get out');
 
   // ride: the nearest bike with no other bike within 4 m (so E there can only mean this one) and away from the car's
   // start (the car just drove off and may have pushed a bike around there)
@@ -247,7 +250,12 @@ try {
   await a.page.keyboard.down('KeyW');
   await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 10, [on.x, on.z], STEPS.ride, 'bike did not get 10 m far');
   const rideA = await a.state();
-  await b.until(() => !!window.__nnRemote().find((p) => p.name === 'Check A' && p.mode === 'ride'), null, STEPS.see, 'B did not see A riding');
+  try {
+    await b.until(() => !!window.__nnRemote().find((p) => p.name === 'Check A' && p.mode === 'ride'), null, STEPS.see, 'B did not see A riding');
+  } catch (e) {
+    console.error('A now', JSON.stringify(await a.state()), 'B sees', JSON.stringify(await b.page.evaluate(() => window.__nnRemote())));
+    throw e;
+  }
   await a.page.keyboard.up('KeyW');
   console.log(`A rode ${Math.hypot(rideA.x - on.x, rideA.z - on.z).toFixed(1)} m; B sees A in mode ${(await remoteA(b.page)).mode}`);
 
