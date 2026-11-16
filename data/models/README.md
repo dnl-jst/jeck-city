@@ -49,3 +49,4 @@ cd data/models/<name> && blender -b --factory-startup --python-expr \
 | DENW37AL1000AEDb | `st-marien/` – St. Marien, Baudriplatz | LOD2 footprint, street photos |
 | DENW37AL1000APxJ, …BdpH, …Bdpd | `wilhelmplatz-tribuene/` – Tribüne with WC and kiosk, Wilhelmplatz | LOD2 footprint/heights, street photos, aerial |
 | DENW37AL1000AJzb, …AKKj, …BVEZ, …AKt2 | `neusser-florastrasse/` – the four buildings round the square at U Florastraße, Neusser Str. | LOD2 footprints/heights, street photos |
+| DENW37AL1000eZaq, …eVXe | `erft-haus/` – Erft-Haus, Neusser Str. 27–29 (Agnesviertel), with the passage to the courtyard | LOD2 footprint/heights, street photo |
