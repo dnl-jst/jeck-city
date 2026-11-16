@@ -53,7 +53,7 @@ export const TUNING = {
      */
     lampKick: 1.25,
     lampSpin: 0.12,
-    /** Tree trunk collider at scale 1 (render trunk: radius 0.16–0.24 m, 4.2 m high). */
+    /** Tree trunk collider at scale 1 (render trunk: TREE_TRUNK_RADIUS in client trees.ts). */
     trunkRadius: 0.24,
     trunkHeight: 4.2,
   },
