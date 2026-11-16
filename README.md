@@ -46,6 +46,8 @@ Umgebungsvariablen:
 | `PUBLIC_URL` | – | öffentliche Adresse (optional) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
+Ohne Docker: ein bloßes `npm start` ohne `NODE_ENV=production` startet den Server im Entwicklungsmodus (Teleport, Fliegen, Schreib-Hooks für Tests). In Produktion immer `NODE_ENV=production` setzen; das Docker-Image tut das.
+
 Mindestgröße: 2 vCPU und 2 GB RAM für 60 Spieler. Die Simulation läuft auf einem Kern; Messwerte und Lasttest:
 `docs/superpowers/notes/2026-11-15-multiplayer-loadtest.md` (`npm run loadtest`).
 

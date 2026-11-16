@@ -46,7 +46,7 @@
 
 ## Review Focus
 
-1. **Spieler trennt die Verbindung mitten in der Fahrt:** Der Server darf die zuletzt gehaltene Eingabe nicht weiter anwenden, sonst fährt das Auto führerlos mit Vollgas weiter. Fehlt für einen Tick die Eingabe, gilt eine neutrale Eingabe (kein Gas, keine Lenkung, Bremse aus, yaw beibehalten) und das Auto rollt aus. → Task 7, Test `missing input is neutral, not repeated`.
+1. **Spieler trennt die Verbindung mitten in der Fahrt:** Der Server darf die zuletzt gehaltene Eingabe nicht dauerhaft weiter anwenden, sonst fährt das Auto führerlos mit Vollgas weiter. Fehlt die Eingabe, werden die kontinuierlichen Felder der letzten Eingabe (forward, right, run, brake, horn, yaw) höchstens 6 Ticks wiederholt (`REPEAT_MAX`, 100 ms; Pulse use/jump/bell nie), danach gilt eine neutrale Eingabe (kein Gas, keine Lenkung, Bremse aus, yaw beibehalten) und das Auto rollt aus. → Task 7, Tests `missing input repeats continuous fields ≤ 6 ticks, then neutral` und `a driver that stopped sending gets neutral input after 100 ms: the car rolls out`.
 2. **Zwei Spieler drücken E im selben Tick am selben Auto:** Genau einer sitzt drin; der andere bleibt zu Fuß und sein Client zeigt „Das Auto ist besetzt“ und nimmt den vorhergesagten Einstieg zurück. → Task 3 (`same-tick enter: lower queue order wins`) und Task 10 (`denied enter is rolled back`).
 3. **Feindliche oder kaputte Nachrichten** (NaN- oder ∞-yaw, abgeschnittene Puffer, 10 kB-Pakete, unbekannter Nachrichtentyp, 500 Eingaben/s): Der Server stürzt nicht ab, klemmt die Werte, verwirft den Überschuss bzw. trennt die Verbindung, und alle anderen Spieler laufen ungestört weiter. → Task 2 (`decodeInputs rejects malformed`) und Task 7 (`flood and garbage do not crash the room`).
 4. **Tab lag im Hintergrund und kommt zurück:** Der Client hat für Sekunden nichts gesendet, der Ringpuffer ist voll oder die Lücke ist größer als 60 Schritte. Dann wird hart auf den Server-Stand gesetzt, ohne Wiederholungs-Lawine; der Server-Ratelimit verwirft den Nachhol-Burst. → Task 10 (`more than MAX_REPLAY_STEPS pending → hard set`).
@@ -242,7 +242,7 @@ Ziel: Das Spiel läuft wieder genauso wie heute, nur über eine lokale `WorldSim
   - `state.ts` (Schema mit `schema()`-Builder, ohne Decorators): `players: MapSchema<{ slot, name, mode, carId }>`; `cars: MapSchema<{ driver, engine, lights, radio, x,y,z,qx,qy,qz,qw }>` nur für Autos, die vom Manifest abweichen oder einen Fahrer haben (Pose wird aktualisiert, sobald das Auto ruht); `lamps: MapSchema<{ x,y,z,qx,qy,qz,qw }>` für ruhende gefallene Laternen. Ohne StateView: Das sind höchstens ein paar hundert kleine Einträge, der Interessenbereich gilt nur für den schnellen Snapshot (Spec 6.3: Encoding ist dem Umsetzer überlassen).
 - [ ] **Step 1: Failing tests:**
   - `inputs.test.ts`:
-    - `missing input is neutral, not repeated`: Nach einer `forward: 1`-Eingabe und dann keiner liefert `next()` beim zweiten Mal forward 0, yaw gleich.
+    - `missing input repeats continuous fields ≤ 6 ticks, then neutral`: Nach einer `forward: 1, use: true`-Eingabe und dann keiner liefert `next()` die nächsten 6 Ticks forward 1 ohne use, danach forward 0, yaw gleich.
     - `duplicate and old seqs are ignored`.
     - `rate limit drops excess`: 300 Eingaben in 1 s → höchstens 90 + Burst 6 angenommen.
     - `queue keeps newest 6`.
