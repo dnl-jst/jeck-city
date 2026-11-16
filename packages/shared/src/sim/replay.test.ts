@@ -3,7 +3,7 @@ import { decodeSnapshot, encodeSnapshot, NEUTRAL_INPUT, type PlayerInput, type S
 import { Interest } from '../net/interest';
 import type { WorldAssets } from './assets';
 import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
-import { ownStateOf } from './replay';
+import { ownStateOf, predictionMatches } from './replay';
 import { headingOf, type CarPose } from './rules';
 import { buildSnapshot } from './snapshot';
 import { WorldSim, type SimEvent } from './world-sim';
@@ -91,6 +91,49 @@ describe('WorldSim.replay', () => {
     const stepped = where(sim, 1);
     sim.replay(1, from, inputs);
     expect(dist3(where(sim, 1), stepped)).toBeLessThan(1e-4);
+  }, 30_000);
+});
+
+describe('predictionMatches', () => {
+  /** A server and a client sim with the same inputs (0 latency); the client's prediction equals the server state. */
+  async function twins(inputs: (t: number) => PlayerInput, ticks: number) {
+    const a = fixtureAssets();
+    const server = await WorldSim.create(a), client = await WorldSim.create(a);
+    const at = leftOf(server.cars.poses[0]!, 2.5);
+    server.addPlayer(1, at);
+    client.addPlayer(1, at);
+    for (let t = 0; t < ticks; t++) {
+      const i = inputs(t);
+      server.step(new Map([[1, i]]));
+      client.step(new Map([[1, i]]));
+    }
+    return { pred: client.player(1), truth: ownStateOf(snapOwn(server, 1)) };
+  }
+
+  test('walking: equal states match; 2 cm or 2 cm/s off, or another mode, do not', async () => {
+    const { pred, truth } = await twins((t) => ({ ...N, forward: 1, run: true, yaw: 0.01 * t }), 60);
+    expect(pred.mode).toBe('walk');
+    expect(predictionMatches(pred, truth)).toBe(true);
+    expect(predictionMatches(pred, { ...truth, char: { ...truth.char, x: truth.char.x + 0.02 } })).toBe(false);
+    expect(predictionMatches(pred, { ...truth, char: { ...truth.char, vz: truth.char.vz + 0.02 } })).toBe(false);
+    expect(predictionMatches(pred, { ...truth, char: { ...truth.char, x: truth.char.x + 0.005 } })).toBe(true);
+    expect(predictionMatches(pred, { ...truth, mode: 'down' })).toBe(false);
+  }, 30_000);
+
+  test('driving: equal states match; position, velocity, rotation or car off do not', async () => {
+    const { pred, truth } = await twins((t) => (t === 10 ? { ...N, use: true } : t > 150 ? { ...N, forward: 1, right: 0.3 } : N), 240);
+    expect(pred.mode).toBe('drive');
+    expect(Math.hypot(pred.vel.x, pred.vel.z)).toBeGreaterThan(2);
+    expect(predictionMatches(pred, truth)).toBe(true);
+    const car = truth.car!;
+    expect(predictionMatches(pred, { ...truth, car: { ...car, z: car.z + 0.02 } })).toBe(false);
+    expect(predictionMatches(pred, { ...truth, car: { ...car, vx: car.vx + 0.02 } })).toBe(false);
+    // the car yawed by a further 0.01 rad: q · (0, sin h, 0, cos h) with h = 0.005
+    const s = Math.sin(0.005), c = Math.cos(0.005);
+    const yawed = { qx: car.qx * c - car.qz * s, qy: car.qw * s + car.qy * c, qz: car.qx * s + car.qz * c, qw: car.qw * c - car.qy * s };
+    expect(predictionMatches(pred, { ...truth, car: { ...car, ...yawed } })).toBe(false);
+    expect(predictionMatches(pred, { ...truth, carId: 1 })).toBe(false);
+    expect(predictionMatches(pred, { ...truth, engine: 'off' })).toBe(false);
   }, 30_000);
 });
 

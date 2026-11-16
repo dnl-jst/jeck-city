@@ -4,6 +4,7 @@ import type { CharacterState } from '../physics/character';
 import type { VehicleState } from '../physics/vehicle';
 import type { SnapshotOwn } from '../net/codec';
 import type { IgnitionSave, IgnitionState } from './ignition';
+import type { PlayerSnapshot } from './world-sim';
 
 /**
  * A player's own state as the server had it after the input `ackSeq` (client reconciliation): where WorldSim.replay
@@ -39,6 +40,43 @@ export function ownStateOf(o: SnapshotOwn): OwnState {
     mode, carId: drive ? o.carId : null, char: o.char, car: drive ? o.car : null, engine: drive ? ENGINES[o.engine] : 'off',
     bikeId: ride ? o.bikeId : null, bike: ride ? o.bike : null, fallTicks: o.fallTicks,
   };
+}
+
+/** predictionMatches tolerances: position (m), velocity (m/s), angles (rad: rotation, heading, steering), spin (rad/s). */
+const MATCH_POS = 0.01;
+const MATCH_VEL = 0.01;
+const MATCH_ANGLE = 0.002;
+const MATCH_SPIN = 0.01;
+
+/**
+ * Whether the client's predicted own state for an input (`pred`, WorldSim.player after that step) is the server's state
+ * after the same input (`server`) up to float noise: same mode, car, bike, engine and timers, position within 1 cm,
+ * velocities within 1 cm/s, and in a car or on a bike rotation, heading and steering within 0.002 rad. Then a replay
+ * from `server` would reproduce the current prediction, and reconciliation can keep it as it is.
+ */
+export function predictionMatches(pred: PlayerSnapshot, server: OwnState): boolean {
+  if (pred.mode !== server.mode || pred.carId !== server.carId || pred.bikeId !== (server.bikeId ?? null)) return false;
+  if (pred.engine !== (server.engine ?? 'off') || pred.fallTicks !== (server.fallTicks ?? 0)) return false;
+  const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+  const nearV = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }, tol: number) =>
+    Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= tol;
+  if (pred.mode === 'drive') {
+    const p = pred.car!, s = server.car;
+    if (!s) return false;
+    const dot = Math.abs(p.qx * s.qx + p.qy * s.qy + p.qz * s.qz + p.qw * s.qw);
+    return nearV(p, s, MATCH_POS) && nearV({ x: p.vx, y: p.vy, z: p.vz }, { x: s.vx, y: s.vy, z: s.vz }, MATCH_VEL)
+      && nearV({ x: p.ax, y: p.ay, z: p.az }, { x: s.ax, y: s.ay, z: s.az }, MATCH_SPIN)
+      && 2 * Math.acos(Math.min(1, dot)) <= MATCH_ANGLE && near(p.steer, s.steer, MATCH_ANGLE);
+  }
+  if (pred.mode === 'ride') {
+    const p = pred.bike!, s = server.bike;
+    if (!s) return false;
+    return p.grounded === s.grounded && nearV(p, s, MATCH_POS) && near(p.speed, s.speed, MATCH_VEL) && near(p.vy, s.vy, MATCH_VEL)
+      && near(p.heading, s.heading, MATCH_ANGLE) && near(p.steer, s.steer, MATCH_ANGLE);
+  }
+  const p = pred.char, s = server.char;
+  return p.grounded === s.grounded && p.downTicks === s.downTicks && nearV(p, s, MATCH_POS)
+    && nearV({ x: p.vx, y: p.vy, z: p.vz }, { x: s.vx, y: s.vy, z: s.vz }, MATCH_VEL);
 }
 
 type BodySave = {

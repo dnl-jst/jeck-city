@@ -223,6 +223,8 @@ describe('OnlineSession', () => {
     const c = client.player(ME).pos, s = server.player(ME).pos;
     expect(Math.hypot(c.x + 70, c.z + 70)).toBeGreaterThan(10);
     expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(2);
+    // most snapshots find the prediction at ackSeq right: no replay
+    expect(session.reconciles.skipped).toBeGreaterThan(3 * session.reconciles.replayed);
   }, 60_000);
 
   test('150 ms RTT: no correction jump > 0.2 m (p95), driving', async () => {
@@ -243,6 +245,8 @@ describe('OnlineSession', () => {
     expect(p95(frames.map((f) => f.predErrorM))).toBeLessThan(0.2);
     const p = client.player(ME).pos;
     expect(Math.hypot(p.x + 60, p.z + 80)).toBeGreaterThan(10);
+    // most snapshots find the prediction at ackSeq right: no replay
+    expect(session.reconciles.skipped).toBeGreaterThan(3 * session.reconciles.replayed);
   }, 60_000);
 
   test('slow renderer (9–11 fps, steps sent bunched, snapshots seen a frame late) at 150 ms RTT: correction per step p95 ≤ 0.2 m, driving', async () => {

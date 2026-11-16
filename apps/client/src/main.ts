@@ -50,6 +50,8 @@ declare global {
       online: boolean;
       /** Players in the room (1 offline). */
       players: number;
+      /** Online: reconciliations so far (replayed, skipped because the prediction matched, set hard); null offline. */
+      reconciles: { replayed: number; skipped: number; hard: number } | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
     /** Dev/debug: the server connection (null offline). */
@@ -363,6 +365,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,
       online: !!conn, players: onlineSession?.stats().players ?? 1,
+      reconciles: onlineSession ? { ...onlineSession.reconciles } : null,
     };
   };
   // write hooks (they change state) only where dev tools are allowed; the read-only getters always exist

@@ -1,6 +1,6 @@
 import {
-  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, STATION_IDS, TICK_HZ, TUNING,
-  type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PropPose, type SimEvent,
+  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, predictionMatches, STATION_IDS, TICK_HZ, TUNING,
+  type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PlayerSnapshot, type PropPose, type SimEvent,
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
   type WorldSim,
 } from '@nn/shared';
@@ -42,7 +42,10 @@ export type Roster = { names: Map<number, string>; variants: Map<number, number>
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
 /** An input not yet acknowledged, with what the prediction made of it (state after its step). */
-type Pending = { seq: number; input: PlayerInput; pos: Vec3; car: number | null; bike: number | null; ign: IgnitionSave | null };
+/** An unacknowledged input and the predicted state after its step (state: in full, for predictionMatches). */
+type Pending = {
+  seq: number; input: PlayerInput; pos: Vec3; car: number | null; bike: number | null; ign: IgnitionSave | null; state: PlayerSnapshot;
+};
 /** Which vehicle the own player is in or on. */
 type Vehicle = { car: number | null; bike: number | null };
 
@@ -73,6 +76,7 @@ const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bi
  * interpolated snapshot poses (WorldSim.setProxies). Each snapshot resets the own state to the server's at ackSeq and
  * replays the unacknowledged inputs (WorldSim.replay); the difference to the old prediction fades out of the rendered
  * pose over CORRECTION_BLEND_S. More than MAX_REPLAY_STEPS inputs outstanding or an error above HARD_SNAP_M: set hard.
+ * If the prediction for ackSeq already matches the server's state (predictionMatches), nothing is replayed.
  * Riding is predicted like driving (the own bike is simulated, other riders are kinematic bikes on their poses).
  *
  * seq keeps increasing for the whole page session, across reconnects (the server drops seq ≤ the last one it queued).
@@ -84,6 +88,8 @@ export class OnlineSession implements Session {
   onCorrection: (() => void) | null = null;
   /** How far (m) corrections moved the rendered own pose in the last frame (fade-out step, or a hard set). */
   correction = 0;
+  /** Reconciliations so far: replayed, skipped (the prediction at ackSeq matched the server), set hard. */
+  readonly reconciles = { replayed: 0, skipped: 0, hard: 0 };
   private readonly stepper = new FixedStepper(TUNING.world.dt, 8);
   /** use/jump/bell pressed but not yet sent in a step (one-tick pulses, as offline). */
   private use = false;
@@ -305,6 +311,13 @@ export class OnlineSession implements Session {
     const err = ackEntry && same ? dist(ackEntry.pos, server.car ?? server.bike ?? server.char) : 0;
     const hard = this.first || this.pending.length > MAX_REPLAY_STEPS || err > HARD_SNAP_M;
     this.first = false;
+    if (!hard && ackEntry && predictionMatches(ackEntry.state, server)) {
+      // the prediction for ackSeq is the server's state: replaying from it would reproduce the current prediction
+      this.reconciles.skipped++;
+      this.predErrorM = 0;
+      return { x: 0, y: 0, z: 0 };
+    }
+    this.reconciles[hard ? 'hard' : 'replayed']++;
 
     const before = this.ownPose();
     if (hard) {
@@ -464,7 +477,7 @@ export class OnlineSession implements Session {
   /** What a pending input keeps of the state after its step. */
   private ownSample(): Omit<Pending, 'seq' | 'input'> {
     const p = this.sim.player(this.me);
-    return { pos: p.pos, car: p.carId, bike: p.bikeId, ign: p.carId !== null ? this.sim.ignition(p.carId).save() : null };
+    return { pos: p.pos, car: p.carId, bike: p.bikeId, ign: p.carId !== null ? this.sim.ignition(p.carId).save() : null, state: p };
   }
 
 }
