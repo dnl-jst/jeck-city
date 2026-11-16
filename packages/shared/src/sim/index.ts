@@ -5,3 +5,5 @@ export * from './rules';
 export * from './spawn';
 export * from './world-sim';
 export * from './snapshot';
+export * from './proxies';
+export * from './replay';

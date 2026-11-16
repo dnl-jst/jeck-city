@@ -74,7 +74,8 @@ export class Vehicle {
     // Wheel rays hit the city, other cars and street furniture (fallen lamps); never this chassis, characters (kinematic) or sensors.
     const wheelFilter = staticWorldFilter(true, this.chassis, true);
     this.unsubscribe = onBeforeStep(pw, () => {
-      if (!this.chassis.isSleeping()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
+      // a kinematic chassis (a car the server streams, see CarPool.follow) is placed, not driven
+      if (!this.chassis.isSleeping() && this.chassis.isDynamic()) c.updateVehicle(TUNING.world.dt, undefined, undefined, wheelFilter);
     });
   }
 

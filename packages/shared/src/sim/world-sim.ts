@@ -11,8 +11,10 @@ import type { WorldAssets } from './assets';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
+import { Proxies } from './proxies';
+import { restoreDynamicBodies, saveDynamicBodies, type OwnState } from './replay';
 import { ResetTimers } from './resets';
-import { canGetOut, exitFree, exitSpot, headingOf, nearestEnterableCar } from './rules';
+import { canGetOut, exitFree, exitSpot, headingOf, nearestEnterableCar, type CarPose } from './rules';
 import { findSpawn } from './spawn';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -67,6 +69,7 @@ export class WorldSim {
   /** Per car: whether the last applied driver input brakes (brake lights). */
   private readonly brakes: boolean[];
   private readonly resets = new ResetTimers();
+  private readonly proxies: Proxies;
 
   private constructor(
     readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, private readonly a: WorldAssets,
@@ -74,6 +77,7 @@ export class WorldSim {
   ) {
     this.ignitions = cars.poses.map(() => new Ignition());
     this.brakes = cars.poses.map(() => false);
+    this.proxies = new Proxies(pw, cars);
   }
 
   /** Builds the world from the assets. foci: where cars get physics bodies ('players' = around every player, default). */
@@ -159,31 +163,11 @@ export class WorldSim {
     separatePeople(this);
     if (this.tick % RESET_CHECK_EVERY === 0) this.resets.update(this);
 
-    // E acts on its rising edge (held for several ticks = one action)
-    for (const [id, pl, input] of order) {
-      if (input.use && !pl.use) {
-        if (pl.car === null) this.getIn(id, pl, ev);
-        else this.getOut(id, pl, ev);
-      }
-      pl.use = input.use;
-    }
+    for (const [id, pl, input] of order) this.useEdge(id, pl, input, ev);
     for (let i = 0; i < this.ignitions.length; i++) {
       for (const e of this.ignitions[i]!.update()) ev.push({ t: 'ignition', car: i, e });
     }
-    for (const [, pl, input] of order) {
-      pl.yaw = input.yaw;
-      // a jump takes off on the rising edge of the jump input, like one press of Space in single player
-      const jump = input.jump && !pl.jump;
-      pl.jump = input.jump;
-      if (pl.car === null) {
-        pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
-      } else {
-        const v = this.cars.vehicle(pl.car)!;
-        const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
-        v.applyInput({ throttle, steer: input.right, brake: input.brake });
-        this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
-      }
-    }
+    for (const [, pl, input] of order) this.applyInput(pl, input);
 
     if (this.tick % PROXIMITY_EVERY === 0) this.cars.updateProximity(this.focusPoints());
     this.pw.step();
@@ -191,6 +175,57 @@ export class WorldSim {
     for (const i of this.props.takeFallen()) ev.push({ t: 'lamp', i });
     this.tick++;
     return ev;
+  }
+
+  /**
+   * Client prediction: the other players as stand-ins. walkers: feet of the other people on foot (kinematic capsules).
+   * cars: poses of the cars the server streams (someone else drives them, or they roll); they are followed
+   * kinematically. A car no longer in `cars` rests (dynamic, asleep) at rest(i) or its last pose. Cars local players
+   * drive are never touched.
+   */
+  setProxies(walkers: ReadonlyMap<PlayerId, Vec3>, cars: ReadonlyMap<number, CarPose>, rest?: (i: number) => CarPose | null): void {
+    this.proxies.setWalkers(walkers);
+    this.proxies.setCars(cars, (i) => this.drivenLocally(i), rest);
+  }
+
+  /**
+   * Client prediction: who else (not a player of this sim) sits in which car, from the server's slow state. Those cars
+   * count as taken when getting in. Cars local players drive are never touched.
+   */
+  setRemoteDrivers(drivers: ReadonlyMap<number, PlayerId>): void {
+    for (let i = 0; i < this.cars.count; i++) {
+      if (this.drivenLocally(i)) continue;
+      const d = drivers.get(i) ?? null;
+      if (this.cars.driver[i] !== d) this.cars.driver[i] = d;
+    }
+  }
+
+  /**
+   * Client reconciliation: puts player `id` into `from` (the server's state after the acknowledged input), then
+   * re-applies `inputs` (the unacknowledged ones) step by step with pw.step(): only this player's input and getting
+   * in/out, no rules for anyone else, no events, no tick advance. Every other dynamic body (pose, velocities, sleep)
+   * and every lamp is put back afterwards, so only the own entity ends up on the new state. onStep(k) runs after
+   * input k.
+   */
+  replay(id: PlayerId, from: OwnState, inputs: readonly PlayerInput[], onStep?: (k: number) => void): void {
+    const pl = this.list.get(id);
+    if (!pl) throw new Error(`no player ${id}`);
+    this.setOwn(id, pl, from);
+    const ownBody = (): number => (pl.car !== null ? this.cars.vehicle(pl.car)!.chassis.handle : -1);
+    const saved = saveDynamicBodies(this.pw.world, new Set([ownBody()]));
+    this.props.takeFallen(); // replay runs between steps: nothing pending here
+    const ev: SimEvent[] = [];
+    inputs.forEach((input, k) => {
+      this.useEdge(id, pl, input, ev);
+      if (pl.car !== null) this.ignitions[pl.car]!.update();
+      this.applyInput(pl, input);
+      this.pw.step();
+      onStep?.(k);
+    });
+    restoreDynamicBodies(saved, new Set([ownBody()]));
+    // lamps the replayed path knocked over: the original prediction did not (or did it in an earlier step)
+    for (const i of this.props.takeFallen()) this.props.standUp(i);
+    this.cars.sync();
   }
 
   player(id: PlayerId): PlayerSnapshot {
@@ -267,6 +302,62 @@ export class WorldSim {
       if (Math.abs(along) < V.length / 2 + r && Math.abs(across) < V.width / 2 + r) return true;
     }
     return false;
+  }
+
+  /** E acts on its rising edge (held for several ticks = one action). */
+  private useEdge(id: PlayerId, pl: Player, input: PlayerInput, ev: SimEvent[]): void {
+    if (input.use && !pl.use) {
+      if (pl.car === null) this.getIn(id, pl, ev);
+      else this.getOut(id, pl, ev);
+    }
+    pl.use = input.use;
+  }
+
+  /** Walking or driving input for one step (after the ignitions advanced). */
+  private applyInput(pl: Player, input: PlayerInput): void {
+    pl.yaw = input.yaw;
+    // a jump takes off on the rising edge of the jump input, like one press of Space in single player
+    const jump = input.jump && !pl.jump;
+    pl.jump = input.jump;
+    if (pl.car === null) {
+      pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
+    } else {
+      const v = this.cars.vehicle(pl.car)!;
+      const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
+      v.applyInput({ throttle, steer: input.right, brake: input.brake });
+      this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+    }
+  }
+
+  /** Whether a player of this sim drives car i. */
+  private drivenLocally(i: number): boolean {
+    const d = this.cars.driver[i];
+    return d !== null && d !== undefined && this.list.get(d)?.car === i;
+  }
+
+  /** Puts player `id` into `s`: in or out of the right car (quietly: no events, no door/ignition restart), then the state. */
+  private setOwn(id: PlayerId, pl: Player, s: OwnState): void {
+    const target = s.mode === 'drive' && s.car && s.carId !== null ? s.carId : null;
+    if (pl.car !== null && pl.car !== target) {
+      this.leaveCar(pl.car);
+      pl.car = null;
+      pl.char.setEnabled(true);
+    }
+    if (target !== null) {
+      if (pl.car === null) {
+        this.cars.enter(target, id);
+        pl.car = target;
+        pl.char.setEnabled(false);
+      }
+      this.cars.vehicle(target)!.restoreState(s.car!);
+      const ign = this.ignitions[target]!;
+      if (s.ignition) ign.restore(s.ignition);
+      else if (s.engine) ign.set(s.engine);
+    } else {
+      pl.char.restoreState(s.char);
+    }
+    pl.use = s.use ?? false;
+    pl.jump = s.jump ?? false;
   }
 
   private getIn(id: PlayerId, pl: Player, ev: SimEvent[]): void {

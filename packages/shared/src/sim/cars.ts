@@ -30,6 +30,8 @@ export class CarPool {
   /** Manifest pose of every car. */
   private readonly home: CarPose[];
   private readonly vehicles = new Map<number, Vehicle>();
+  /** Cars placed kinematically on a streamed pose (client prediction, see follow). */
+  private readonly followed = new Set<number>();
 
   constructor(private readonly pw: PhysicsWorld, parked: WorldManifest['parked'], terrain: TerrainGrid) {
     this.home = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
@@ -56,7 +58,7 @@ export class CarPool {
       for (const f of foci) d = Math.min(d, Math.hypot(s.x - f.x, s.z - f.z));
       const v = this.vehicles.get(i);
       if (!v && d <= CAR_PHYSICS_NEAR) this.vehicles.set(i, this.spawn(i));
-      else if (v && d > CAR_PHYSICS_FAR && this.driver[i] === null) {
+      else if (v && d > CAR_PHYSICS_FAR && this.driver[i] === null && !this.followed.has(i)) {
         this.poses[i] = v.pose();
         v.dispose();
         this.vehicles.delete(i);
@@ -73,9 +75,49 @@ export class CarPool {
     return v;
   }
 
-  /** Copies the poses of awake (pushed or driven) physics cars into poses. */
+  /** Copies the poses of awake (pushed, driven or followed) physics cars into poses. */
   sync(): void {
-    for (const [i, v] of this.vehicles) if (!v.chassis.isSleeping()) this.poses[i] = v.pose();
+    for (const [i, v] of this.vehicles) if (!v.chassis.isSleeping() || this.followed.has(i)) this.poses[i] = v.pose();
+  }
+
+  /**
+   * Car i as a kinematic body on `pose` (client prediction: a car someone else drives or the server streams). It moves
+   * there in the next step, pushes the own car out of its way and is never pushed itself. Created if it has no body.
+   */
+  follow(i: number, pose: CarPose): void {
+    let v = this.vehicles.get(i);
+    if (!v) {
+      this.poses[i] = { ...pose };
+      this.vehicles.set(i, (v = this.spawn(i)));
+    }
+    const b = v.chassis;
+    const t = { x: pose.x, y: pose.y, z: pose.z }, q = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw };
+    if (!this.followed.has(i)) {
+      this.followed.add(i);
+      b.setBodyType(this.pw.rapier.RigidBodyType.KinematicPositionBased, true);
+      b.setTranslation(t, true);
+      b.setRotation(q, true);
+    }
+    b.setNextKinematicTranslation(t);
+    b.setNextKinematicRotation(q);
+  }
+
+  /** A followed car the server no longer streams: dynamic again, at rest on `pose` (where the server says it stands). */
+  release(i: number, pose: CarPose): void {
+    if (!this.followed.delete(i)) return;
+    const b = this.vehicles.get(i)!.chassis;
+    b.setBodyType(this.pw.rapier.RigidBodyType.Dynamic, false);
+    b.setTranslation({ x: pose.x, y: pose.y, z: pose.z }, false);
+    b.setRotation({ x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw }, false);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, false);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    b.sleep();
+    this.poses[i] = { ...pose };
+  }
+
+  /** Cars currently followed (see follow). */
+  following(): ReadonlySet<number> {
+    return this.followed;
   }
 
   /** Cars for nearestEnterableCar. */
@@ -87,6 +129,11 @@ export class CarPool {
   enter(i: number, id: PlayerId): Vehicle {
     let v = this.vehicles.get(i);
     if (!v) this.vehicles.set(i, (v = this.spawn(i)));
+    if (this.followed.has(i)) {
+      // a streamed stand-in becomes the own (dynamic) car where it stands
+      this.followed.delete(i);
+      v.chassis.setBodyType(this.pw.rapier.RigidBodyType.Dynamic, true);
+    }
     this.driver[i] = id;
     v.setOccupied(true);
     return v;
@@ -112,9 +159,9 @@ export class CarPool {
     return 2 * Math.acos(dot) > MOVED_ANGLE;
   }
 
-  /** Puts driverless car i back on its manifest spot (asleep, as when it was first created). No-op while driven. */
+  /** Puts driverless car i back on its manifest spot (asleep, as when it was first created). No-op while driven or followed. */
   reset(i: number): void {
-    if (this.driver[i] !== null) return;
+    if (this.driver[i] !== null || this.followed.has(i)) return;
     this.poses[i] = { ...this.home[i]! };
     const v = this.vehicles.get(i);
     if (!v) return;

@@ -20,10 +20,17 @@ export type Welcome = { slot: number; name: string; devMode: boolean; tick: numb
 /** online → (connection drops) reconnecting → online again, or lost for good (window over, kicked, closed). */
 export type NetStatus = 'online' | 'reconnecting' | 'lost';
 
-/** Read-only mirror of the slow Colyseus state (names, modes, car occupancy); entries are keyed by slot / car index. */
+type StateMap<T> = { get(key: string): T | undefined; forEach(cb: (v: T, key: string) => void): void };
+type StatePose = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
+
+/**
+ * Read-only mirror of the slow Colyseus state (names, modes, car occupancy and resting poses, lying lamps); entries
+ * are keyed by slot / car index / lamp index. Car driver −1: none.
+ */
 export type NetState = {
-  players: { get(key: string): { slot: number; name: string; mode: number; carId: number } | undefined; forEach(cb: (v: { slot: number; name: string; mode: number; carId: number }, key: string) => void): void };
-  cars: { get(key: string): { driver: number; engine: number; lights: boolean; radio: string } | undefined };
+  players: StateMap<{ slot: number; name: string; mode: number; carId: number }>;
+  cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
+  lamps: StateMap<StatePose>;
 };
 
 /** Why a join did not work, from the error the SDK throws. */

@@ -11,6 +11,8 @@ export const ENGINE_CATCH_S = 0.9;
 
 export type IgnitionEvent = 'doorClose' | 'crank' | 'running';
 export type IgnitionState = 'off' | 'starting' | 'running';
+/** Everything an Ignition carries from one tick to the next (client replay restores it). */
+export type IgnitionSave = { s: IgnitionState; t: number; next: number };
 
 const ticks = (s: number): number => Math.round(s * TICK_HZ);
 /** Tick (counted from start(), first update() = tick 1) at which each event fires. */
@@ -37,6 +39,27 @@ export class Ignition {
 
   stop(): void {
     this.s = 'off';
+  }
+
+  save(): IgnitionSave {
+    return { s: this.s, t: this.t, next: this.next };
+  }
+
+  restore(v: IgnitionSave): void {
+    this.s = v.s;
+    this.t = v.t;
+    this.next = v.next;
+  }
+
+  /**
+   * Puts the ignition into `state` when only the state is known (a server correction): kept as it is if already
+   * there; 'starting' starts from the door, 'running' skips the remaining events.
+   */
+  set(state: IgnitionState): void {
+    if (state === this.s) return;
+    if (state === 'off') this.stop();
+    else if (state === 'starting') this.start();
+    else this.restore({ s: 'running', t: STEPS[STEPS.length - 1]!.at, next: STEPS.length });
   }
 
   /** Advances one tick; returns the events that fell into it (in order). */

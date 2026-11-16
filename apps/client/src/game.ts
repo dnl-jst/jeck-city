@@ -64,6 +64,7 @@ export class Game {
   private readonly tramStops: WorldManifest['tramStops'];
   private readonly qa = new Quaternion();
   private readonly qb = new Quaternion();
+  private readonly qc = new Quaternion();
 
   constructor(readonly session: Session, m: WorldManifest, private readonly ctx: GameContext) {
     const { scene, camera, input, devCam } = ctx;
@@ -80,6 +81,7 @@ export class Game {
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
     session.onStep = () => this.sample();
+    session.onCorrection = () => this.resample();
   }
 
   /** Fixed steps run so far (tests wait on simulation time, not on the wall clock). */
@@ -171,6 +173,33 @@ export class Game {
     this.sampledCar = p.carId;
   }
 
+  /**
+   * After a server correction (between steps): the last step's samples move along with the corrected state, so the
+   * blend between them stays smooth; the session's render offset hides the jump itself. Getting in or out: a fresh sample.
+   */
+  private resample(): void {
+    const { sim, me } = this.session;
+    const p = sim.player(me);
+    if (p.carId !== this.sampledCar) {
+      this.sample();
+      return;
+    }
+    if (p.carId !== null && this.currPose && this.prevPose) {
+      const now = sim.cars.vehicle(p.carId)!.pose(), was = this.currPose, prev = this.prevPose;
+      // rotation the correction applied: now · was⁻¹, applied to the previous sample as well
+      const d = this.qa.set(now.qx, now.qy, now.qz, now.qw).multiply(this.qb.set(was.qx, was.qy, was.qz, was.qw).invert());
+      const q = d.multiply(this.qc.set(prev.qx, prev.qy, prev.qz, prev.qw));
+      this.prevPose = { x: prev.x + now.x - was.x, y: prev.y + now.y - was.y, z: prev.z + now.z - was.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
+      this.currPose = now;
+    } else if (p.carId === null) {
+      const was = this.currPos;
+      this.prevPos = { x: this.prevPos.x + p.pos.x - was.x, y: this.prevPos.y + p.pos.y - was.y, z: this.prevPos.z + p.pos.z - was.z };
+      this.currPos = p.pos;
+      this.vel = p.vel;
+      this.grounded = p.char.grounded;
+    }
+  }
+
   /** The own player's sim events (getting in and out, ignition sounds, refusals) and knocked-over lamps. */
   private handle(events: SimEvent[]): void {
     const { hud, audio } = this.ctx;
@@ -219,8 +248,10 @@ export class Game {
   private render(dt: number, night: number): void {
     const { audio } = this.ctx;
     const a = this.session.alpha;
+    const off = this.session.renderOffset();
     if (this.mode === 'walk') {
       const p = lerp3(this.prevPos, this.currPos, a);
+      p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.update(p.x, p.y, p.z, v, dt);
       if (!this.flying) this.follow.update(p, 0, dt);
@@ -232,6 +263,12 @@ export class Game {
       const { sim } = this.session;
       const prev = this.prevPose ?? this.currPose;
       const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
+      // server correction still fading out: offset on top (rotation first)
+      pose.x += off.x; pose.y += off.y; pose.z += off.z;
+      if (off.qw !== 1) {
+        const q = this.qc.set(off.qx, off.qy, off.qz, off.qw).multiply(this.qa.set(pose.qx, pose.qy, pose.qz, pose.qw));
+        pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
+      }
       this.driven.setPose(pose);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);

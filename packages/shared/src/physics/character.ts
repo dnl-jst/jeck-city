@@ -20,7 +20,8 @@ const T = TUNING.character;
 /** Every step is exactly one fixed world step, so client prediction and server stay in lockstep. */
 const DT = TUNING.world.dt;
 /** Capsule centre above the feet (the controller keeps a skin gap below the capsule). */
-const CENTRE = T.height / 2 + T.skin;
+export const CHARACTER_CENTRE = T.height / 2 + T.skin;
+const CENTRE = CHARACTER_CENTRE;
 
 /**
  * Walking person: a kinematic capsule moved by Rapier's KinematicCharacterController.

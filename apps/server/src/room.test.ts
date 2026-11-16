@@ -123,6 +123,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     const a = await join('Anna');
     await until(() => names().length === 2);
     const tick0 = srv.room.sim.tick;
+    const t0 = Date.now();
     let seq = 1;
     for (let n = 0; n < 50; n++) {
       // 10 inputs per 20 ms in packets of 3, 3, 3, 1 (5 messages per 20 ms with the garbage one)
@@ -140,7 +141,8 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     a.send('devTeleport', { x: NaN, z: 'x' });
     await sleep(100);
     const q = srv.room.queueOf(a.sessionId)!;
-    expect(q.accepted).toBeLessThanOrEqual(90 + 6 + 10);
+    // MAX_INPUTS_PER_S over the time the flood really took (longer than 1.1 s on a loaded machine), plus the burst
+    expect(q.accepted).toBeLessThanOrEqual(Math.ceil((90 * (Date.now() - t0)) / 1000) + 6);
     // the simulation kept ticking at about 60 Hz throughout
     expect(srv.room.sim.tick - tick0).toBeGreaterThan(50);
     const p = srv.room.sim.player(srv.room.slotOf(a.sessionId)!);

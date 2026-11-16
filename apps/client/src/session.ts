@@ -19,12 +19,24 @@ export interface Session {
   readonly steps: number;
   /** Called after every fixed step (to sample states for interpolation). */
   onStep: (() => void) | null;
+  /**
+   * Called when a server correction replaced the own state between steps (online only): the samples of the last step
+   * are moved along with it, renderOffset() keeps the rendered pose where it was.
+   */
+  onCorrection: (() => void) | null;
+  /** Added to the own figure's / car's rendered pose: position (m) and a rotation applied on top (online: a fading correction). */
+  renderOffset(): RenderOffset;
 }
+
+/** Position offset and rotation offset (quaternion, applied before the pose's own rotation). */
+export type RenderOffset = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
+const NO_OFFSET: RenderOffset = Object.freeze({ x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 });
 
 /** Single player without a server: the local WorldSim is stepped directly at 60 Hz. */
 export class OfflineSession implements Session {
   steps = 0;
   onStep: (() => void) | null = null;
+  onCorrection: (() => void) | null = null;
   private readonly stepper = new FixedStepper(TUNING.world.dt, 5);
   /** use/jump pressed but not yet sent in a step. */
   private use = false;
@@ -34,6 +46,10 @@ export class OfflineSession implements Session {
 
   get alpha(): number {
     return this.stepper.alpha;
+  }
+
+  renderOffset(): RenderOffset {
+    return NO_OFFSET;
   }
 
   frame(dt: number, input: PlayerInput, radioCmd?: StationId | null): SimEvent[] {

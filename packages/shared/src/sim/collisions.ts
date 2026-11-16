@@ -35,6 +35,8 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
   for (const i of awake) {
     const v = sim.cars.vehicle(i)!;
     const body = v.chassis;
+    // a kinematic stand-in for a car the server streams (client prediction): the server decides its hits
+    if (!body.isDynamic()) continue;
     const vel = body.linvel();
     const speed = Math.hypot(vel.x, vel.z);
     if (speed < 0.2) continue;
