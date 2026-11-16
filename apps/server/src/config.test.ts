@@ -11,6 +11,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ MAX_PLAYERS: '0' })).toThrow();
   });
 
+  it('PUBLIC_URL becomes a scheme-less public address (the client adds wss:// itself)', () => {
+    expect(loadConfig({}).publicUrl).toBeNull();
+    expect(loadConfig({ PUBLIC_URL: 'https://nippes.example.org/' }).publicUrl).toBe('nippes.example.org');
+    expect(loadConfig({ PUBLIC_URL: 'nippes.example.org:8443/game' }).publicUrl).toBe('nippes.example.org:8443/game');
+    expect(loadConfig({ PUBLIC_URL: 'https://' }).publicUrl).toBeNull();
+  });
+
   it('NN_JOIN_PER_MIN raises the join limit in dev only', () => {
     expect(loadConfig({}).joinPerMin).toBe(JOIN_PER_IP_PER_MIN);
     expect(loadConfig({ NN_JOIN_PER_MIN: '200' }).joinPerMin).toBe(200);

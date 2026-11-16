@@ -11,6 +11,11 @@ export type FakeLag = { ms: number; jitterMs: number; stallPct: number };
 export type Config = {
   port: number;
   maxPlayers: number;
+  /**
+   * Colyseus' publicAddress: host[:port][/path] the clients open the game socket on, without a scheme (the client
+   * adds ws:// or wss:// itself). From PUBLIC_URL, which may be given with https:// and a trailing slash. Not needed
+   * when the clients reach the server on the address the page came from.
+   */
   publicUrl: string | null;
   logLevel: LogLevel;
   /** NODE_ENV !== 'production': dev hooks (devTeleport, fake lag, client fly mode) allowed. */
@@ -71,7 +76,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
   return {
     port: intEnv(env, 'PORT', 2567, 0, 65535),
     maxPlayers: intEnv(env, 'MAX_PLAYERS', MAX_PLAYERS, 1, PLAYER_LIMIT),
-    publicUrl: env.PUBLIC_URL || null,
+    publicUrl: env.PUBLIC_URL ? env.PUBLIC_URL.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '') || null : null,
     logLevel,
     dev,
     worldDir: env.NN_WORLD_DIR || defaultWorldDir(),
