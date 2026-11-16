@@ -268,7 +268,7 @@ Ziel: Das Spiel läuft wieder genauso wie heute, nur über eine lokale `WorldSim
 - Produces:
   - Alle `SNAPSHOT_EVERY` Ticks pro Client `buildSnapshot` → `client.sendBytes('s', encodeSnapshot(...))`. Die Ereignisse seit dem letzten Snapshot werden gesammelt.
   - `onLeave(client, code)`: Ist die Trennung nicht beabsichtigt, wartet `allowReconnection(client, RECONNECT_S)`. Bis dahin bekommt der Slot neutrale Eingaben. Danach `sim.removePlayer`.
-  - `static.ts`: liefert `apps/client/dist` aus. `index.html` mit `no-cache`; Dateien unter `assets/` (Vite-Hash) mit `public, max-age=31536000, immutable`; `world/*` mit `max-age=3600`. Vorkomprimierte `.br`/`.gz` werden nach `Accept-Encoding` gewählt. Pfade außerhalb von `dist` → 404.
+  - `static.ts`: liefert `apps/client/dist` aus. `index.html` mit `no-cache`; Dateien unter `assets/` (Vite-Hash) mit `public, max-age=31536000, immutable`; `world/*` mit `no-cache` (nach einem Deploy nie ein altes Manifest); alle Dateien mit ETag (Größe + mtime), `If-None-Match` → 304. Vorkomprimierte `.br`/`.gz` werden nach `Accept-Encoding` gewählt. Pfade außerhalb von `dist` → 404.
   - `GET /healthz` → `200 {"players": n, "tickP95Ms": x, "dropped": n}` (gleitendes Fenster der letzten 600 Ticks).
   - `fake-lag.ts` (nur Dev): verzögert ein- und ausgehende Nachrichten pro Client um `ms ± jitter`. Mit Wahrscheinlichkeit `stallPct` hält es eine Nachricht zusätzlich 200 ms zurück, ohne die Reihenfolge zu ändern; so sieht 1 % Verlust über TCP aus.
 - [ ] **Step 1: Failing tests:**

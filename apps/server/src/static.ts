@@ -11,21 +11,38 @@ const TYPES: Record<string, string> = {
   '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
 };
 
-/** Cache-Control by location: the page always revalidates, hashed Vite assets never change, the world rarely does. */
+/**
+ * Cache-Control by location: hashed Vite assets never change; the page and the world always revalidate (ETag), so a
+ * returning player never mixes a new manifest with old world files after a deploy; the rest caches for an hour.
+ */
 export function cacheControl(urlPath: string): string {
-  if (urlPath === '/index.html') return 'no-cache';
   if (urlPath.startsWith('/assets/')) return 'public, max-age=31536000, immutable';
-  if (urlPath.startsWith('/world/')) return 'public, max-age=3600';
+  if (urlPath === '/index.html' || urlPath.startsWith('/world/')) return 'no-cache';
   return 'public, max-age=3600';
 }
 
-async function fileSize(path: string): Promise<number | null> {
+type FileInfo = { size: number; mtimeMs: number };
+
+async function fileInfo(path: string): Promise<FileInfo | null> {
   try {
     const s = await stat(path);
-    return s.isFile() ? s.size : null;
+    return s.isFile() ? { size: s.size, mtimeMs: s.mtimeMs } : null;
   } catch {
     return null;
   }
+}
+
+/** Validator of the served file (size and modification time; the encoding tells the variants apart). */
+const etagOf = (f: FileInfo, encoding: string | null): string =>
+  `"${f.size.toString(36)}-${Math.floor(f.mtimeMs).toString(36)}${encoding ? `-${encoding}` : ''}"`;
+
+/** Whether an If-None-Match header names `etag` (weak comparison, as RFC 9110 asks for GET) or is `*`. */
+function matches(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  return header.split(',').some((t) => {
+    const v = t.trim();
+    return v === '*' || v.replace(/^W\//, '') === etag;
+  });
 }
 
 function notFound(res: ServerResponse): void {
@@ -64,25 +81,30 @@ async function serve(base: string, req: IncomingMessage, res: ServerResponse): P
   const accept = String(req.headers['accept-encoding'] ?? '');
   let encoding: 'br' | 'gzip' | null = null;
   let path = file;
-  let size = await fileSize(file);
-  if (size === null) return notFound(res);
+  let info = await fileInfo(file);
+  if (info === null) return notFound(res);
   for (const [enc, ext] of [['br', '.br'], ['gzip', '.gz']] as const) {
     if (!new RegExp(`(^|[,\\s])${enc}(\\s*;|\\s*,|$)`).test(accept)) continue;
-    const s = await fileSize(file + ext);
-    if (s !== null) {
+    const f = await fileInfo(file + ext);
+    if (f !== null) {
       encoding = enc;
       path = file + ext;
-      size = s;
+      info = f;
       break;
     }
   }
 
   const rel = '/' + file.slice(base.length + 1).split(sep).join('/');
+  const etag = etagOf(info, encoding);
+  const common = { ETag: etag, 'Cache-Control': cacheControl(rel), Vary: 'Accept-Encoding' };
+  if (matches(req.headers['if-none-match'], etag)) {
+    res.writeHead(304, common);
+    return void res.end();
+  }
   res.writeHead(200, {
+    ...common,
     'Content-Type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'Content-Length': size,
-    'Cache-Control': cacheControl(rel),
-    Vary: 'Accept-Encoding',
+    'Content-Length': info.size,
     ...(encoding ? { 'Content-Encoding': encoding } : {}),
   });
   if (req.method === 'HEAD') return void res.end();

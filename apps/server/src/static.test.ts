@@ -56,9 +56,27 @@ describe('static hosting', () => {
     }
   });
 
-  it('hashed assets are immutable, the world caches for an hour', async () => {
+  it('hashed assets are immutable, the world always revalidates', async () => {
     expect((await get('/assets/app-abc123.js')).headers['cache-control']).toBe('public, max-age=31536000, immutable');
-    expect((await get('/world/manifest.json')).headers['cache-control']).toBe('public, max-age=3600');
+    expect((await get('/world/manifest.json')).headers['cache-control']).toBe('no-cache');
+  });
+
+  it('ETag on every file; If-None-Match with it is a 304 without a body', async () => {
+    for (const p of ['/', '/assets/app-abc123.js', '/world/manifest.json']) {
+      const r = await get(p);
+      const tag = r.headers.etag as string;
+      expect(tag, p).toMatch(/^"[0-9a-z]+-[0-9a-z]+(-br|-gzip)?"$/);
+      const again = await get(p, { 'If-None-Match': `"other", ${tag}` });
+      expect(again.status, p).toBe(304);
+      expect(again.body).toBe('');
+      expect(again.headers.etag).toBe(tag);
+      expect(again.headers['cache-control']).toBe(r.headers['cache-control']);
+      expect((await get(p, { 'If-None-Match': '"stale"' })).status, p).toBe(200);
+    }
+    // the compressed variant has its own tag
+    const br = await get('/world/manifest.json', { 'Accept-Encoding': 'br' });
+    expect(br.headers.etag).not.toBe((await get('/world/manifest.json')).headers.etag);
+    expect((await get('/world/manifest.json', { 'Accept-Encoding': 'br', 'If-None-Match': `W/${br.headers.etag as string}` })).status).toBe(304);
   });
 
   it('serves a pre-compressed file by Accept-Encoding', async () => {

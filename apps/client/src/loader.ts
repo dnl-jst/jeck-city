@@ -43,10 +43,10 @@ export function chunksToUnload(manifest: WorldManifest, pos: XZ, loaded: Readonl
 }
 
 /** fetch that turns network failures (offline, DNS) and non-ok statuses into FetchError (status 0 for the former). */
-export async function fetchOk(url: string): Promise<Response> {
+export async function fetchOk(url: string, init?: RequestInit): Promise<Response> {
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, init);
   } catch {
     throw new FetchError(url, 0);
   }
@@ -85,7 +85,7 @@ export class WorldLoader {
     onProgress: (p: number) => void, start?: XZ, onStatus: (text: string) => void = () => {}, manifestLoad?: Promise<WorldManifest>,
   ): Promise<WorldManifest> {
     onStatus('Karte …');
-    const manifest = await (manifestLoad ?? fetchOk(`${this.baseUrl}manifest.json`).then(async (r) => parseManifest(await r.json())));
+    const manifest = await (manifestLoad ?? fetchOk(`${this.baseUrl}manifest.json`, { cache: 'no-cache' }).then(async (r) => parseManifest(await r.json())));
     this.manifest = manifest;
     this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;

@@ -244,8 +244,11 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/** The raw bytes of manifest.json: parsed for the chunk loader and the simulation, hashed for the join. */
-const manifestBytes: Promise<ArrayBuffer> = fetchOk('/world/manifest.json').then((r) => r.arrayBuffer());
+/**
+ * The raw bytes of manifest.json: parsed for the chunk loader and the simulation, hashed for the join. It and the
+ * simulation's world files are always revalidated: a stale copy after a deploy would not match the server's world.
+ */
+const manifestBytes: Promise<ArrayBuffer> = fetchOk('/world/manifest.json', { cache: 'no-cache' }).then((r) => r.arrayBuffer());
 const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseManifest(JSON.parse(new TextDecoder().decode(b))));
 /** manifest + collision.bin + terrain.bin → the simulated world (built while the spawn chunks stream in). */
 let physicsLoading = true;
@@ -254,8 +257,8 @@ const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} ·
 async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
   const [manifest, collision, terrain] = await Promise.all([
     manifestLoad,
-    fetchOk('/world/collision.bin').then(async (r) => decodeCollision(await r.arrayBuffer())),
-    fetchOk('/world/terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
+    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => decodeCollision(await r.arrayBuffer())),
+    fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   const sim = await WorldSim.create({ manifest, collision, terrain });
   physicsLoading = false; // only once the world is built
