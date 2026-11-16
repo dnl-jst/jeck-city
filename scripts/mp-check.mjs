@@ -9,8 +9,9 @@
 // B must see A in mode 'ride'. All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
 // B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
-// figure must not move more than 1 m between two frames (spec 13.4), and its per-frame step must not change by more
-// than 1 m between frames (speed itself is no jump). Per-frame
+// figure must not teleport (spec 13.4): its move in a frame may exceed what its speed over the two frames before
+// explains (speed · frame time) by at most 1 m, and its per-frame step must not change by more than 1 m between frames.
+// The raw largest move between two frames is printed for information (a long frame at speed is no teleport). Per-frame
 // numbers are printed too: a slow headless renderer puts several steps into one frame. Every recorded phase (also the
 // drive without --lag) prints A's frame rate, inputs sent per second (= physics steps), its reconciliations (replayed,
 // skipped because the prediction matched, set hard) and B's frame rate.
@@ -70,11 +71,13 @@ async function join(browser, name) {
 /** Per-frame recorder in the page: own correction, and the biggest frame-to-frame jump of one remote player. */
 async function installRecorder(page, remoteName) {
   await page.evaluate((remoteName) => {
-    const r = (window.__mpRec = { on: false, corr: [], speed: [], dsteps: [], times: [], lastSteps: null, jumps: [], excess: [], prev: null, prev2: null });
-    const frame = () => {
+    const r = (window.__mpRec = { on: false, corr: [], speed: [], dsteps: [], times: [], lastSteps: null, jumps: [], excess: [], tele: [], prev: null, prev2: null });
+    // ts: the frame's rAF time, the one the game's loop gets too (performance.now() here would also count the render
+    // that ran before this callback, and a GPU stall there would shift the time to the wrong frame)
+    const frame = (ts) => {
       if (r.on) {
         const st = window.__nnState();
-        r.times.push(performance.now());
+        r.times.push(ts);
         r.corr.push(st.correction);
         r.speed.push(st.speed);
         r.dsteps.push(r.lastSteps === null ? 1 : st.steps - r.lastSteps);
@@ -82,9 +85,15 @@ async function installRecorder(page, remoteName) {
         const a = window.__nnRemote().find((p) => p.name === remoteName);
         if (a && r.prev && r.prev.mode === a.mode) r.jumps.push(Math.hypot(a.x - r.prev.x, a.z - r.prev.z));
         // what the speed does not explain: the change of the per-frame step (a straight constant-speed move gives 0)
-        if (a && r.prev && r.prev2 && r.prev.mode === a.mode && r.prev2.mode === a.mode) r.excess.push(Math.hypot(a.x - 2 * r.prev.x + r.prev2.x, a.z - 2 * r.prev.z + r.prev2.z));
+        if (a && r.prev && r.prev2 && r.prev.mode === a.mode && r.prev2.mode === a.mode) {
+          r.excess.push(Math.hypot(a.x - 2 * r.prev.x + r.prev2.x, a.z - 2 * r.prev.z + r.prev2.z));
+          // teleport: the move this frame beyond what the speed of the two frames before explains (any frame length)
+          const now = ts;
+          const speed = Math.hypot(r.prev.x - r.prev2.x, r.prev.z - r.prev2.z) / Math.max(1e-3, r.prev.t - r.prev2.t);
+          r.tele.push(Math.hypot(a.x - r.prev.x, a.z - r.prev.z) - speed * (now - r.prev.t));
+        }
         r.prev2 = r.prev;
-        r.prev = a ? { x: a.x, z: a.z, mode: a.mode } : null;
+        r.prev = a ? { x: a.x, z: a.z, mode: a.mode, t: ts } : null;
       } else { r.prev = r.prev2 = null; r.lastSteps = null; }
       requestAnimationFrame(frame);
     };
@@ -103,8 +112,8 @@ const record = (page, on) => page.evaluate((on) => {
 }, on);
 const takeRecord = (page) => page.evaluate(() => {
   const r = window.__mpRec;
-  const out = { corr: r.corr, speed: r.speed, dsteps: r.dsteps, times: r.times, jumps: r.jumps, excess: r.excess, rec: r.rec };
-  r.corr = []; r.speed = []; r.dsteps = []; r.times = []; r.jumps = []; r.excess = [];
+  const out = { corr: r.corr, speed: r.speed, dsteps: r.dsteps, times: r.times, jumps: r.jumps, excess: r.excess, tele: r.tele, rec: r.rec };
+  r.corr = []; r.speed = []; r.dsteps = []; r.times = []; r.jumps = []; r.excess = []; r.tele = [];
   return out;
 });
 const p95 = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.ceil(xs.length * 0.95) - 1)] : 0);
@@ -119,10 +128,10 @@ const phaseStats = (rec, remote) => {
     reconciles: rec.rec, remoteFps: remote.times.length > 1 ? (remote.times.length - 1) / ((remote.times[remote.times.length - 1] - remote.times[0]) / 1000) : 0,
     frameP95: p95(rec.corr), frameMax: maxOf(rec.corr), stepP95: p95(step), stepMax: maxOf(step),
     movingStepP95: p95(step.filter((_, i) => rec.speed[i] > 2)), moving: rec.speed.filter((v) => v > 2).length,
-    jump: maxOf(remote.jumps), excess: maxOf(remote.excess),
+    jump: maxOf(remote.jumps), excess: maxOf(remote.excess), tele: maxOf(remote.tele),
   };
 };
-const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; A ${r.fps.toFixed(1)} fps, ${r.inputsPerS.toFixed(1)} inputs/s, reconciles ${JSON.stringify(r.reconciles)}; B ${r.remoteFps.toFixed(1)} fps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
+const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; A ${r.fps.toFixed(1)} fps, ${r.inputsPerS.toFixed(1)} inputs/s, reconciles ${JSON.stringify(r.reconciles)}; B ${r.remoteFps.toFixed(1)} fps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, teleport max ${r.tele.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
 const remoteA = (page) => page.evaluate(() => window.__nnRemote().find((p) => p.name === 'Check A') ?? null);
 const teleport = (page, x, z) => page.evaluate(([x, z]) => window.__nnConn().sendTeleport(x, z), [x, z]);
 
@@ -263,7 +272,7 @@ try {
   if (lag) {
     for (const [k, r] of Object.entries(results)) {
       if (r.stepP95 > P95_MAX) { console.error(`FAIL: ${k} correction per step p95 ${r.stepP95.toFixed(4)} m > ${P95_MAX}`); failed = true; }
-      if (r.jump > JUMP_MAX) { console.error(`FAIL: ${k} remote frame jump ${r.jump.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
+      if (r.tele > JUMP_MAX) { console.error(`FAIL: ${k} remote teleport ${r.tele.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
       if (r.excess > JUMP_MAX) { console.error(`FAIL: ${k} remote step change ${r.excess.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
     }
   }
