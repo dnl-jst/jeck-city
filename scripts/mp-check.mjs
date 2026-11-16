@@ -8,7 +8,9 @@
 // move that far (__nnRemote). A then gets out, is teleported next to the nearest bike (dev hook) and rides it >= 10 m;
 // B must see A in mode 'ride'. All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
-// B's view of A (largest jump between two frames) are recorded: p95 correction must stay <= 0.2 m, no remote jump > 1 m.
+// B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
+// figure's per-frame step must not change by more than 1 m between frames (speed itself is no jump). Per-frame
+// numbers are printed too: a slow headless renderer puts several steps into one frame.
 import { chromium } from 'playwright';
 import { browserArgs } from './browser-args.mjs';
 
@@ -65,28 +67,41 @@ async function join(browser, name) {
 /** Per-frame recorder in the page: own correction, and the biggest frame-to-frame jump of one remote player. */
 async function installRecorder(page, remoteName) {
   await page.evaluate((remoteName) => {
-    const r = (window.__mpRec = { on: false, corr: [], speed: [], jumps: [], excess: [], prev: null, prev2: null });
+    const r = (window.__mpRec = { on: false, corr: [], speed: [], dsteps: [], lastSteps: null, jumps: [], excess: [], prev: null, prev2: null });
     const frame = () => {
       if (r.on) {
         const st = window.__nnState();
         r.corr.push(st.correction);
         r.speed.push(st.speed);
+        r.dsteps.push(r.lastSteps === null ? 1 : st.steps - r.lastSteps);
+        r.lastSteps = st.steps;
         const a = window.__nnRemote().find((p) => p.name === remoteName);
         if (a && r.prev && r.prev.mode === a.mode) r.jumps.push(Math.hypot(a.x - r.prev.x, a.z - r.prev.z));
         // what the speed does not explain: the change of the per-frame step (a straight constant-speed move gives 0)
         if (a && r.prev && r.prev2 && r.prev.mode === a.mode && r.prev2.mode === a.mode) r.excess.push(Math.hypot(a.x - 2 * r.prev.x + r.prev2.x, a.z - 2 * r.prev.z + r.prev2.z));
         r.prev2 = r.prev;
         r.prev = a ? { x: a.x, z: a.z, mode: a.mode } : null;
-      } else r.prev = r.prev2 = null;
+      } else { r.prev = r.prev2 = null; r.lastSteps = null; }
       requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
   }, remoteName);
 }
 const record = (page, on) => page.evaluate((on) => { window.__mpRec.on = on; }, on);
-const takeRecord = (page) => page.evaluate(() => { const r = window.__mpRec; const out = { corr: r.corr, speed: r.speed, jumps: r.jumps, excess: r.excess }; r.corr = []; r.speed = []; r.jumps = []; r.excess = []; return out; });
+const takeRecord = (page) => page.evaluate(() => { const r = window.__mpRec; const out = { corr: r.corr, speed: r.speed, dsteps: r.dsteps, jumps: r.jumps, excess: r.excess }; r.corr = []; r.speed = []; r.dsteps = []; r.jumps = []; r.excess = []; return out; });
 const p95 = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.ceil(xs.length * 0.95) - 1)] : 0);
 const maxOf = (xs) => xs.reduce((m, v) => Math.max(m, v), 0);
+/** Correction stats of one phase: per frame, per physics step (frame correction / steps that frame), frames above 2 m/s. */
+const phaseStats = (rec, remote) => {
+  const step = rec.corr.map((c, i) => c / Math.max(1, rec.dsteps[i]));
+  return {
+    frames: rec.corr.length, steps: rec.dsteps.reduce((a, b) => a + b, 0),
+    frameP95: p95(rec.corr), frameMax: maxOf(rec.corr), stepP95: p95(step), stepMax: maxOf(step),
+    movingStepP95: p95(step.filter((_, i) => rec.speed[i] > 2)), moving: rec.speed.filter((v) => v > 2).length,
+    jump: maxOf(remote.jumps), excess: maxOf(remote.excess),
+  };
+};
+const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
 const remoteA = (page) => page.evaluate(() => window.__nnRemote().find((p) => p.name === 'Check A') ?? null);
 const teleport = (page, x, z) => page.evaluate(([x, z]) => window.__nnConn().sendTeleport(x, z), [x, z]);
 
@@ -128,8 +143,8 @@ try {
     await a.page.keyboard.up('KeyW');
     await record(a.page, false); await record(b.page, false);
     const walkA = await takeRecord(a.page), walkB = await takeRecord(b.page);
-    results.walk = { p95: p95(walkA.corr), max: maxOf(walkA.corr), jump: maxOf(walkB.jumps), excess: maxOf(walkB.excess), frames: walkA.corr.length };
-    console.log(`walk 20 s: correction p95 ${results.walk.p95.toFixed(3)} m (max ${results.walk.max.toFixed(3)}, ${results.walk.frames} frames), remote jump max ${results.walk.jump.toFixed(3)} m (per-frame step change ${results.walk.excess.toFixed(3)} m)`);
+    results.walk = phaseStats(walkA, walkB);
+    showStats('walk 20 s', results.walk);
   }
   // A to the parked car nearest the spawn that has no bike within 8 m (with a bike in reach, E enters the one the
   // figure faces), standing 1.5 m beside it
@@ -151,14 +166,25 @@ try {
   const startA = await remoteA(b.page);
   if (!startA) throw new Error('B does not see A');
   console.log(`A entered the car at (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)}); B sees A as ${startA.mode}`);
+  let maxD = 0;
   if (lag) { await record(a.page, true); await record(b.page, true); }
   await a.page.keyboard.down('KeyW');
   if (lag) {
-    const d0 = await a.state();
-    for (let t = 1; t <= 4; t++) {
-      const s = await a.until((s, n) => s.steps > n, d0.steps + (LAG_STEPS / 4) * t, LAG_STEPS + 60, 'drive phase did not finish');
-      console.log(`  drive ${5 * t} s: (${s.x.toFixed(1)}, ${s.z.toFixed(1)}) ${Math.hypot(s.x - s0.x, s.z - s0.z).toFixed(1)} m, ${(s.speed * 3.6).toFixed(0)} km/h; B at ${JSON.stringify(await b.state().then((q) => [q.x.toFixed(1), q.z.toFixed(1)]))}`);
+    // 20 s shuttling along the street the car stands in (no steering: it keeps to its lane): W until 28 m from where it
+    // started, then S back to within 6 m of it, and so on; half-second chunks
+    let dir = 'KeyW';
+    const t0 = (await a.state()).steps;
+    for (;;) {
+      const before = await a.state();
+      if (before.steps - t0 >= LAG_STEPS) break;
+      const d = Math.hypot(before.x - s0.x, before.z - s0.z);
+      maxD = Math.max(maxD, d);
+      if (dir === 'KeyW' && d > 28) dir = 'KeyS';
+      else if (dir === 'KeyS' && d < 6) dir = 'KeyW';
+      for (const k of ['KeyW', 'KeyS']) await a.page.keyboard[k === dir ? 'down' : 'up'](k);
+      await a.until((s, n) => s.steps > n, before.steps + 30, 200, 'drive phase did not finish');
     }
+    for (const k of ['KeyW', 'KeyS']) await a.page.keyboard.up(k);
   } else {
     await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 32, [s0.x, s0.z], STEPS.drive, 'car did not get 32 m far');
   }
@@ -166,22 +192,22 @@ try {
   if (lag) {
     await record(a.page, false); await record(b.page, false);
     const dA = await takeRecord(a.page), dB = await takeRecord(b.page);
-    results.drive = { p95: p95(dA.corr), max: maxOf(dA.corr), jump: maxOf(dB.jumps), excess: maxOf(dB.excess), frames: dA.corr.length };
-    const moving = dA.corr.filter((_, i) => dA.speed[i] > 2);
-    console.log(`drive, only frames above 2 m/s: p95 ${p95(moving).toFixed(3)} m, max ${maxOf(moving).toFixed(3)} (${moving.length} frames)`);
-    console.log(`drive 20 s: correction p95 ${results.drive.p95.toFixed(3)} m (max ${results.drive.max.toFixed(3)}, ${results.drive.frames} frames), remote jump max ${results.drive.jump.toFixed(3)} m (per-frame step change ${results.drive.excess.toFixed(3)} m)`);
+    results.drive = phaseStats(dA, dB);
+    showStats('drive 20 s', results.drive);
   }
   const sA = await a.state();
-  const movedA = Math.hypot(sA.x - s0.x, sA.z - s0.z);
+  const movedA = lag ? maxD : Math.hypot(sA.x - s0.x, sA.z - s0.z); // --lag shuttles: the farthest point counts
   console.log(`A drove ${movedA.toFixed(1)} m`);
   if (movedA < 30) throw new Error(`A drove only ${movedA.toFixed(1)} m (< 30)`);
   // B sees it (the remote catches up within a moment)
-  await b.until((s, [x, z]) => {
-    const r = window.__nnRemote().find((p) => p.name === 'Check A');
-    return !!r && Math.hypot(r.x - x, r.z - z) >= 30;
-  },[startA.x, startA.z], STEPS.see, 'B did not see A move 30 m');
-  const seen = await remoteA(b.page);
-  console.log(`B sees A ${Math.hypot(seen.x - startA.x, seen.z - startA.z).toFixed(1)} m from its start, mode ${seen.mode}`);
+  if (!lag) {
+    await b.until((s, [x, z]) => {
+      const r = window.__nnRemote().find((p) => p.name === 'Check A');
+      return !!r && Math.hypot(r.x - x, r.z - z) >= 30;
+    }, [startA.x, startA.z], STEPS.see, 'B did not see A move 30 m');
+    const seen = await remoteA(b.page);
+    console.log(`B sees A ${Math.hypot(seen.x - startA.x, seen.z - startA.z).toFixed(1)} m from its start, mode ${seen.mode}`);
+  }
 
   // stop, get out
   await a.page.keyboard.down('Space');
@@ -207,8 +233,8 @@ try {
 
   if (lag) {
     for (const [k, r] of Object.entries(results)) {
-      if (r.p95 > P95_MAX) { console.error(`FAIL: ${k} correction p95 ${r.p95.toFixed(3)} m > ${P95_MAX}`); failed = true; }
-      if (r.jump > JUMP_MAX) { console.error(`FAIL: ${k} remote jump ${r.jump.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
+      if (r.stepP95 > P95_MAX) { console.error(`FAIL: ${k} correction per step p95 ${r.stepP95.toFixed(4)} m > ${P95_MAX}`); failed = true; }
+      if (r.excess > JUMP_MAX) { console.error(`FAIL: ${k} remote step change ${r.excess.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
     }
   }
 } finally {

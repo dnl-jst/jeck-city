@@ -4,6 +4,8 @@ import { MAX_INPUTS_PER_S, NEUTRAL_INPUT, type InputPacket, type PlayerInput } f
 export const QUEUE_MAX = 6;
 /** Token bucket size: inputs a client may send at once on top of the steady MAX_INPUTS_PER_S. */
 export const INPUT_BURST = 6;
+/** Dry ticks (empty queue) for which the last input's continuous fields are repeated: 100 ms, then neutral. */
+export const REPEAT_MAX = 6;
 
 type Entry = { seq: number; input: PlayerInput; arrival: number };
 
@@ -12,8 +14,10 @@ let arrivals = 0;
 
 /**
  * One player's pending inputs, one consumed per tick. Duplicate or old seqs (a client re-sending its last inputs) and
- * everything beyond MAX_INPUTS_PER_S (token bucket) are dropped. A tick without a queued input gets a neutral input
- * keeping the last yaw — never a repeat of the previous input, so a dropped driver's car rolls out instead of driving on.
+ * everything beyond MAX_INPUTS_PER_S (token bucket) are dropped. A tick without a queued input repeats the last
+ * input's continuous fields (forward, right, run, brake, horn, yaw) for up to REPEAT_MAX ticks (a late packet is not a
+ * stutter), pulses (use, jump, bell) never; after that it is neutral with the last yaw, so a dropped driver's car rolls
+ * out instead of driving on.
  */
 export class InputQueue {
   /** Seq of the newest input applied by next() (the ack the client reconciles against). */
@@ -22,6 +26,8 @@ export class InputQueue {
   accepted = 0;
   private lastQueued = -1;
   private lastYaw: number;
+  private last: PlayerInput | null = null;
+  private dry = 0;
   private readonly q: Entry[] = [];
   private tokens = INPUT_BURST;
   private refilledAt: number | null = null;
@@ -53,12 +59,19 @@ export class InputQueue {
     });
   }
 
-  /** This tick's input: the oldest queued one, else neutral with the last yaw. */
+  /** This tick's input: the oldest queued one, else the last one's continuous fields for 6 ticks, then neutral. */
   next(): PlayerInput {
     const e = this.q.shift();
-    if (!e) return NEUTRAL_INPUT(this.lastYaw);
+    if (!e) {
+      if (!this.last || this.dry >= REPEAT_MAX) return NEUTRAL_INPUT(this.lastYaw);
+      this.dry++;
+      const { forward, right, run, brake, horn, yaw } = this.last;
+      return { ...NEUTRAL_INPUT(yaw), forward, right, run, brake, ...(horn ? { horn } : {}) };
+    }
     this.ackSeq = e.seq;
     this.lastYaw = e.input.yaw;
+    this.last = e.input;
+    this.dry = 0;
     return e.input;
   }
 

@@ -84,7 +84,7 @@ export class OnlineSession implements Session {
   onCorrection: (() => void) | null = null;
   /** How far (m) corrections moved the rendered own pose in the last frame (fade-out step, or a hard set). */
   correction = 0;
-  private readonly stepper = new FixedStepper(TUNING.world.dt, 5);
+  private readonly stepper = new FixedStepper(TUNING.world.dt, 8);
   /** use/jump/bell pressed but not yet sent in a step (one-tick pulses, as offline). */
   private use = false;
   private jump = false;
