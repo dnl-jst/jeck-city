@@ -7,6 +7,7 @@ import {
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
+import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
@@ -83,9 +84,32 @@ const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = new Hud(document.body);
+// every download while the game boots is counted; if loading takes a while the loading screen shows the details
+const downloads = new DownloadMeter();
+const untrackFetch = trackFetch(downloads);
+/** The detailed download panel appears once booting has taken this long and bytes are still on their way. */
+const DOWNLOAD_DETAILS_AFTER_MS = 1500;
+const bootStart = performance.now();
+let downloadDetails = false;
+/** The name dialog while it is up (it covers the loading screen, so it shows the download line too). */
+let lobby: Lobby | null = null;
+const downloadTimer = window.setInterval(() => {
+  const now = performance.now();
+  const s = downloads.snapshot(now);
+  if (!downloadDetails && now - bootStart >= DOWNLOAD_DETAILS_AFTER_MS && s.active > 0) downloadDetails = true;
+  if (!downloadDetails) return;
+  hud.setDownloads(s);
+  lobby?.setDownload(s.total > 0 ? s.received / s.total : 0, downloadSummary(s));
+}, 250);
+/** Loading screen gone (or failed): stop counting. */
+function stopDownloadMeter(): void {
+  window.clearInterval(downloadTimer);
+  untrackFetch();
+}
 /** Shows the boot error on the loading screen and stops the boot. */
 function bootFailed(err: unknown): never {
   console.error(err);
+  stopDownloadMeter();
   hud.showError(bootErrorMessage(err));
   window.__nnReady = 'error';
   throw err;
@@ -255,12 +279,14 @@ let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
 async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
-  const [manifest, collision, terrain] = await Promise.all([
-    manifestLoad,
+  // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
+  const manifest = await manifestLoad;
+  const [collision, terrain] = await Promise.all([
     fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => decodeCollision(await r.arrayBuffer())),
     fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
-  const sim = await WorldSim.create({ manifest, collision, terrain });
+  // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
+  const sim = await WorldSim.create({ manifest, collision, terrain }, { sliceMs: 12 });
   physicsLoading = false; // only once the world is built
   showStatus();
   return { sim, terrain };
@@ -285,14 +311,19 @@ let connection: Connection | null = null;
  */
 async function connect(): Promise<Connection | null> {
   if (offline) return null;
-  const lobby = new Lobby(document.body);
-  const hash = await worldHash(await manifestBytes);
+  const dialog = lobby = new Lobby(document.body);
+  // the dialog shows at once; the world hash (needs the whole manifest) is only awaited on joining
+  const hashing = manifestBytes.then((b) => worldHash(b));
+  hashing.catch(() => undefined); // a failed manifest download fails the boot elsewhere
   for (;;) {
-    const name = await lobby.ask();
+    const name = await dialog.ask();
+    dialog.showStatus(STATUS_TEXTS.connecting);
+    const hash = await hashing;
     try {
-      const conn = await connectRoom(name, hash, lobby, CHARACTER_VARIANTS.indexOf(storedCharacter()));
+      const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
       conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
-      lobby.close();
+      dialog.close();
+      lobby = null;
       return conn;
     } catch (e) {
       if (!(e instanceof JoinRejected)) throw e;
@@ -381,11 +412,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   };
   window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
+  stopDownloadMeter();
   hud.hideLoading();
   hud.setHint(LOOK_HINT);
   window.__nnReady = true;
 }, (err: unknown) => {
   console.error(err);
+  stopDownloadMeter();
   hud.showError(bootErrorMessage(err));
   window.__nnReady = 'error';
 });

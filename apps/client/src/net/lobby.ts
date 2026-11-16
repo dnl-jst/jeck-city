@@ -25,6 +25,10 @@ const LOBBY_CSS = `
   .nn-lobby-msg { min-height: 2.8em; margin-top: 12px; font-size: 13px; }
   .nn-lobby-msg.nn-err { color: #ffb4a8; }
   .nn-lobby-retry { display: block; margin-top: 2px; opacity: 0.8; }
+  .nn-lobby-dl { margin-top: 8px; font-size: 12px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+  .nn-lobby-dl[hidden] { display: none; }
+  .nn-lobby-dl-track { margin-bottom: 6px; height: 3px; border-radius: 2px; background: rgba(255,255,255,0.15); overflow: hidden; }
+  .nn-lobby-dl-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.25s; }
 `;
 
 /** The name dialog (DOM overlay) that stays up as the connection status while joining. */
@@ -33,6 +37,9 @@ export class Lobby {
   private readonly input: HTMLInputElement;
   private readonly button: HTMLButtonElement;
   private readonly msg: HTMLDivElement;
+  private readonly dl: HTMLDivElement;
+  private readonly dlFill: HTMLDivElement;
+  private readonly dlText: HTMLDivElement;
   private countdown = 0;
   private submit: ((name: string) => void) | null = null;
 
@@ -59,6 +66,10 @@ export class Lobby {
     this.button.textContent = 'Los';
     box.append(this.button);
     this.msg = div('nn-lobby-msg', box);
+    this.dl = div('nn-lobby-dl', box);
+    this.dl.hidden = true;
+    this.dlFill = div('nn-lobby-dl-fill', div('nn-lobby-dl-track', this.dl));
+    this.dlText = div('nn-lobby-dl-text', this.dl);
     // the game's key handlers sit on window: they must neither see these keys nor swallow the space bar
     for (const type of ['keydown', 'keyup'] as const) this.input.addEventListener(type, (e) => e.stopPropagation());
     this.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') this.confirm(); });
@@ -102,6 +113,13 @@ export class Lobby {
     const tick = (): void => { retry.textContent = `Neuer Versuch in ${left} s`; };
     tick();
     this.countdown = window.setInterval(() => { if (left > 0) left--; tick(); }, 1000);
+  }
+
+  /** The world still downloading behind the dialog: progress 0..1 and a line like "24,6 MB von 103 MB · 3,1 MB/s". */
+  setDownload(progress: number, text: string): void {
+    this.dl.hidden = false;
+    this.dlFill.style.width = `${(Math.min(Math.max(progress, 0), 1) * 100).toFixed(1)}%`;
+    this.dlText.textContent = `Lädt im Hintergrund: ${text}`;
   }
 
   close(): void {
