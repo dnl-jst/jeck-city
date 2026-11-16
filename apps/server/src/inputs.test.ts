@@ -6,7 +6,7 @@ const input = (over: Partial<PlayerInput> = {}): PlayerInput => ({ ...NEUTRAL_IN
 const packet = (seq: number, inputs: PlayerInput[]): InputPacket => ({ seq, tick: 0, inputs });
 
 describe('InputQueue', () => {
-  it('missing input is neutral, not repeated', () => {
+  it('missing input repeats continuous fields ≤ 6 ticks, then neutral', () => {
     const q = new InputQueue(0);
     q.push(packet(1, [input({ forward: 1, right: -1, brake: true, use: true, jump: true, bell: true, horn: true, yaw: 1.25 })]), 0);
     expect(q.next().forward).toBe(1);
@@ -109,6 +109,28 @@ describe('InputQueue', () => {
     expect(sizes.at(-1)).toBe(TRIM_TO);
     expect(Math.max(...sizes.slice(2 * TRIM_WINDOW))).toBe(TRIM_TO);
     expect(uses).toBe(1);
+  });
+
+  it('a trim that started ends when the backlog is gone: a later bunched frame loses no input', () => {
+    const q = new InputQueue(0);
+    let seq = 1;
+    const send = () => q.push(packet(seq++, [input({ forward: 1 })]), seq * 16);
+    for (let k = 0; k < 13; k++) send();
+    // one whole window with a standing backlog of 13, then the trim starts (11 to drop)
+    for (let t = 0; t < TRIM_WINDOW; t++) {
+      send();
+      q.next();
+    }
+    // the client stops sending: the queue drains (trimming a few on the way) and runs dry
+    for (let t = 0; t < 30; t++) q.next();
+    expect(q.size).toBe(0);
+    // much later a bunched frame of 8 arrives: all 8 are applied, in order
+    const first = seq;
+    const frame = Array.from({ length: 8 }, (_, k) => input({ forward: (first + k) / 1000 }));
+    for (const at of [0, 3, 6]) q.push(packet(first + at, frame.slice(at, at + 3)), 10_000);
+    seq += 8;
+    const got = Array.from({ length: 8 }, () => Math.round(q.next().forward * 1000));
+    expect(got).toEqual(Array.from({ length: 8 }, (_, k) => first + k));
   });
 
   it('a slow client\'s bunched frames are never trimmed (the queue runs empty each frame)', () => {

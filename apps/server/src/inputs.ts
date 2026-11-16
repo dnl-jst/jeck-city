@@ -105,6 +105,9 @@ export class InputQueue {
       this.dropOldest();
       this.trim--;
     }
+    // the backlog is gone (trimmed, or drained because the client stopped sending): what was left to trim must not
+    // eat into a later bunched frame
+    if (this.q.length <= TRIM_TO) this.trim = 0;
   }
 
   /** Drops the oldest queued input; its pulses (use, jump, bell) go to the next one. */
