@@ -19,6 +19,20 @@ describe('names', () => {
     expect(dedupeName('Jupp', ['Hein'])).toBe('Jupp');
   });
 
+  it('dedupeName stays within 20 characters (the base is shortened, no trailing space)', () => {
+    const full = 'Jupp Schmitz vom Rhe'; // 20
+    expect(dedupeName(full, [full])).toBe('Jupp Schmitz vom R 2');
+    // the cut lands on a space: trimmed before the number
+    expect(dedupeName('Jupp Schmitz vonn Ab', ['Jupp Schmitz vonn Ab'])).toBe('Jupp Schmitz vonn 2');
+    const taken = [full];
+    for (let k = 2; k <= 10; k++) taken.push(dedupeName(full, taken));
+    expect(taken.at(-2)).toBe('Jupp Schmitz vom R 9');
+    expect(taken.at(-1)).toBe('Jupp Schmitz vom 10'); // the cut lands on a space: trimmed
+    // code points, not UTF-16 units
+    const wide = 'Ö𝔄lgötzenmüllerßchen'; // 20 code points, 21 UTF-16 units
+    expect(dedupeName(wide, [wide])).toBe('Ö𝔄lgötzenmüllerßch 2');
+  });
+
   it('names: leetspeak and umlaut filter', () => {
     expect(checkName('Arschl0ch')).toEqual({ ok: false, error: 'bad' });
     expect(checkName('ARSCHLOCH')).toEqual({ ok: false, error: 'bad' });

@@ -44,13 +44,18 @@ export function checkName(raw: string): NameResult {
   return { ok: true, name };
 }
 
-/** Case-insensitive de-duplication: "Jupp" taken → "Jupp 2", then "Jupp 3" … */
+/**
+ * Case-insensitive de-duplication: "Jupp" taken → "Jupp 2", then "Jupp 3" … The result stays within MAX_LEN code
+ * points: the name is shortened to make room for the number (and loses a space it then ends with).
+ */
 export function dedupeName(name: string, taken: Iterable<string>): string {
   const used = new Set<string>();
   for (const t of taken) used.add(t.toLowerCase());
   if (!used.has(name.toLowerCase())) return name;
+  const chars = [...name];
   for (let n = 2; ; n++) {
-    const c = `${name} ${n}`;
+    const suffix = ` ${n}`;
+    const c = `${chars.slice(0, MAX_LEN - suffix.length).join('').trimEnd()}${suffix}`;
     if (!used.has(c.toLowerCase())) return c;
   }
 }
