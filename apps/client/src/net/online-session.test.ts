@@ -128,7 +128,7 @@ class FakeNet {
     const players = new Map<string, unknown>();
     for (const id of s.players()) {
       const p = s.player(id);
-      players.set(String(id), { slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2 }[p.mode], carId: p.carId ?? -1 });
+      players.set(String(id), { slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 0 }[p.mode], carId: p.carId ?? -1 });
     }
     const cars = new Map<string, unknown>();
     for (let i = 0; i < s.cars.count; i++) {

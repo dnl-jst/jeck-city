@@ -7,3 +7,4 @@ export * from './world-sim';
 export * from './snapshot';
 export * from './proxies';
 export * from './replay';
+export * from './pick';

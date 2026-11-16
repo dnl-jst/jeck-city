@@ -271,3 +271,32 @@ test('braking through a frame hitch is no impact (detector sees the real dt)', (
   audio.drive({ ...DRIVE, vx: 11 }, 0.5); // 8 m/s^2: hard braking, not a crash
   expect(shots.some((s) => s.id.startsWith('impact'))).toBe(false);
 });
+
+test('bike: rolling and chain loops while riding, bell and crash cues, loops end on getting off', async () => {
+  const { audio, shots, voices } = setup();
+  await audio.load();
+  audio.unlock();
+  await flush();
+  audio.mountBike();
+  for (let i = 0; i < 30; i++) audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
+  const roll = voices.find((v) => v.id === 'bikeRoll')!;
+  expect(roll.gain).toBeGreaterThan(0);
+  audio.bell();
+  expect(shots.map((s) => s.id)).toContain('bikeBell');
+  audio.crashBike();
+  expect(shots.map((s) => s.id)).toContain('impact2');
+  audio.dismountBike();
+  expect(roll.stopped).toBe(true);
+});
+
+test('bike loops wait for unlock', async () => {
+  const { audio, voices } = setup();
+  audio.mountBike();
+  audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
+  expect(voices.find((v) => v.id === 'bikeRoll')).toBeUndefined();
+  await audio.load();
+  audio.unlock();
+  await flush();
+  audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
+  expect(voices.find((v) => v.id === 'bikeRoll')).toBeDefined();
+});

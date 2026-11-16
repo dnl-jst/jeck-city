@@ -48,19 +48,21 @@ export const canGetOut = (speed: number): boolean => Math.abs(speed) < EXIT_MAX_
 
 /** Lateral distance of the exit spot from the car's centre line (m): 0.6 m clear of the 1.8 m wide body. */
 export const EXIT_SIDE = 1.5;
-/** Distance of the fallback exit spot behind the car's centre (m): 0.9 m clear of the 4.2 m long body. */
-export const EXIT_BEHIND = TUNING.vehicle.length / 2 + 0.9;
+/** Clearance of the fallback exit spot behind the car's body (m). */
+export const EXIT_BEHIND_CLEAR = 0.9;
 
 /**
  * Where the driver gets out: 1.5 m to the left of the car; if that spot is blocked, to the right;
- * else behind the car. null when all three are blocked. Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
+ * else behind the car (half the body `length` + 0.9 m). null when all three are blocked.
+ * Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
  */
-export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean): XZ | null {
+export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean, length: number = TUNING.vehicle.length): XZ | null {
   const s = Math.sin(car.heading), c = Math.cos(car.heading);
+  const behind = length / 2 + EXIT_BEHIND_CLEAR;
   const spots = [
     { x: car.x + c * EXIT_SIDE, z: car.z - s * EXIT_SIDE },
     { x: car.x - c * EXIT_SIDE, z: car.z + s * EXIT_SIDE },
-    { x: car.x - s * EXIT_BEHIND, z: car.z - c * EXIT_BEHIND },
+    { x: car.x - s * behind, z: car.z - c * behind },
   ];
   return spots.find((p) => isFree(p.x, p.z)) ?? null;
 }

@@ -27,7 +27,8 @@ const MAX_RAW_NAME = 100;
 /** Messages per second before Colyseus drops a client: inputs come at 60 Hz, radio and pings rarely. */
 const MAX_MESSAGES_PER_S = 5 * TICK_HZ;
 
-const MODE = { walk: 0, drive: 1, down: 2 } as const;
+/** ride: riding is offline-only until Task M2 (online sims never mount a bike), so it never reaches the wire. */
+const MODE = { walk: 0, drive: 1, down: 2, ride: 0 } as const;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 
 type Auth = { name: string; ipHash: string };

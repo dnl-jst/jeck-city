@@ -1,6 +1,6 @@
-import type { Camera, Scene } from 'three';
-import { VEHICLE_REST_Y, type CarPose, type SnapshotCar, type SnapshotWalker } from '@nn/shared';
-import { DrivenCar, lampPower } from '../car';
+import type { Camera, Object3D, Scene } from 'three';
+import { SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type CarPose, type CarType, type SnapshotCar, type SnapshotWalker } from '@nn/shared';
+import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
@@ -20,9 +20,10 @@ export interface ParkedHider {
 
 /** The parts of DrivenCar this uses (tests replace it, DrivenCar builds canvas textures). */
 export interface CarView {
-  show(color: number): void;
+  show(type: CarType, color: number): void;
   hide(): void;
   setPose(p: CarPose): void;
+  setWheels(w: WheelSource, dt: number): void;
   setLights(night: number, braking: boolean, power: number): void;
   updateGlare(camera: Camera, occluded: (from: Vec3, to: Vec3) => boolean, dt: number): void;
 }
@@ -36,6 +37,11 @@ export type RemoteOptions = {
   /** The own slot: never drawn, never labelled. */
   me: number;
   colorOf(car: number): number;
+  typeOf(car: number): CarType;
+  /** Car model templates (as for the own car); without them remote cars are unseen, as parked ones are. */
+  carModels?: CarModels;
+  /** Character model template for other players' figures (null/absent: the primitive stand-in). */
+  figureModel?: Object3D | null;
   occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
@@ -69,7 +75,7 @@ export class RemotePlayers {
       if (s.slot === this.opts.me) continue;
       let w = this.walkers.get(s.slot);
       if (!w) {
-        const fig = this.freeFigures.pop() ?? new PlayerFigure(this.scene);
+        const fig = this.freeFigures.pop() ?? this.newFigure();
         fig.visible = true;
         fig.heading = s.yaw;
         w = { fig, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true };
@@ -108,13 +114,14 @@ export class RemotePlayers {
       this.hiding.add(c.id);
       let d = this.driven.get(c.id);
       if (!d) {
-        const view = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, { beams: false });
-        view.show(this.opts.colorOf(c.id));
+        const view = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
+        view.show(this.opts.typeOf(c.id), this.opts.colorOf(c.id));
         d = { view, label: null, seen: true };
         this.driven.set(c.id, d);
       }
       d.seen = true;
       d.view.setPose(c);
+      d.view.setWheels(streamedWheels(c), dt);
       // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
       d.view.setLights(night, c.brakeLight, lampPower(info.level, Math.random));
       d.view.updateGlare(camera, this.opts.occluded, dt);
@@ -128,6 +135,12 @@ export class RemotePlayers {
       this.driven.delete(id);
     }
     this.parked.setHidden(this.hiding);
+  }
+
+  private newFigure(): PlayerFigure {
+    const fig = new PlayerFigure(this.scene);
+    fig.setModel(this.opts.figureModel ?? null);
+    return fig;
   }
 
   /** The label for `name` placed at (x, y, z): created or renamed as needed, dropped while no name is known. */
@@ -156,4 +169,12 @@ export class RemotePlayers {
     this.driven.clear();
     this.parked.setHidden(new Set());
   }
+}
+
+/** Wheels of a streamed car: spin with its speed along the heading and steer as sent; suspension at rest. */
+function streamedWheels(c: SnapshotCar): WheelSource {
+  // forward = local +z rotated by the chassis quaternion
+  const fx = 2 * (c.qx * c.qz + c.qw * c.qy), fz = 1 - 2 * (c.qx * c.qx + c.qy * c.qy);
+  const speed = c.vx * fx + c.vz * fz;
+  return { speed: () => speed, wheelSteering: () => c.steer, wheelSuspension: () => SUSPENSION_REST_LENGTH };
 }

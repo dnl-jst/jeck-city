@@ -7,9 +7,12 @@ export function bootErrorMessage(e: unknown): string {
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
-export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E ein-/aussteigen · R Radio · N Ton · M Karte · Maus umsehen (klicken)';
+export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · R Radio · N Ton · M Karte · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
+/** Bottom hint while riding a bike. */
+export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
+
 export const HUD_CSS = `
   .nn-loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);
     color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; letter-spacing: 0.05em; text-align: center; transition: opacity 0.6s; }

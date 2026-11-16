@@ -1,16 +1,20 @@
 import { heightAt } from '../assets/terrain';
+import type { BikeState, RiddenBike } from '../physics/bike';
+import { CAR_SPECS } from '../physics/cartypes';
 import { Character, type CharacterState } from '../physics/character';
+import { BikeRacks, dismountSpot, ParkedBikes } from '../physics/parkedbikes';
 import { StreetProps } from '../physics/props';
 import { surfaceY } from '../physics/surface';
 import { TUNING } from '../physics/tuning';
 import type { VehicleState } from '../physics/vehicle';
 import { createPhysicsWorld, type PhysicsWorld } from '../physics/world';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
-import { ENTER_MAX_DIST, type StationId } from '../net/constants';
+import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
+import { pickVehicle } from './pick';
 import { Proxies } from './proxies';
 import { restoreDynamicBodies, saveDynamicBodies, type OwnState } from './replay';
 import { ResetTimers } from './resets';
@@ -26,6 +30,14 @@ export type SimEvent =
   | { t: 'enterDenied'; id: PlayerId }
   | { t: 'exit'; id: PlayerId; car: number }
   | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' }
+  | { t: 'mount'; id: PlayerId; bike: number }
+  /**
+   * Off the bike: stepped (or jumped) off, or `crash`ed into something (the rider falls and lies for
+   * TUNING.bike.getUpSeconds without control). heading: the bike's heading at that moment.
+   */
+  | { t: 'dismount'; id: PlayerId; bike: number; heading: number; crash: boolean }
+  /** E on the bike with no free spot to step off to. */
+  | { t: 'dismountDenied'; id: PlayerId }
   | { t: 'ignition'; car: number; e: IgnitionEvent }
   | { t: 'knock'; id: PlayerId; by: number }
   | { t: 'impact'; x: number; z: number; strength: number }
@@ -33,10 +45,11 @@ export type SimEvent =
 
 /**
  * One player's state after a step. pos/vel: feet and velocity while walking (or down), chassis centre and velocity
- * while driving. yaw: the player's last input yaw. engine: ignition of the car they drive ('off' on foot).
+ * while driving, the ground under the wheels and the velocity along the heading while riding. yaw: the player's last
+ * input yaw. engine: ignition of the car they drive ('off' otherwise). falling: fell off a bike and has no control yet.
  */
 export type PlayerSnapshot = {
-  mode: 'walk' | 'drive' | 'down';
+  mode: 'walk' | 'drive' | 'down' | 'ride';
   pos: Vec3;
   vel: Vec3;
   yaw: number;
@@ -44,9 +57,20 @@ export type PlayerSnapshot = {
   char: CharacterState;
   car: VehicleState | null;
   engine: IgnitionState;
+  bikeId: number | null;
+  bike: BikeState | null;
+  falling: boolean;
 };
 
-type Player = { char: Character; car: number | null; yaw: number; use: boolean; jump: boolean };
+type Player = {
+  char: Character; car: number | null; yaw: number; use: boolean; jump: boolean;
+  /** The bike ridden (id in ParkedBikes) and its controller, or null. */
+  bike: number | null; ridden: RiddenBike | null;
+  /** Where the figure faces (heading; follows the walking direction): E picks the car or bike in front. */
+  facing: number;
+  /** Ticks left lying after a bike crash (no control). */
+  fallTicks: number;
+};
 
 /** Ticks between two car proximity updates (0.5 s, as in single player). */
 const PROXIMITY_EVERY = 30;
@@ -56,6 +80,13 @@ const RESET_CHECK_EVERY = 60;
 const DROP = 0.02;
 /** A spawn spot closer than this (m) to another player's feet is taken. */
 const SPAWN_PERSON_GAP = 1;
+const KMH = 1 / 3.6;
+const DT = TUNING.world.dt;
+/** Ticks without control after a bike crash (falling, lying, getting up). */
+const FALL_TICKS = Math.round(TUNING.bike.getUpSeconds * TICK_HZ);
+/** The facing turns towards the walking direction at this rate (1/s; as the rendered figure) above FACE_MIN_SPEED (m/s). */
+const FACE_RATE = 12;
+const FACE_MIN_SPEED = 0.2;
 
 /**
  * The shared simulation: physics world, street props, the car pool and the players, advanced one fixed tick
@@ -72,21 +103,28 @@ export class WorldSim {
   private readonly proxies: Proxies;
 
   private constructor(
-    readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, private readonly a: WorldAssets,
-    private readonly foci: 'players' | readonly XZ[],
+    readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, readonly bikes: ParkedBikes, readonly racks: BikeRacks,
+    private readonly a: WorldAssets, private readonly foci: 'players' | readonly XZ[], private readonly riding: boolean,
   ) {
     this.ignitions = cars.poses.map(() => new Ignition());
     this.brakes = cars.poses.map(() => false);
     this.proxies = new Proxies(pw, cars);
   }
 
-  /** Builds the world from the assets. foci: where cars get physics bodies ('players' = around every player, default). */
-  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[] } = {}): Promise<WorldSim> {
+  /**
+   * Builds the world from the assets. foci: where cars and parked bikes get physics bodies ('players' = around every
+   * player, default). riding: E can mount a bike (offline only for now: the server does not simulate riders yet, so
+   * online sims leave it off and E only picks cars; parked bikes exist and collide either way).
+   */
+  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; riding?: boolean } = {}): Promise<WorldSim> {
     const pw = await createPhysicsWorld(a.collision, a.terrain);
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain);
     const cars = new CarPool(pw, a.manifest.parked, a.terrain);
-    const sim = new WorldSim(pw, cars, props, a, opts.foci ?? 'players');
+    const racks = new BikeRacks(pw, a.manifest.bikeRacks, a.terrain);
+    const bikes = new ParkedBikes(pw, a.manifest.bikes, a.terrain);
+    const sim = new WorldSim(pw, cars, props, bikes, racks, a, opts.foci ?? 'players', opts.riding ?? false);
     cars.updateProximity(sim.focusPoints());
+    bikes.updateProximity(sim.focusPoints());
     // colliders created after the last world step are invisible to scene queries (spawn and exit tests) until the
     // next one; nothing is awake yet, so this step changes no state
     pw.world.step();
@@ -97,8 +135,9 @@ export class WorldSim {
   addPlayer(id: PlayerId, at?: XZ): void {
     if (this.list.has(id)) throw new Error(`player ${id} exists`);
     const { manifest, terrain } = this.a;
-    // cars near the new player must exist before the spawn test and the first step
+    // cars and bikes near the new player must exist before the spawn test and the first step
     this.cars.updateProximity([...this.focusPoints(), at ?? manifest.spawn]);
+    this.bikes.updateProximity([...this.focusPoints(), at ?? manifest.spawn]);
     let p: Vec3;
     if (at) {
       const ground = heightAt(terrain, at.x, at.z);
@@ -107,7 +146,9 @@ export class WorldSim {
       p = findSpawn(this.pw, manifest, terrain, (x, z) => this.spawnTaken(x, z));
     }
     const char = new Character(this.pw, { x: p.x, y: p.y + DROP, z: p.z });
-    this.list.set(id, { char, car: null, yaw: manifest.spawn.heading, use: false, jump: false });
+    this.list.set(id, {
+      char, car: null, yaw: manifest.spawn.heading, use: false, jump: false, bike: null, ridden: null, facing: manifest.spawn.heading, fallTicks: 0,
+    });
   }
 
   /** Removes player `id`; a car they drove stays where it is with the engine off. */
@@ -115,6 +156,7 @@ export class WorldSim {
     const pl = this.list.get(id);
     if (!pl) return;
     if (pl.car !== null) this.leaveCar(pl.car);
+    if (pl.bike !== null) this.bikes.dismount(pl.bike, pl.ridden!); // the bike rolls out where it is
     pl.char.dispose();
     this.list.delete(id);
   }
@@ -167,11 +209,17 @@ export class WorldSim {
     for (let i = 0; i < this.ignitions.length; i++) {
       for (const e of this.ignitions[i]!.update()) ev.push({ t: 'ignition', car: i, e });
     }
-    for (const [, pl, input] of order) this.applyInput(pl, input);
+    for (const [id, pl, input] of order) this.applyInput(id, pl, input, ev);
 
-    if (this.tick % PROXIMITY_EVERY === 0) this.cars.updateProximity(this.focusPoints());
+    if (this.tick % PROXIMITY_EVERY === 0) {
+      const foci = this.focusPoints();
+      this.cars.updateProximity(foci);
+      this.bikes.updateProximity(foci);
+    }
     this.pw.step();
     this.cars.sync();
+    this.bikes.sync();
+    for (const pl of this.list.values()) if (pl.car === null && pl.bike === null) this.turnFacing(pl);
     for (const i of this.props.takeFallen()) ev.push({ t: 'lamp', i });
     this.tick++;
     return ev;
@@ -218,7 +266,7 @@ export class WorldSim {
     inputs.forEach((input, k) => {
       this.useEdge(id, pl, input, ev);
       if (pl.car !== null) this.ignitions[pl.car]!.update();
-      this.applyInput(pl, input);
+      this.applyInput(id, pl, input, ev);
       this.pw.step();
       onStep?.(k);
     });
@@ -226,6 +274,7 @@ export class WorldSim {
     // lamps the replayed path knocked over: the original prediction did not (or did it in an earlier step)
     for (const i of this.props.takeFallen()) this.props.standUp(i);
     this.cars.sync();
+    this.bikes.sync();
   }
 
   player(id: PlayerId): PlayerSnapshot {
@@ -237,27 +286,45 @@ export class WorldSim {
       const car = v.saveState();
       return {
         mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw,
-        carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state,
+        carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false,
+      };
+    }
+    if (pl.bike !== null) {
+      const b = pl.ridden!.state();
+      return {
+        mode: 'ride', pos: { x: b.x, y: b.y, z: b.z }, vel: { x: Math.sin(b.heading) * b.speed, y: b.vy, z: Math.cos(b.heading) * b.speed },
+        yaw: pl.yaw, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false,
       };
     }
     return {
       mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw,
-      carId: null, char, car: null, engine: 'off',
+      carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0,
     };
+  }
+
+  /** The bike player `id` rides (its controller: type, lean), or null. */
+  riddenBike(id: PlayerId): RiddenBike | null {
+    return this.list.get(id)?.ridden ?? null;
   }
 
   /** Players on foot (not in a car) in id order, with their characters: what collisions.ts works on. */
   onFoot(): { id: PlayerId; char: Character }[] {
     const out: { id: PlayerId; char: Character }[] = [];
-    for (const [id, pl] of this.list) if (pl.car === null) out.push({ id, char: pl.char });
+    for (const [id, pl] of this.list) if (pl.car === null && pl.bike === null) out.push({ id, char: pl.char });
     return out.sort((a, b) => a.id - b.id);
   }
 
-  /** Where every player is (the car they drive, else their feet). */
+  /** Where every player is (the car they drive, the bike they ride, else their feet). */
   playerPoints(): XZ[] {
     const out: XZ[] = [];
-    for (const pl of this.list.values()) out.push(pl.car !== null ? this.cars.poses[pl.car]! : pl.char.position());
+    for (const pl of this.list.values()) out.push(this.whereIs(pl));
     return out;
+  }
+
+  private whereIs(pl: Player): XZ {
+    if (pl.car !== null) return this.cars.poses[pl.car]!;
+    if (pl.ridden) return pl.ridden.state();
+    return pl.char.position();
   }
 
   /** 'standing' (post upright), 'lying' (knocked over and asleep: nothing more to stream) or 'tipping' (knocked over, still moving or streamed). */
@@ -290,11 +357,12 @@ export class WorldSim {
    */
   private spawnTaken(x: number, z: number): boolean {
     for (const pl of this.list.values()) {
-      const p = pl.car !== null ? null : pl.char.position();
+      const p = pl.car !== null ? null : this.whereIs(pl);
       if (p && Math.hypot(p.x - x, p.z - z) < SPAWN_PERSON_GAP) return true;
     }
-    const V = TUNING.vehicle, r = TUNING.character.radius + 0.1;
-    for (const c of this.cars.poses) {
+    const r = TUNING.character.radius + 0.1;
+    for (const [i, c] of this.cars.poses.entries()) {
+      const V = CAR_SPECS[this.cars.types[i]!];
       const dx = x - c.x, dz = z - c.z;
       if (Math.abs(dx) > V.length || Math.abs(dz) > V.length) continue;
       const h = headingOf(c), s = Math.sin(h), co = Math.cos(h);
@@ -304,22 +372,30 @@ export class WorldSim {
     return false;
   }
 
-  /** E acts on its rising edge (held for several ticks = one action). */
+  /** E acts on its rising edge (held for several ticks = one action); not while lying after a bike crash. */
   private useEdge(id: PlayerId, pl: Player, input: PlayerInput, ev: SimEvent[]): void {
-    if (input.use && !pl.use) {
-      if (pl.car === null) this.getIn(id, pl, ev);
-      else this.getOut(id, pl, ev);
+    if (input.use && !pl.use && pl.fallTicks === 0) {
+      if (pl.car !== null) this.getOut(id, pl, ev);
+      else if (pl.bike !== null) this.getOffBike(id, pl, ev);
+      else this.getIn(id, pl, ev);
     }
     pl.use = input.use;
   }
 
-  /** Walking or driving input for one step (after the ignitions advanced). */
-  private applyInput(pl: Player, input: PlayerInput): void {
+  /** Walking, riding or driving input for one step (after the ignitions advanced). */
+  private applyInput(id: PlayerId, pl: Player, input: PlayerInput, ev: SimEvent[]): void {
     pl.yaw = input.yaw;
-    // a jump takes off on the rising edge of the jump input, like one press of Space in single player
+    // a jump (or a hop on the bike) takes off on the rising edge of the jump input, like one press of Space
     const jump = input.jump && !pl.jump;
     pl.jump = input.jump;
-    if (pl.car === null) {
+    if (pl.fallTicks > 0) {
+      // fell off a bike: lying and getting up, no control
+      pl.fallTicks--;
+      pl.char.applyInput({ forward: 0, right: 0, run: false, yaw: input.yaw, jump: false });
+    } else if (pl.bike !== null) {
+      const r = pl.ridden!.applyInput({ pedal: input.forward, steer: input.right, sprint: input.run, hop: jump });
+      if (r.crashed) this.crash(id, pl, ev);
+    } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
       const v = this.cars.vehicle(pl.car)!;
@@ -365,6 +441,12 @@ export class WorldSim {
     const pos = pl.char.position();
     const candidates = this.cars.candidates();
     const car = nearestEnterableCar(pos, candidates, ENTER_MAX_DIST);
+    // a car and a bike in reach: the one the figure faces
+    const bike = this.riding ? this.bikes.nearestMountable(pos) : null;
+    if (pickVehicle(pos, pl.facing, car === null ? null : this.cars.poses[car]!, bike === null ? null : this.bikes.poses[bike]!) === 'bike') {
+      this.mountBike(id, pl, bike!, ev);
+      return;
+    }
     if (car === null) {
       // only a taken car in reach: tell the player (their prediction may have put them in it)
       if (candidates.some((c) => c.occupied && Math.hypot(c.x - pos.x, c.z - pos.z) <= ENTER_MAX_DIST)) ev.push({ t: 'enterDenied', id });
@@ -386,7 +468,7 @@ export class WorldSim {
       return;
     }
     const pose = v.pose();
-    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) }, (x, z) => exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z));
+    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) }, (x, z) => exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), v.spec.length);
     if (!spot) {
       ev.push({ t: 'exitDenied', id, reason: 'blocked' });
       return;
@@ -396,7 +478,58 @@ export class WorldSim {
     pl.char.setEnabled(true);
     const y = surfaceY(this.pw, spot.x, spot.z, pose.y + 1) ?? heightAt(this.a.terrain, spot.x, spot.z);
     pl.char.teleport({ x: spot.x, y: y + DROP, z: spot.z });
+    pl.facing = headingOf(pose);
     ev.push({ t: 'exit', id, car: i });
+  }
+
+  private mountBike(id: PlayerId, pl: Player, bike: number, ev: SimEvent[]): void {
+    pl.ridden = this.bikes.mount(bike);
+    pl.bike = bike;
+    pl.jump = false;
+    pl.char.setEnabled(false);
+    ev.push({ t: 'mount', id, bike });
+  }
+
+  /** E on the bike: step off to the side (slow) or jump off and let the bike roll on (fast). */
+  private getOffBike(id: PlayerId, pl: Player, ev: SimEvent[]): void {
+    const r = pl.ridden!, s = r.state();
+    const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z));
+    if (!spot) {
+      ev.push({ t: 'dismountDenied', id });
+      return;
+    }
+    if (Math.abs(s.speed) < TUNING.bike.dismountJumpKmh * KMH) r.restore({ ...s, speed: 0 });
+    this.leaveBike(id, pl, spot, s, false, ev);
+  }
+
+  /** Crashed into something: the rider falls next to the bike, which stays where it is. */
+  private crash(id: PlayerId, pl: Player, ev: SimEvent[]): void {
+    const r = pl.ridden!, s = r.state();
+    r.restore({ ...s, speed: 0 });
+    // nowhere free to the side or behind (squeezed against a wall): fall where the bike is, never through the wall
+    const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
+    this.leaveBike(id, pl, spot, s, true, ev);
+    pl.fallTicks = FALL_TICKS;
+  }
+
+  private leaveBike(id: PlayerId, pl: Player, spot: XZ, s: BikeState, crash: boolean, ev: SimEvent[]): void {
+    const bike = pl.bike!;
+    this.bikes.dismount(bike, pl.ridden!);
+    pl.bike = null;
+    pl.ridden = null;
+    pl.char.setEnabled(true);
+    const y = surfaceY(this.pw, spot.x, spot.z, s.y + 1) ?? heightAt(this.a.terrain, spot.x, spot.z);
+    pl.char.teleport({ x: spot.x, y: y + DROP, z: spot.z });
+    pl.facing = s.heading;
+    ev.push({ t: 'dismount', id, bike, heading: s.heading, crash });
+  }
+
+  /** The facing follows the walking direction (as the rendered figure turns). */
+  private turnFacing(pl: Player): void {
+    const v = pl.char.velocity();
+    if (Math.hypot(v.x, v.z) <= FACE_MIN_SPEED) return;
+    const d = Math.atan2(v.x, v.z) - pl.facing;
+    pl.facing += Math.atan2(Math.sin(d), Math.cos(d)) * Math.min(1, DT * FACE_RATE);
   }
 
   private leaveCar(i: number): void {

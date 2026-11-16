@@ -1,4 +1,5 @@
-import { SOUNDS, type SoundId } from './sounds';
+import { synthBell, synthNoiseLoop, synthTick } from './bike-sound';
+import { SOUNDS, type FileSoundId, type SoundId, type SynthSoundId } from './sounds';
 
 /** All mix levels in one place; callers multiply their voice gains by these. */
 export const MIX = {
@@ -11,7 +12,19 @@ export const MIX = {
   ambience: 0.4,
   tramBell: 0.7,
   static: 0.25,
+  bikeRoll: 0.35,
+  bikeChain: 0.18,
+  bikeTick: 0.8,
+  bikeBell: 0.7,
 } as const;
+
+/** Synthesised samples (made once the AudioContext exists): sample rate → mono samples. */
+const SYNTH: Record<SynthSoundId, (rate: number) => Float32Array> = {
+  bikeTick: synthTick,
+  bikeBell: synthBell,
+  bikeRoll: (r) => synthNoiseLoop(r, 1.5, 700),
+  bikeChain: (r) => synthNoiseLoop(r, 1, 2400),
+};
 
 export interface LoopVoice {
   setGain(g: number): void;
@@ -42,7 +55,7 @@ export class AudioMixer {
   private sfx: GainNode | null = null;
   private ambience: GainNode | null = null;
   private lowpass: BiquadFilterNode | null = null;
-  private readonly raw = new Map<SoundId, ArrayBuffer>();
+  private readonly raw = new Map<FileSoundId, ArrayBuffer>();
   private readonly buffers = new Map<SoundId, AudioBuffer>();
   private muted = false;
   private inCar = false;
@@ -92,7 +105,7 @@ export class AudioMixer {
   /** Fetches and decodes every sound in parallel; missing files are logged, not fatal. */
   async load(): Promise<void> {
     await Promise.all(
-      (Object.keys(SOUNDS) as SoundId[]).map(async (id) => {
+      (Object.keys(SOUNDS) as FileSoundId[]).map(async (id) => {
         if (this.raw.has(id) || this.buffers.has(id)) return;
         const url = this.base + SOUNDS[id].file;
         try {
@@ -110,6 +123,13 @@ export class AudioMixer {
   private async decodePending(): Promise<void> {
     const ctx = this.ctx;
     if (!ctx) return;
+    for (const [id, make] of Object.entries(SYNTH) as [SynthSoundId, (rate: number) => Float32Array][]) {
+      if (this.buffers.has(id)) continue;
+      const data = make(ctx.sampleRate);
+      const buf = ctx.createBuffer(1, data.length, ctx.sampleRate);
+      buf.copyToChannel(data as Float32Array<ArrayBuffer>, 0);
+      this.buffers.set(id, buf);
+    }
     const pending = [...this.raw];
     this.raw.clear();
     await Promise.all(

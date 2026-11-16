@@ -15,6 +15,7 @@ import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game } from './game';
+import { storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
 import { OnlineSession } from './net/online-session';
 import { Lobby } from './net/lobby';
@@ -39,7 +40,7 @@ declare global {
      * height of the first static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive'; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      mode: 'walk' | 'drive' | 'ride'; bikeType: string | null; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
       /** Online: how far (m) server corrections moved the rendered own pose in the last frame (0 offline). */
       correction: number;
@@ -231,7 +232,8 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
     fetchOk('/world/collision.bin').then(async (r) => decodeCollision(await r.arrayBuffer())),
     fetchOk('/world/terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
-  const sim = await WorldSim.create({ manifest, collision, terrain });
+  // riding bikes is offline-only until the server simulates bikes for its players (Task M2)
+  const sim = await WorldSim.create({ manifest, collision, terrain }, { riding: offline });
   physicsLoading = false; // only once the world is built
   showStatus();
   return { sim, terrain };
@@ -274,8 +276,25 @@ async function connect(): Promise<Connection | null> {
 }
 
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(([m, { sim, terrain }, mapData, conn]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain }, mapData, conn]) => {
   connection = conn;
+  // bikes still ride without their models (unseen), so a failed model download is not fatal
+  const characters = world.characterModels(m);
+  const [bikeModels, character] = await Promise.all([
+    world.loadBikeModels(m).catch((err: unknown) => {
+      console.error(err);
+      return undefined;
+    }),
+    // only the shown figure now (the other loads when switched to); without it the player is the primitive stand-in
+    characters.variants.length ? characters.load(storedCharacter()).catch((err: unknown) => {
+      console.error(err);
+      return null;
+    }) : null,
+  ]);
+  const carModels = await world.loadCarModels(m).catch((err: unknown) => {
+    console.error(err);
+    return undefined;
+  });
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -294,7 +313,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     sim.addPlayer(OFFLINE_ME, start);
     session = new OfflineSession(sim, OFFLINE_ME);
   }
-  game = new Game(session, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio });
+  game = new Game(session, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
   if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
@@ -314,7 +333,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnState = () => {
     const f = game!.focus();
     return {
-      mode: game!.mode, flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
       radio: gameAudio.station,
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,

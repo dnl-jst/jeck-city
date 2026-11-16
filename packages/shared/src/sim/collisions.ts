@@ -1,6 +1,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import type { Character } from '../physics/character';
 import { TUNING } from '../physics/tuning';
+import { CHASSIS_CLEARANCE } from '../physics/vehicle';
 import { KNOCKDOWN_KMH, KNOCKDOWN_S, TICK_HZ } from '../net/constants';
 import type { PlayerId } from './cars';
 import { headingOf } from './rules';
@@ -30,7 +31,6 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
   for (const p of sim.onFoot()) people.set(p.char.colliderHandle, p);
   if (people.size === 0) return;
   const { rapier, world } = sim.pw;
-  const V = TUNING.vehicle;
   const knocked = new Set<number>();
   for (const i of awake) {
     const v = sim.cars.vehicle(i)!;
@@ -42,9 +42,12 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
     if (speed < 0.2) continue;
     const fast = speed > KNOCKDOWN_KMH * KMH;
     const m = speed * DT + 0.05;
-    const box = new rapier.Cuboid(V.width / 2 + m, V.height / 2 + m, V.length / 2 + m);
+    const V = v.spec;
+    const box = new rapier.Cuboid(V.width / 2 + m, (V.height - CHASSIS_CLEARANCE) / 2 + m, V.length / 2 + m);
     const hit: { id: PlayerId; char: Character }[] = [];
-    world.intersectionsWithShape(body.translation(), body.rotation(), box, (c: RAPIER.Collider) => {
+    // the chassis box (its collider sits off the body origin, see chassisLayout), in world space
+    const box0 = body.collider(0);
+    world.intersectionsWithShape(box0.translation(), box0.rotation(), box, (c: RAPIER.Collider) => {
       hit.push(people.get(c.handle)!);
       return true;
     }, undefined, undefined, undefined, body, (c: RAPIER.Collider) => {

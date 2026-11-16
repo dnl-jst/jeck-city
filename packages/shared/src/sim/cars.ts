@@ -1,5 +1,6 @@
 import type { WorldManifest } from '../assets/manifest';
 import type { TerrainGrid } from '../assets/terrain';
+import { carTypeOf, type CarType } from '../physics/cartypes';
 import { Vehicle, VEHICLE_REST_Y } from '../physics/vehicle';
 import type { PhysicsWorld } from '../physics/world';
 import type { StationId } from '../net/constants';
@@ -24,6 +25,8 @@ export type PlayerId = number;
 export class CarPool {
   readonly poses: CarPose[];
   readonly colors: number[];
+  /** Model (and chassis size) of each car. */
+  readonly types: CarType[];
   readonly driver: (PlayerId | null)[];
   /** Radio station playing in each car; null while off or without a driver. */
   readonly radio: (StationId | null)[];
@@ -37,6 +40,7 @@ export class CarPool {
     this.home = parked.map((c) => parkedPose(c.x, c.z, c.heading, terrain));
     this.poses = this.home.map((p) => ({ ...p }));
     this.colors = parked.map((c) => c.color);
+    this.types = parked.map((c) => carTypeOf(c.type));
     this.driver = parked.map(() => null);
     this.radio = parked.map(() => null);
   }
@@ -69,7 +73,7 @@ export class CarPool {
   /** A sleeping Vehicle at the car's stored pose (its original spot or where it was pushed to). */
   private spawn(i: number): Vehicle {
     const s = this.poses[i]!;
-    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y });
+    const v = new Vehicle(this.pw, { x: s.x, z: s.z, heading: headingOf(s), y: s.y - VEHICLE_REST_Y }, this.types[i]);
     // tilted on a slope (or left tilted after a push): keep the stored rotation
     if (Math.abs(s.qx) + Math.abs(s.qz) > 1e-4) v.chassis.setRotation({ x: s.qx, y: s.qy, z: s.qz, w: s.qw }, false);
     return v;

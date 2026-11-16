@@ -1,7 +1,8 @@
 import { BufferAttribute, BufferGeometry, Mesh, MeshStandardMaterial, type Material, type Object3D, type Scene, type Texture } from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { CHUNK_SIZE, parseManifest, type WorldManifest } from '@nn/shared';
+import { CHUNK_SIZE, parseManifest, type BikeType, type CarType, type WorldManifest } from '@nn/shared';
+import { CharacterModels } from './characters';
 import { FetchError } from './errors';
 import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
@@ -169,6 +170,29 @@ export class WorldLoader {
     } finally {
       this.pending.delete(key);
     }
+  }
+
+  /** Bike and rack models of the manifest (bike_<type>.glb, rack_*.glb), parsed once; templates to clone or instance. */
+  async loadBikeModels(m: WorldManifest): Promise<{ bikes: Map<BikeType, Object3D>; racks: Map<0 | 1, Object3D> }> {
+    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    const [bikes, racks] = await Promise.all([
+      Promise.all(m.bikeModels.map(async (b) => [b.type, await parse(b.file)] as const)),
+      Promise.all(m.rackModels.map(async (r) => [r.kind, await parse(r.file)] as const)),
+    ]);
+    return { bikes: new Map(bikes), racks: new Map(racks) };
+  }
+
+  /** Car models of the manifest (car_<type>.glb + car_<type>_lod.glb), parsed once; templates to clone or instance. */
+  async loadCarModels(m: WorldManifest): Promise<Map<CarType, { full: Object3D; lod: Object3D }>> {
+    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    const all = await Promise.all(m.carModels.map(async (c) => [c.type, { full: await parse(c.file), lod: await parse(c.lod) }] as const));
+    return new Map(all);
+  }
+
+  /** Player character models of the manifest (character_<variant>.glb), each downloaded when first asked for. */
+  characterModels(m: WorldManifest): CharacterModels {
+    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    return new CharacterModels(new Map(m.characterModels.map((c) => [c.variant, c.file])), parse);
   }
 
   /** A replacement model (world space, own materials); marked so unload() frees its materials too. */

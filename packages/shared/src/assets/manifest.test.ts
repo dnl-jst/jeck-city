@@ -14,6 +14,12 @@ const valid = (): WorldManifest => ({
   shops: [{ x: 1, z: 2, label: 'bakery', type: 'bakery', buildingId: 'DENW1' }, { x: 3, z: 4, label: 'kiosk', type: 'kiosk', buildingId: 'DENW2', sign: { x: 3.5, y: 6.1, z: 4, heading: 1.57, width: 4 } }],
   parked: [{ x: 1, z: 2, heading: 0.5, color: 0xffffff }],
   models: [{ id: 'DENW3', chunk: '0_0', file: 'model_a.glb', bytes: 99 }],
+  bikeRacks: [{ x: 4, z: 5, heading: 1.2, kind: 0 }],
+  bikes: [{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }],
+  bikeModels: [{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }],
+  rackModels: [{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }],
+    characterModels: [{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }],
+  carModels: [],
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -65,3 +71,51 @@ test('manifest parse v2: terrain, datum and farGroundY are required and validate
 test('SIGN_Y is the sign board centre above the building base', () => expect(SIGN_Y).toBe(3.975));
 
 test('chunk key for point', () => expect(chunkKey(-1, 399)).toBe('-1_1'));
+
+test('manifest parse: bikes and racks', () => {
+  const m = parseManifest(JSON.parse(JSON.stringify(valid())));
+  expect(m.bikeRacks).toEqual([{ x: 4, z: 5, heading: 1.2, kind: 0 }]);
+  expect(m.bikes).toEqual([{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }]);
+});
+
+test('manifest parse: old manifest without bikes gets empty lists', () => {
+  const { bikes: _b, bikeRacks: _r, ...old } = valid();
+  const m = parseManifest(old);
+  expect(m.bikes).toEqual([]);
+  expect(m.bikeRacks).toEqual([]);
+});
+
+test('manifest parse rejects bike type out of range and rack kind 2', () => {
+  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 5, color: 0 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 1.5, color: 0 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), bikeRacks: [{ x: 0, z: 0, heading: 0, kind: 2 }] })).toThrow();
+});
+
+test('manifest parse: bike and rack models, default [] and validated', () => {
+  const m = parseManifest(JSON.parse(JSON.stringify(valid())));
+  expect(m.bikeModels).toEqual([{ type: 'longjohn', file: 'bike_longjohn.glb', bytes: 10 }]);
+  expect(m.rackModels).toEqual([{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }]);
+  const { bikeModels: _b, rackModels: _r, ...old } = valid();
+  expect(parseManifest(old).bikeModels).toEqual([]);
+  expect(parseManifest(old).rackModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), bikeModels: [{ type: 'unicycle', file: 'x.glb', bytes: 1 }] })).toThrow();
+});
+
+test('manifest parse: car types and car models, default and validated', () => {
+  const car = { x: 1, z: 2, heading: 0.5, color: 0xffffff };
+  const models = [{ type: 'smart', file: 'car_smart.glb', lod: 'car_smart_lod.glb', bytes: 7 }];
+  const m = parseManifest({ ...valid(), parked: [{ ...car, type: 3 }, car], carModels: models });
+  expect(m.parked[0]!.type).toBe(3);
+  expect(m.parked[1]!.type).toBeUndefined();
+  expect(m.carModels).toEqual(models);
+  expect(parseManifest(valid()).carModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), parked: [{ ...car, type: 4 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), carModels: [{ ...models[0], type: 'bus' }] })).toThrow();
+});
+
+test('manifest parse: character models, default [] and validated', () => {
+  expect(parseManifest(JSON.parse(JSON.stringify(valid()))).characterModels).toEqual([{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }]);
+  const { characterModels: _c, ...old } = valid();
+  expect(parseManifest(old).characterModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), characterModels: [{ variant: 'robot', file: 'x.glb', bytes: 1 }] })).toThrow();
+});

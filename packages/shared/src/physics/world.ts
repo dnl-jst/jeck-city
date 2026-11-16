@@ -27,9 +27,15 @@ export function initRapier(): Promise<void> {
 }
 
 /**
- * Interaction groups (membership << 16 | filter). The city keeps the default (all bits). Street furniture (trees,
- * lamps; see StreetProps) is bit 1, car chassis bit 2, people bit 3 (see CAR_GROUPS). A knocked-down lamp no longer collides with car bodies (the
- * chassis would bulldoze it along); the wheel rays still roll over it.
+ * Interaction groups (membership << 16 | filter). Bit layout:
+ *   bit 0       the static city (keeps Rapier's default: member of all bits, collides with all)
+ *   bit 1  0x02 street furniture (trees, lamps, bike rack hoops; see StreetProps, BikeRacks)
+ *   bit 2  0x04 car chassis
+ *   bit 3  0x08 people (walking capsules and their kinematic stand-ins)
+ *   bit 4  0x10 bikes (ridden and parked)
+ * Cars ignore people in the solver (carHitsPeople handles that contact); everything else collides. A knocked-down
+ * lamp only collides with the city and furniture (filter bits 0–1): no car body bulldozes it along, and no bike or
+ * person is stopped by it; the wheel rays still roll over it.
  */
 export const PROP_GROUPS = 0x0002_ffff;
 export const LYING_PROP_GROUPS = 0x0002_0003;
@@ -40,6 +46,8 @@ export const LYING_PROP_GROUPS = 0x0002_0003;
 export const CAR_GROUPS = 0x0004_fff7;
 /** People (capsules and their kinematic stand-ins): bit 3, ignore cars (bit 2). */
 export const CHARACTER_GROUPS = 0x0008_fffb;
+/** Bikes (ridden and parked): bit 4, collide with everything. */
+export const BIKE_GROUPS = 0x0010_ffff;
 
 /**
  * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars,

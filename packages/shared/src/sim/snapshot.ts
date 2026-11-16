@@ -10,7 +10,8 @@ import type { SimEvent, WorldSim } from './world-sim';
 const WALK_MIN_SPEED = 0.3;
 
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
-const MODE = { walk: 0, drive: 1, down: 2 } as const;
+/** ride: riding is offline-only until Task M2 (online sims never mount a bike), so it never reaches the wire. */
+const MODE = { walk: 0, drive: 1, down: 2, ride: 0 } as const;
 
 /**
  * Snapshot of the world for player `id`: own state in full, and what the interest set of that client contains:
@@ -28,7 +29,7 @@ export function buildSnapshot(
   for (const other of sim.players()) {
     if (other === id) continue;
     const p = sim.player(other);
-    if (p.mode === 'drive') continue; // represented by the car
+    if (p.mode === 'drive' || p.mode === 'ride') continue; // represented by the car (riders: offline only for now)
     const slot = slotOf(other);
     const key = `p${slot}`;
     const speed = Math.hypot(p.vel.x, p.vel.z);

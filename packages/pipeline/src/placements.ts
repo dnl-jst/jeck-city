@@ -1,4 +1,4 @@
-import { SIGN_Y, type WorldManifest } from '@nn/shared';
+import { carTypeFor, SIGN_Y, type WorldManifest } from '@nn/shared';
 import type { BuildingMesh } from './buildings.js';
 import { FLAG_BACKDROP } from './chunks.js';
 import { footprintDistance } from './footprint.js';
@@ -137,6 +137,13 @@ function mix(seed: number, i: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
+/**
+ * Parked cars on the spots: colour from the palette, type mixed over CAR_TYPES by CAR_TYPE_WEIGHTS. spots[0] is the
+ * spawn car, always a kleinwagen.
+ */
 export function parkedCars(spots: { pos: Pt; heading: number }[], seed: number): WorldManifest['parked'] {
-  return spots.map((s, i) => ({ x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[mix(seed, i) % PARKED_PALETTE.length]! }));
+  return spots.map((s, i) => ({
+    x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[mix(seed, i) % PARKED_PALETTE.length]!,
+    type: i === 0 ? 0 : carTypeFor(mix(seed ^ 0x5bd1e995, i) / 4294967296),
+  }));
 }

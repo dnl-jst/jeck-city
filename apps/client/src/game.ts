@@ -1,12 +1,19 @@
-import { Quaternion, type PerspectiveCamera, type Scene } from 'three';
-import { headingOf, staticWorldFilter, type CarPose, type PlayerInput, type SimEvent, type StationId, type WorldManifest } from '@nn/shared';
+import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
+import {
+  headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput, type PlayerSnapshot,
+  type SimEvent, type StationId, type WorldManifest,
+} from '@nn/shared';
+import { BikeRig } from './bikes/rig';
+import { BikeView } from './bikes/parked';
+import { RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
-import { DrivenCar, lampPower, ParkedCars } from './car';
-import { PlayerFigure } from './player';
+import { DrivenCar, lampPower, ParkedCars, type CarModels } from './car';
+import { angleDelta, PlayerFigure, type Posture } from './player';
+import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
@@ -19,20 +26,36 @@ const DEG = Math.PI / 180;
 export type GameContext = {
   scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null;
   audio?: GameAudio;
+  /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
+  bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
+  /** Car model templates (WorldLoader.loadCarModels); without them cars still drive, just unseen. */
+  carModels?: CarModels;
+  /** Player character models (WorldLoader.characterModels) and the stored choice's template, if it loaded. */
+  characters?: CharacterModels;
+  character?: Object3D | null;
 };
+
+/** Upper-body posture per bike type. */
+const POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright' };
 
 const STATIC_ONLY = staticWorldFilter();
 
 /**
- * The playable game: renders the session's WorldSim (walking figure, cars, follow camera) and turns keyboard and
- * mouse into the local player's input. Sound, radio wheel, map, camera and glare live here; the simulation does not.
+ * The playable game: renders the session's WorldSim (walking figure, cars, bikes, follow camera) and turns keyboard
+ * and mouse into the local player's input. Sound, radio wheel, map, camera and glare live here; the simulation does not.
  */
 export class Game {
-  mode: 'walk' | 'drive' = 'walk';
+  mode: 'walk' | 'drive' | 'ride' = 'walk';
   flying = false;
   readonly figure: PlayerFigure;
   readonly cars: ParkedCars;
   readonly driven: DrivenCar;
+  /** Parked bikes and rack hoops (instanced; the sim's ParkedBikes), the rig of the ridden bike. */
+  private readonly bikeView: BikeView | null = null;
+  private readonly rigs = new Map<BikeType, BikeRig>();
+  private rig: BikeRig | null = null;
+  /** Player character shown (CHARACTER_VARIANTS); C switches to the next one that has a model. */
+  character: CharacterVariant;
   readonly follow: FollowCamera;
   /** Other players (online only). */
   private readonly remotes: RemotePlayers | null;
@@ -48,13 +71,15 @@ export class Game {
   private ctl: DriveControls = { forward: 0, right: 0, brake: false, run: false };
   /** The car the player drives (null on foot). */
   private carId: number | null = null;
-  /** Car the last sampled step had the player in (undefined before the first sample). */
-  private sampledCar: number | null | undefined = undefined;
+  /** Vehicle the last sampled step had the player in ('w' on foot; undefined before the first sample). */
+  private sampledKey: string | undefined = undefined;
   /** Sim state before and after the last step, blended by session.alpha for rendering. */
   private prevPos: Vec3 = { x: 0, y: 0, z: 0 };
   private currPos: Vec3 = { x: 0, y: 0, z: 0 };
   private prevPose: CarPose | null = null;
   private currPose: CarPose | null = null;
+  private prevBike: BikeState | null = null;
+  private currBike: BikeState | null = null;
   /** On foot after the last step: velocity and ground contact (figure animation, footsteps). */
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private grounded = true;
@@ -76,15 +101,19 @@ export class Game {
     const { sim } = session;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
-    this.driven = new DrivenCar(scene);
+    this.character = storedCharacter();
+    this.figure.setModel(ctx.character ?? null);
+    this.driven = new DrivenCar(scene, ctx.carModels);
     this.fly = new FreeFly(camera, input);
     const heading = devCam ? devCam.yawDeg * DEG : m.spawn.heading;
     this.figure.heading = heading;
-    this.cars = new ParkedCars(scene, sim.cars);
+    this.cars = new ParkedCars(scene, sim.cars, ctx.carModels);
+    if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, sim.bikes, m.bikeRacks, sim.racks.ys);
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
     this.remotes = session.remote ? new RemotePlayers(scene, this.cars, {
-      me: session.me, colorOf: (i) => sim.cars.colors[i]!, occluded: (a, b) => this.occluded(a, b),
+      me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!, occluded: (a, b) => this.occluded(a, b),
+      carModels: ctx.carModels, figureModel: ctx.character ?? null,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -102,16 +131,40 @@ export class Game {
     return this.carId === null ? 'off' : this.session.sim.ignition(this.carId).state;
   }
 
-  /** Where the player is: feet while walking, chassis centre while driving. */
+  /** Where the player is: feet while walking, chassis centre while driving, the ground under the bike while riding. */
   focus(): Vec3 {
+    if (this.mode === 'ride' && this.currBike) return this.currBike;
     return this.mode === 'drive' && this.currPose ? this.currPose : this.currPos;
   }
 
-  /** Ground speed (m/s) of the player or the car. */
+  /** Type of the bike being ridden, else null. */
+  bikeType(): BikeType | null {
+    return this.session.sim.riddenBike(this.session.me)?.type ?? null;
+  }
+
+  /** Ground speed (m/s) of the player, the car or the bike. */
   speed(): number {
     const v = this.carId !== null ? this.session.sim.cars.vehicle(this.carId) : null;
     if (v) return Math.abs(v.speed());
+    if (this.mode === 'ride' && this.currBike) return Math.abs(this.currBike.speed);
     return Math.hypot(this.vel.x, this.vel.z);
+  }
+
+  private switchCharacter(): void {
+    const models = this.ctx.characters;
+    const variants = models?.variants ?? [];
+    if (!models || variants.length < 2) return;
+    const next = variants[(variants.indexOf(this.character) + 1) % variants.length]!;
+    this.character = next;
+    storeCharacter(next);
+    this.ctx.hud.flash(next === 'woman' ? 'Figur: Frau' : 'Figur: Mann');
+    // the first switch to a figure downloads it; the old one stays until it is there
+    models.load(next).then((model) => {
+      if (this.character === next) this.figure.setModel(model); // unless switched on meanwhile
+    }, (err: unknown) => {
+      console.error(err);
+      if (this.character === next) this.ctx.hud.flash('Figur konnte nicht geladen werden');
+    });
   }
 
   /** Lamps knocked over since the last call (to switch their light off and tip the rendered post). */
@@ -128,6 +181,7 @@ export class Game {
     const notches = input.takeWheel();
     if (debug && input.consume('KeyF')) this.toggleFly();
     if (input.consume('KeyN')) audio?.toggleMute();
+    if (input.consume('KeyC')) this.switchCharacter();
     if (!this.flying && input.consume('KeyM')) {
       this.map.toggle();
       if (this.map.open) this.closeWheel();
@@ -149,29 +203,38 @@ export class Game {
       }
       // while the wheel is open the mouse points at a station instead of turning the camera
       if (!this.wheelState.open) this.follow.turn(mouse.dx, mouse.dy);
-      if (input.consume('Space') && this.mode === 'walk') jump = true;
-      if (input.consume('KeyE')) use = true;
+      const busy = this.figure.busy; // fallen off: no control until up again
+      // Space: jump on foot, hop on the bike
+      if (input.consume('Space') && !busy && this.mode !== 'drive') jump = true;
+      if (input.consume('KeyH') && this.mode === 'ride') audio?.bell();
+      if (input.consume('KeyE') && !busy) use = true;
       if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
-    const raw = this.flying ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
+    const still = this.flying || this.figure.busy;
+    const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
     const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw };
     let radio: StationId | null | undefined;
     if (this.mode === 'drive' && audio && audio.station !== this.sentRadio) radio = this.sentRadio = audio.station;
     this.handle(this.session.frame(dt, cmd, radio));
     this.cars.update(this.ctx.camera.position.x, this.ctx.camera.position.z);
+    this.bikeView?.update(this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.render(dt, night);
   }
 
-  /** After every fixed step: the player's position (or car pose) before and after it. */
+  /** After every fixed step: the player's position (or car pose, or bike state) before and after it. */
   private sample(): void {
     const { sim, me } = this.session;
     const p = sim.player(me);
-    const changed = p.carId !== this.sampledCar;
+    const key = vehicleKey(p);
+    const changed = key !== this.sampledKey;
     if (p.carId !== null) {
       const pose = sim.cars.vehicle(p.carId)!.pose();
       this.prevPose = changed ? pose : this.currPose;
       this.currPose = pose;
+    } else if (p.bike) {
+      this.prevBike = changed ? p.bike : this.currBike;
+      this.currBike = p.bike;
     } else {
       this.prevPos = changed ? p.pos : this.currPos;
       this.currPos = p.pos;
@@ -179,7 +242,7 @@ export class Game {
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
-    this.sampledCar = p.carId;
+    this.sampledKey = key;
   }
 
   /**
@@ -189,7 +252,7 @@ export class Game {
   private resample(): void {
     const { sim, me } = this.session;
     const p = sim.player(me);
-    if (p.carId !== this.sampledCar) {
+    if (vehicleKey(p) !== this.sampledKey || p.bike) {
       this.sample();
       return;
     }
@@ -220,6 +283,9 @@ export class Game {
       else if (e.t === 'exit' && e.id === me) this.leftCar(e.car);
       else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
+      else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
+      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash);
+      else if (e.t === 'dismountDenied' && e.id === me) hud.flash('Hier kannst du nicht absteigen');
       else if (e.t === 'ignition' && e.car === this.carId) {
         if (e.e === 'doorClose') audio?.doorClosed();
         else if (e.e === 'crank') audio?.crank();
@@ -235,7 +301,7 @@ export class Game {
     this.cars.setOwn(car);
     this.figure.visible = false;
     this.driven.setPose(pose);
-    this.driven.show(this.session.sim.cars.colors[car]!);
+    this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!);
     this.follow.setDriving(true, headingOf(pose));
     this.mode = 'drive';
     this.ctx.audio?.enterCar();
@@ -255,6 +321,55 @@ export class Game {
     this.ctx.audio?.exitCar();
   }
 
+  private mountedBike(id: number): void {
+    const { sim, me } = this.session;
+    const ridden = sim.riddenBike(me)!;
+    const s = this.currBike ?? ridden.state();
+    this.rig = this.rigFor(ridden.type);
+    if (this.rig) {
+      this.rig.setColor(sim.bikes.colors[id]!);
+      this.rig.snapLean();
+      this.ctx.scene.add(this.rig.root);
+      this.rig.leanGroup.add(this.figure.group);
+    }
+    this.follow.setDriving(true, s.heading, 'bike');
+    this.mode = 'ride';
+    this.ctx.hud.setHint(RIDE_HINT);
+    this.ctx.audio?.mountBike();
+  }
+
+  /** Off the bike (heading: the bike's): stepped off, or crashed and fell. */
+  private leftBike(heading: number, crash: boolean): void {
+    this.currBike = this.prevBike = null;
+    if (this.rig) {
+      this.ctx.scene.remove(this.rig.root);
+      this.rig.setLights(0);
+    }
+    this.rig = null;
+    this.ctx.scene.add(this.figure.group);
+    this.figure.heading = heading;
+    this.follow.setDriving(false);
+    this.mode = 'walk';
+    this.airTime = 0;
+    this.ctx.hud.setHint('');
+    this.ctx.audio?.dismountBike();
+    if (crash) {
+      this.figure.fall(heading);
+      this.ctx.audio?.crashBike();
+    }
+  }
+
+  /** One rig (a clone of the model) per bike type, made on first use. */
+  private rigFor(type: BikeType): BikeRig | null {
+    let rig = this.rigs.get(type);
+    const model = this.ctx.bikeModels?.bikes.get(type);
+    if (!rig && model) {
+      rig = new BikeRig(model.clone(true), type);
+      this.rigs.set(type, rig);
+    }
+    return rig ?? null;
+  }
+
   private render(dt: number, night: number): void {
     const { audio } = this.ctx;
     const a = this.session.alpha;
@@ -270,6 +385,18 @@ export class Game {
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
       if (grounded) this.airTime = 0;
+    } else if (this.mode === 'ride' && this.currBike) {
+      const prev = this.prevBike ?? this.currBike, cur = this.currBike;
+      const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
+      const rig = this.rig;
+      if (rig) {
+        rig.update(s, this.session.sim.riddenBike(this.session.me)?.lean() ?? 0, dt);
+        rig.setLights(night);
+        this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
+          [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], POSTURE[rig.type]);
+      }
+      if (!this.flying) this.follow.update(s, s.heading, dt);
+      audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
     } else if (this.currPose && this.carId !== null) {
       const { sim } = this.session;
       const prev = this.prevPose ?? this.currPose;
@@ -281,6 +408,7 @@ export class Game {
         pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
       }
       this.driven.setPose(pose);
+      this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
       this.driven.updateGlare(this.ctx.camera, this.occluded, dt);
@@ -336,6 +464,12 @@ function nearestStop(stops: WorldManifest['tramStops'], x: number, z: number): {
     if (!best || dist < best.dist) best = { x: st.x, z: st.z, dist };
   }
   return best;
+}
+
+/** Which vehicle a player state is in: 'c<car>', 'b<bike>' or 'w' (on foot). */
+function vehicleKey(p: PlayerSnapshot): string {
+  if (p.carId !== null) return `c${p.carId}`;
+  return p.bikeId !== null ? `b${p.bikeId}` : 'w';
 }
 
 function lerp3(a: Vec3, b: Vec3, t: number): Vec3 {

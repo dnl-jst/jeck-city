@@ -5,9 +5,9 @@ import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, glareFacing, lampPowe
 
 test('visibleCars: indices of the cars within the render radius, in manifest order', () => {
   const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: -249 }, { x: 176, z: 176 }, { x: 177, z: 178 }];
-  expect(CAR_RENDER_RADIUS).toBe(250);
-  expect(visibleCars(poses, 0, 0)).toEqual([0, 2, 3]);
-  expect(visibleCars(poses, 300, 0)).toEqual([1, 3, 4]);
+  expect(CAR_RENDER_RADIUS).toBe(150);
+  expect(visibleCars(poses, 0, 0, 250)).toEqual([0, 2, 3]);
+  expect(visibleCars(poses, 300, 0, 250)).toEqual([1, 3, 4]);
   expect(visibleCars(poses, 0, 0, 10)).toEqual([0]);
 });
 

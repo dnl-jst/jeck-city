@@ -20,6 +20,7 @@ class FakeCar implements CarView {
   show(): void { this.shown = true; }
   hide(): void { this.shown = false; }
   setPose(): void {}
+  setWheels(): void {}
   setLights(_n: number, braking: boolean, power: number): void { this.lights = { braking, power }; }
   updateGlare(): void {}
 }
@@ -31,7 +32,7 @@ function setup(me = 0) {
   const cars: FakeCar[] = [];
   const hidden: Set<number>[] = [];
   const rp = new RemotePlayers(scene, { setHidden: (ids) => hidden.push(new Set(ids)) }, {
-    me, colorOf: () => 0xff0000, occluded: () => false,
+    me, colorOf: () => 0xff0000, typeOf: () => 'kleinwagen', occluded: () => false,
     makeLabel: (n) => new FakeLabel(n, labels),
     makeCar: () => { const c = new FakeCar(); cars.push(c); return c; },
   });

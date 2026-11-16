@@ -21,7 +21,7 @@ const PARKABLE = new Set(['residential', 'tertiary']);
 const COS15 = Math.cos((15 * Math.PI) / 180);
 
 /** Deterministic PRNG (mulberry32) so a seed always yields the same spots. */
-function rng(seed: number): () => number {
+export function rng(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;

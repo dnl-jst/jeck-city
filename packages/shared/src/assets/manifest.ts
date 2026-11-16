@@ -1,3 +1,10 @@
+import { BIKE_TYPES, type BikeType } from '../physics/biketypes';
+import { CAR_TYPES, type CarType } from '../physics/cartypes';
+
+/** Player character models (data/models/character, character_<variant>.glb). */
+export const CHARACTER_VARIANTS = ['man', 'woman'] as const;
+export type CharacterVariant = (typeof CHARACTER_VARIANTS)[number];
+
 /**
  * World manifest (apps/client/public/world/manifest.json), written by the pipeline.
  *
@@ -20,6 +27,7 @@
  * the world area has a chunk once terrain is present, also without buildings or streets.
  */
 export const CHUNK_SIZE = 200;
+const BIKE_TYPE_COUNT = BIKE_TYPES.length;
 
 /**
  * Height of a shop sign's board centre above its building's LoD2 base (m): the middle of the shopfront sign band of
@@ -48,13 +56,35 @@ export type WorldManifest = {
    * (the side it is read from), width in m.
    */
   shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
-  parked: { x: number; z: number; heading: number; color: number }[];
+  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen); parked[0] stands at the spawn. */
+  parked: { x: number; z: number; heading: number; color: number; type?: number }[];
+  /** Car models (car_<type>.glb and its distance version car_<type>_lod.glb, nodes per data/models/cars/README.md). Missing in older manifests → []. */
+  carModels: { type: CarType; file: string; lod: string; bytes: number }[];
   /**
    * Hand-made replacement models (data/building-overrides.json): `file` is a glTF binary in world space,
    * loaded and unloaded together with chunk `chunk` (the chunk of the replaced building's centroid).
    * Several buildings may share one model; `id` is the first of them.
    */
   models: { id: string; chunk: string; file: string; bytes: number }[];
+  /**
+   * Bike rack hoops (one entry per hoop): kind 0 = stand (inverted U), 1 = wall loop / bollard; heading = the
+   * direction bikes stand in at the hoop (forward = (sin h, cos h)). Missing in older manifests → [].
+   */
+  bikeRacks: { x: number; z: number; heading: number; kind: 0 | 1 }[];
+  /**
+   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike), color = frame colour;
+   * bikes[0] is the cargo bike at the spawn. Missing in older manifests → [].
+   */
+  bikes: { x: number; z: number; heading: number; type: number; color: number }[];
+  /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */
+  bikeModels: { type: BikeType; file: string; bytes: number }[];
+  /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
+  rackModels: { kind: 0 | 1; file: string; bytes: number }[];
+  /**
+   * Skinned player figures (character_<variant>.glb, bones of MPFB's game_engine rig, rest pose standing with the arms
+   * hanging; see data/models/character/README.md). Missing in older manifests → [].
+   */
+  characterModels: { variant: CharacterVariant; file: string; bytes: number }[];
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -128,10 +158,53 @@ export function parseManifest(json: unknown): WorldManifest {
       if (s.sign !== undefined) shop.sign = nums(s.sign, `${p}.sign`, ['x', 'y', 'z', 'heading', 'width']);
       return shop;
     }),
-    parked: arr(o.parked, 'parked', (v, p) => nums(v, p, ['x', 'z', 'heading', 'color'])),
+    parked: arr(o.parked, 'parked', (v, p) => {
+      const c: WorldManifest['parked'][number] = nums(v, p, ['x', 'z', 'heading', 'color']);
+      const t = (v as Record<string, unknown>).type;
+      if (t !== undefined) {
+        const type = num(t, `${p}.type`);
+        if (!Number.isInteger(type) || type < 0 || type >= CAR_TYPES.length) fail(`${p}.type`, `must be an integer 0..${CAR_TYPES.length - 1}`);
+        c.type = type;
+      }
+      return c;
+    }),
+    carModels: o.carModels === undefined ? [] : arr(o.carModels, 'carModels', (v, p) => {
+      const c = obj(v, p);
+      const type = str(c.type, `${p}.type`);
+      if (!(CAR_TYPES as readonly string[]).includes(type)) fail(`${p}.type`, `must be one of ${CAR_TYPES.join(', ')}`);
+      return { type: type as CarType, file: str(c.file, `${p}.file`), lod: str(c.lod, `${p}.lod`), bytes: num(c.bytes, `${p}.bytes`) };
+    }),
     models: o.models === undefined ? [] : arr(o.models, 'models', (v, p) => {
       const x = obj(v, p);
       return { id: str(x.id, `${p}.id`), chunk: str(x.chunk, `${p}.chunk`), file: str(x.file, `${p}.file`), bytes: num(x.bytes, `${p}.bytes`) };
+    }),
+    bikeRacks: o.bikeRacks === undefined ? [] : arr(o.bikeRacks, 'bikeRacks', (v, p) => {
+      const r = nums(v, p, ['x', 'z', 'heading', 'kind']);
+      if (r.kind !== 0 && r.kind !== 1) fail(`${p}.kind`, 'must be 0 or 1');
+      return { ...r, kind: r.kind };
+    }),
+    bikes: o.bikes === undefined ? [] : arr(o.bikes, 'bikes', (v, p) => {
+      const b = nums(v, p, ['x', 'z', 'heading', 'type', 'color']);
+      if (!Number.isInteger(b.type) || b.type < 0 || b.type >= BIKE_TYPE_COUNT) fail(`${p}.type`, `must be an integer 0..${BIKE_TYPE_COUNT - 1}`);
+      return b;
+    }),
+    bikeModels: o.bikeModels === undefined ? [] : arr(o.bikeModels, 'bikeModels', (v, p) => {
+      const b = obj(v, p);
+      const type = str(b.type, `${p}.type`);
+      if (!(BIKE_TYPES as readonly string[]).includes(type)) fail(`${p}.type`, `must be one of ${BIKE_TYPES.join(', ')}`);
+      return { type: type as BikeType, file: str(b.file, `${p}.file`), bytes: num(b.bytes, `${p}.bytes`) };
+    }),
+    rackModels: o.rackModels === undefined ? [] : arr(o.rackModels, 'rackModels', (v, p) => {
+      const r = obj(v, p);
+      const kind = num(r.kind, `${p}.kind`);
+      if (kind !== 0 && kind !== 1) fail(`${p}.kind`, 'must be 0 or 1');
+      return { kind: kind as 0 | 1, file: str(r.file, `${p}.file`), bytes: num(r.bytes, `${p}.bytes`) };
+    }),
+    characterModels: o.characterModels === undefined ? [] : arr(o.characterModels, 'characterModels', (v, p) => {
+      const c = obj(v, p);
+      const variant = str(c.variant, `${p}.variant`);
+      if (!(CHARACTER_VARIANTS as readonly string[]).includes(variant)) fail(`${p}.variant`, `must be one of ${CHARACTER_VARIANTS.join(', ')}`);
+      return { variant: variant as CharacterVariant, file: str(c.file, `${p}.file`), bytes: num(c.bytes, `${p}.bytes`) };
     }),
     terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
     datum: num(o.datum, 'datum'),
