@@ -272,33 +272,35 @@ test('braking through a frame hitch is no impact (detector sees the real dt)', (
   expect(shots.some((s) => s.id.startsWith('impact'))).toBe(false);
 });
 
-test('bike: rolling and chain loops while riding, bell and crash cues, loops end on getting off', async () => {
+test('bike: freewheel ticks while coasting, silent while pedalling, bell and crash cues', async () => {
   const { audio, shots, voices } = setup();
   await audio.load();
   audio.unlock();
   await flush();
+  const loopsBefore = voices.length;
   audio.mountBike();
   for (let i = 0; i < 30; i++) audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
-  const roll = voices.find((v) => v.id === 'bikeRoll')!;
-  expect(roll.gain).toBeGreaterThan(0);
+  expect(shots.some((s) => s.id === 'bikeTick')).toBe(false);
+  for (let i = 0; i < 30; i++) audio.ride({ speed: 6, pedalling: false, grounded: true }, 1 / 60);
+  expect(shots.some((s) => s.id === 'bikeTick')).toBe(true);
+  expect(voices).toHaveLength(loopsBefore); // no rolling or chain loop
   audio.bell();
   expect(shots.map((s) => s.id)).toContain('bikeBell');
   audio.crashBike();
   expect(shots.map((s) => s.id)).toContain('impact2');
   audio.dismountBike();
-  expect(roll.stopped).toBe(true);
 });
 
-test('bike loops wait for unlock', async () => {
-  const { audio, voices } = setup();
+test('bike ticks wait for unlock', async () => {
+  const { audio, shots } = setup();
   audio.mountBike();
-  audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
-  expect(voices.find((v) => v.id === 'bikeRoll')).toBeUndefined();
+  for (let i = 0; i < 30; i++) audio.ride({ speed: 6, pedalling: false, grounded: true }, 1 / 60);
+  expect(shots.some((s) => s.id === 'bikeTick')).toBe(false);
   await audio.load();
   audio.unlock();
   await flush();
-  audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
-  expect(voices.find((v) => v.id === 'bikeRoll')).toBeDefined();
+  for (let i = 0; i < 30; i++) audio.ride({ speed: 6, pedalling: false, grounded: true }, 1 / 60);
+  expect(shots.some((s) => s.id === 'bikeTick')).toBe(true);
 });
 
 test('horn: loop while held in the car, stops on release and on getting out, never on foot', async () => {

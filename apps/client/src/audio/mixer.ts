@@ -1,4 +1,4 @@
-import { synthBell, synthNoiseLoop, synthTick } from './bike-sound';
+import { synthBell, synthTick } from './bike-sound';
 import { synthHorn } from './horn';
 import { SOUNDS, type FileSoundId, type SoundId, type SynthSoundId } from './sounds';
 
@@ -13,8 +13,6 @@ export const MIX = {
   ambience: 0.4,
   tramBell: 0.7,
   static: 0.25,
-  bikeRoll: 0.35,
-  bikeChain: 0.18,
   bikeTick: 0.8,
   bikeBell: 0.7,
   horn: 0.6,
@@ -24,8 +22,6 @@ export const MIX = {
 const SYNTH: Record<SynthSoundId, (rate: number) => Float32Array> = {
   bikeTick: synthTick,
   bikeBell: synthBell,
-  bikeRoll: (r) => synthNoiseLoop(r, 1.5, 700),
-  bikeChain: (r) => synthNoiseLoop(r, 1, 2400),
   carHorn: synthHorn,
 };
 

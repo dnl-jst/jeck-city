@@ -6,7 +6,7 @@ export type FileSoundId =
   | 'skid' | 'impact1' | 'impact2' | 'impact3'
   | 'ambience' | 'tramBell' | 'static';
 /** Sounds synthesised in the browser (bike, see bike-sound.ts; car horn, see horn.ts); the mixer generates them on unlock. */
-export type SynthSoundId = 'bikeTick' | 'bikeRoll' | 'bikeChain' | 'bikeBell' | 'carHorn';
+export type SynthSoundId = 'bikeTick' | 'bikeBell' | 'carHorn';
 export type SoundId = FileSoundId | SynthSoundId;
 
 export interface SoundDef {

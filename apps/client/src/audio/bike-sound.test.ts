@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { BikeSound, freewheelTickRate, rollGain, synthBell, synthNoiseLoop, synthTick } from './bike-sound';
-import type { LoopVoice } from './mixer';
+import { BikeSound, freewheelTickRate, synthBell, synthTick } from './bike-sound';
 import type { SoundId } from './sounds';
 
 describe('bike sound curves', () => {
@@ -11,12 +10,6 @@ describe('bike sound curves', () => {
     expect(freewheelTickRate(2, false)).toBeGreaterThan(freewheelTickRate(1, false)); // below the cap
   });
 
-  test('rolling noise rises with speed up to 40 km/h', () => {
-    expect(rollGain(0)).toBe(0);
-    expect(rollGain(40 / 3.6)).toBeCloseTo(1, 9);
-    expect(rollGain(60 / 3.6)).toBe(1);
-    expect(rollGain(10 / 3.6)).toBeLessThan(rollGain(20 / 3.6));
-  });
 });
 
 describe('synthesised samples', () => {
@@ -46,59 +39,29 @@ describe('synthesised samples', () => {
   test('freewheel ticks stay below a buzz', () => {
     expect(freewheelTickRate(15, false)).toBeLessThanOrEqual(36);
   });
-  test('loops are seamless', () => {
-    const loop = synthNoiseLoop(48000, 1, 800);
-    // the jump across the loop point is no bigger than any step inside the loop (no click)
-    let maxStep = 0;
-    for (let i = 1; i < loop.length; i++) maxStep = Math.max(maxStep, Math.abs(loop[i]! - loop[i - 1]!));
-    expect(Math.abs(loop[0]! - loop[loop.length - 1]!)).toBeLessThanOrEqual(maxStep);
-  });
 });
 
 describe('BikeSound', () => {
-  function fake() {
-    const loops = new Map<SoundId, { gain: number; rate: number; stopped: boolean }>();
-    const shots: SoundId[] = [];
-    const out = {
-      loop(id: SoundId): LoopVoice {
-        const v = { gain: 0, rate: 1, stopped: false };
-        loops.set(id, v);
-        return { setGain: (g) => { v.gain = g; }, setRate: (r) => { v.rate = r; }, stop: () => { v.stopped = true; } };
-      },
-      oneShot(id: SoundId) {
-        shots.push(id);
-        return { stop() {} };
-      },
-    };
-    return { out, loops, shots };
-  }
   const run = (s: BikeSound, st: { speed: number; pedalling: boolean; grounded: boolean }, seconds: number) => {
     for (let i = 0; i < Math.round(seconds * 60); i++) s.update(st, 1 / 60);
   };
 
-  test('coasting ticks, pedalling plays the chain instead', () => {
-    const { out, loops, shots } = fake();
-    const s = new BikeSound(out);
+  test('coasting ticks; pedalling, standing and a stopped bike are silent; bell is a one-shot', () => {
+    const shots: SoundId[] = [];
+    const s = new BikeSound({ oneShot: (id) => (shots.push(id), { stop() {} }) });
+    run(s, { speed: 6, pedalling: false, grounded: true }, 1);
+    expect(shots).toHaveLength(0); // not started
     s.start();
     run(s, { speed: 6, pedalling: false, grounded: true }, 1);
     expect(shots.filter((i) => i === 'bikeTick').length).toBeGreaterThan(10);
-    expect(loops.get('bikeChain')!.gain).toBeLessThan(0.01);
     shots.length = 0;
     run(s, { speed: 6, pedalling: true, grounded: true }, 1);
-    expect(shots.filter((i) => i === 'bikeTick')).toHaveLength(0);
-    expect(loops.get('bikeChain')!.gain).toBeGreaterThan(0.05);
-    expect(loops.get('bikeRoll')!.gain).toBeGreaterThan(0.05);
-  });
-
-  test('no rolling sound in the air; stop ends the loops; bell is a one-shot', () => {
-    const { out, loops, shots } = fake();
-    const s = new BikeSound(out);
-    s.start();
-    run(s, { speed: 6, pedalling: false, grounded: false }, 0.5);
-    expect(loops.get('bikeRoll')!.gain).toBeLessThan(0.01);
+    run(s, { speed: 0, pedalling: false, grounded: true }, 1);
+    expect(shots).toHaveLength(0);
     s.bell();
-    expect(shots).toContain('bikeBell');
+    expect(shots).toEqual(['bikeBell']);
     s.stop();
-    expect(loops.get('bikeRoll')!.stopped).toBe(true);
+    run(s, { speed: 6, pedalling: false, grounded: true }, 1);
+    expect(shots).toEqual(['bikeBell']);
   });
 });
