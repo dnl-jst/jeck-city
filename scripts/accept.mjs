@@ -1,6 +1,7 @@
 // Usage: npm run accept
 // Builds, serves dist with `vite preview` on :4173, and measures time-to-__nnReady (unthrottled and Fast 4G),
-// bytes transferred until ready, and draw calls / triangles at the spawn by day and night. Prints a table.
+// bytes transferred until ready (offline: ?offline=1&debug=1 is added to every URL, the production build has no
+// server here and allows offline only with ?debug=1; the debug overlay is DOM only, draw calls/triangles are unaffected), and draw calls / triangles at the spawn by day and night. Prints a table.
 import { spawn, execSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { browserArgs } from './browser-args.mjs';
@@ -27,7 +28,7 @@ try {
     let bytes = 0;
     cdp.on('Network.loadingFinished', (e) => { bytes += e.encodedDataLength; });
     const t0 = Date.now();
-    await page.goto(`${base}${query}`);
+    await page.goto(`${base}${query}&offline=1&debug=1`);
     await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 180_000 });
     const ms = Date.now() - t0;
     const ready = await page.evaluate(() => window.__nnReady);

@@ -15,7 +15,8 @@
     "screenshot": "node scripts/screenshot.mjs",
     "drive-check": "node scripts/drive-check.mjs",
     "accept": "node scripts/accept.mjs",
-    "ride-check": "node scripts/ride-check.mjs"
+    "ride-check": "node scripts/ride-check.mjs",
+    "mp-check": "node scripts/mp-check.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.6",

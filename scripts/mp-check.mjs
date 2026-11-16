@@ -1,0 +1,218 @@
+// Usage: node scripts/mp-check.mjs [baseUrl] [--lag]
+// Needs the dev stack running (npm run dev: game server + Vite; baseUrl defaults to http://localhost:5173/, the
+// dev server's address, so pass it when NN_CLIENT_PORT differs). With --lag the server must have been started with
+// NN_FAKE_LAG=75,10,1 (about 150 ms round trip, 1 % stalls). Start a fresh server for each run: the check drives a
+// parked car and a bike away, and a second run on the same server would look for them at their manifest places.
+// Two headless Chromium contexts (host GPU; NN_SOFTWARE_GL=1: SwiftShader) join as "Check A" and "Check B" (name
+// dialog: fill, Enter) and both must see 2 players. A enters the car at the spawn and drives >= 30 m; B must see A
+// move that far (__nnRemote). A then gets out, is teleported next to the nearest bike (dev hook) and rides it >= 10 m;
+// B must see A in mode 'ride'. All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
+// With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
+// B's view of A (largest jump between two frames) are recorded: p95 correction must stay <= 0.2 m, no remote jump > 1 m.
+import { chromium } from 'playwright';
+import { browserArgs } from './browser-args.mjs';
+
+const args = process.argv.slice(2);
+const lag = args.includes('--lag');
+const base = args.find((a) => !a.startsWith('--')) ?? 'http://localhost:5173/';
+const HANG_MS = 15 * 60_000;
+const STALL_MS = 10_000;
+const STEPS = { enter: 300, engine: 300, drive: 1800, stop: 900, exit: 300, tele: 300, mount: 300, ride: 900, see: 300, join: 600 };
+const LAG_STEPS = 1200; // 20 s
+const P95_MAX = 0.2;
+const JUMP_MAX = 1;
+
+/** Wait until pred(state, arg) holds, within `budget` more physics steps of that page (stall: fail fast). */
+function untilOf(page, label) {
+  const state = () => page.evaluate(() => window.__nnState());
+  return async (pred, arg, budget, what) => {
+    const limit = (await state()).steps + budget;
+    await page.waitForFunction(([src, arg, limit, stallMs]) => {
+      const s = window.__nnState();
+      const now = performance.now();
+      const w = window.__mpSteps;
+      if (!w || w.limit !== limit || w.steps !== s.steps) window.__mpSteps = { limit, steps: s.steps, since: now, stalled: false };
+      else if (now - w.since > stallMs) return (w.stalled = true);
+      return s.steps > limit || (0, eval)(`(${src})`)(s, arg);
+    }, [pred.toString(), arg, limit, STALL_MS], { timeout: HANG_MS, polling: 'raf' });
+    if (await page.evaluate(() => window.__mpSteps?.stalled)) throw new Error(`${label}: physics steps did not advance for ${STALL_MS / 1000} s (${what})`);
+    const s = await state();
+    if (!(await page.evaluate(([src, arg]) => (0, eval)(`(${src})`)(window.__nnState(), arg), [pred.toString(), arg]))) {
+      console.error(label, JSON.stringify(s));
+      throw new Error(`${label}: ${what} (within ${budget} physics steps)`);
+    }
+    return s;
+  };
+}
+
+/** Opens the game, answers the name dialog and waits until the world is ready and the player is online. */
+async function join(browser, name) {
+  const ctx = await browser.newContext({ viewport: { width: 960, height: 540 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => console.error(`[${name} page error] ${e.message}`));
+  const url = new URL(base);
+  url.searchParams.set('time', '14:00');
+  url.searchParams.set('date', '2026-06-15');
+  await page.goto(url.href);
+  await page.locator('.nn-lobby-input').fill(name);
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 180_000 });
+  if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error(`${name}: world failed to load`);
+  await page.waitForFunction(() => window.__nnState().online, null, { timeout: 60_000 });
+  return { page, name, until: untilOf(page, name), state: () => page.evaluate(() => window.__nnState()) };
+}
+
+/** Per-frame recorder in the page: own correction, and the biggest frame-to-frame jump of one remote player. */
+async function installRecorder(page, remoteName) {
+  await page.evaluate((remoteName) => {
+    const r = (window.__mpRec = { on: false, corr: [], speed: [], jumps: [], excess: [], prev: null, prev2: null });
+    const frame = () => {
+      if (r.on) {
+        const st = window.__nnState();
+        r.corr.push(st.correction);
+        r.speed.push(st.speed);
+        const a = window.__nnRemote().find((p) => p.name === remoteName);
+        if (a && r.prev && r.prev.mode === a.mode) r.jumps.push(Math.hypot(a.x - r.prev.x, a.z - r.prev.z));
+        // what the speed does not explain: the change of the per-frame step (a straight constant-speed move gives 0)
+        if (a && r.prev && r.prev2 && r.prev.mode === a.mode && r.prev2.mode === a.mode) r.excess.push(Math.hypot(a.x - 2 * r.prev.x + r.prev2.x, a.z - 2 * r.prev.z + r.prev2.z));
+        r.prev2 = r.prev;
+        r.prev = a ? { x: a.x, z: a.z, mode: a.mode } : null;
+      } else r.prev = r.prev2 = null;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }, remoteName);
+}
+const record = (page, on) => page.evaluate((on) => { window.__mpRec.on = on; }, on);
+const takeRecord = (page) => page.evaluate(() => { const r = window.__mpRec; const out = { corr: r.corr, speed: r.speed, jumps: r.jumps, excess: r.excess }; r.corr = []; r.speed = []; r.jumps = []; r.excess = []; return out; });
+const p95 = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.ceil(xs.length * 0.95) - 1)] : 0);
+const maxOf = (xs) => xs.reduce((m, v) => Math.max(m, v), 0);
+const remoteA = (page) => page.evaluate(() => window.__nnRemote().find((p) => p.name === 'Check A') ?? null);
+const teleport = (page, x, z) => page.evaluate(([x, z]) => window.__nnConn().sendTeleport(x, z), [x, z]);
+
+/**
+ * Press E and wait for `pred`. A press right after a teleport or a lag spike can be lost (the use pulse is a single
+ * step), so settle for half a second first and press again (up to 3 times, 100 steps each) before giving up.
+ */
+async function useE(p, pred, what) {
+  const s = await p.state();
+  await p.until((s, n) => s.steps > n, s.steps + 30, 120, 'no steps while settling');
+  for (let i = 1; ; i++) {
+    await p.page.keyboard.press('KeyE');
+    try {
+      return await p.until(pred, null, 100, what);
+    } catch (e) {
+      if (i === 3) throw e;
+    }
+  }
+}
+
+const browser = await chromium.launch({ args: browserArgs });
+let failed = false;
+try {
+  const a = await join(browser, 'Check A');
+  const b = await join(browser, 'Check B');
+  for (const p of [a, b]) await p.until((s) => s.players === 2, null, STEPS.join, 'did not see 2 players');
+  console.log('both see 2 players');
+  await installRecorder(b.page, 'Check A');
+  await installRecorder(a.page, 'Check B');
+  const { parked, bikes } = await a.page.evaluate(() => fetch('/world/manifest.json').then((r) => r.json()));
+
+  const results = {};
+  if (lag) {
+    // 20 s on foot (W along the spawn heading)
+    await record(a.page, true); await record(b.page, true);
+    await a.page.keyboard.down('KeyW');
+    const w0 = await a.state();
+    await a.until((s, n) => s.steps > n, w0.steps + LAG_STEPS, LAG_STEPS + 60, 'walk phase did not finish');
+    await a.page.keyboard.up('KeyW');
+    await record(a.page, false); await record(b.page, false);
+    const walkA = await takeRecord(a.page), walkB = await takeRecord(b.page);
+    results.walk = { p95: p95(walkA.corr), max: maxOf(walkA.corr), jump: maxOf(walkB.jumps), excess: maxOf(walkB.excess), frames: walkA.corr.length };
+    console.log(`walk 20 s: correction p95 ${results.walk.p95.toFixed(3)} m (max ${results.walk.max.toFixed(3)}, ${results.walk.frames} frames), remote jump max ${results.walk.jump.toFixed(3)} m (per-frame step change ${results.walk.excess.toFixed(3)} m)`);
+  }
+  // A to the parked car nearest the spawn that has no bike within 8 m (with a bike in reach, E enters the one the
+  // figure faces), standing 1.5 m beside it
+  const { spawn } = await a.page.evaluate(() => fetch('/world/manifest.json').then((r) => r.json()));
+  // and no other parked car in the 45 m ahead of it (driving W straight on must not end behind a bumper)
+  const clearAhead = (c) => parked.every((o) => {
+    if (o === c) return true;
+    const dx = o.x - c.x, dz = o.z - c.z;
+    const along = dx * Math.sin(c.heading) + dz * Math.cos(c.heading), side = dx * Math.cos(c.heading) - dz * Math.sin(c.heading);
+    return !(along > -3 && along < 45 && Math.abs(side) < 3);
+  });
+  const car = parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
+    .map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((p, q) => p.d - q.d)[0];
+  const sx = car.x + Math.cos(car.heading) * 1.5, sz = car.z - Math.sin(car.heading) * 1.5;
+  await teleport(a.page, sx, sz);
+  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1, [sx, sz], STEPS.tele, 'teleport next to the car did not arrive');
+  const s0 = await useE(a, (s) => s.mode === 'drive', 'E did not enter the car');
+  await a.until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
+  const startA = await remoteA(b.page);
+  if (!startA) throw new Error('B does not see A');
+  console.log(`A entered the car at (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)}); B sees A as ${startA.mode}`);
+  if (lag) { await record(a.page, true); await record(b.page, true); }
+  await a.page.keyboard.down('KeyW');
+  if (lag) {
+    const d0 = await a.state();
+    for (let t = 1; t <= 4; t++) {
+      const s = await a.until((s, n) => s.steps > n, d0.steps + (LAG_STEPS / 4) * t, LAG_STEPS + 60, 'drive phase did not finish');
+      console.log(`  drive ${5 * t} s: (${s.x.toFixed(1)}, ${s.z.toFixed(1)}) ${Math.hypot(s.x - s0.x, s.z - s0.z).toFixed(1)} m, ${(s.speed * 3.6).toFixed(0)} km/h; B at ${JSON.stringify(await b.state().then((q) => [q.x.toFixed(1), q.z.toFixed(1)]))}`);
+    }
+  } else {
+    await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 32, [s0.x, s0.z], STEPS.drive, 'car did not get 32 m far');
+  }
+  await a.page.keyboard.up('KeyW');
+  if (lag) {
+    await record(a.page, false); await record(b.page, false);
+    const dA = await takeRecord(a.page), dB = await takeRecord(b.page);
+    results.drive = { p95: p95(dA.corr), max: maxOf(dA.corr), jump: maxOf(dB.jumps), excess: maxOf(dB.excess), frames: dA.corr.length };
+    const moving = dA.corr.filter((_, i) => dA.speed[i] > 2);
+    console.log(`drive, only frames above 2 m/s: p95 ${p95(moving).toFixed(3)} m, max ${maxOf(moving).toFixed(3)} (${moving.length} frames)`);
+    console.log(`drive 20 s: correction p95 ${results.drive.p95.toFixed(3)} m (max ${results.drive.max.toFixed(3)}, ${results.drive.frames} frames), remote jump max ${results.drive.jump.toFixed(3)} m (per-frame step change ${results.drive.excess.toFixed(3)} m)`);
+  }
+  const sA = await a.state();
+  const movedA = Math.hypot(sA.x - s0.x, sA.z - s0.z);
+  console.log(`A drove ${movedA.toFixed(1)} m`);
+  if (movedA < 30) throw new Error(`A drove only ${movedA.toFixed(1)} m (< 30)`);
+  // B sees it (the remote catches up within a moment)
+  await b.until((s, [x, z]) => {
+    const r = window.__nnRemote().find((p) => p.name === 'Check A');
+    return !!r && Math.hypot(r.x - x, r.z - z) >= 30;
+  },[startA.x, startA.z], STEPS.see, 'B did not see A move 30 m');
+  const seen = await remoteA(b.page);
+  console.log(`B sees A ${Math.hypot(seen.x - startA.x, seen.z - startA.z).toFixed(1)} m from its start, mode ${seen.mode}`);
+
+  // stop, get out
+  await a.page.keyboard.down('Space');
+  await a.until((s) => s.speed < 0.5, null, STEPS.stop, 'car did not stop');
+  await a.page.keyboard.up('Space');
+  const out = await useE(a, (s) => s.mode === 'walk', 'E did not get out of the car');
+
+  // ride: the nearest bike with no other bike within 4 m (so E there can only mean this one) and away from the car's
+  // start (the car just drove off and may have pushed a bike around there)
+  const lone = bikes.filter((k, i) => Math.hypot(k.x - s0.x, k.z - s0.z) > 10 && bikes.every((o, j) => j === i || Math.hypot(o.x - k.x, o.z - k.z) >= 4));
+  const bike = lone.map((k) => ({ ...k, d: Math.hypot(k.x - out.x, k.z - out.z) })).sort((p, q) => p.d - q.d)[0];
+  const bx = bike.x + Math.cos(bike.heading), bz = bike.z - Math.sin(bike.heading);
+  console.log(`nearest lone bike (${bike.x.toFixed(1)}, ${bike.z.toFixed(1)}), ${bike.d.toFixed(0)} m away: teleporting beside it`);
+  await teleport(a.page, bx, bz);
+  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1.5, [bx, bz], STEPS.tele, 'teleport next to the bike did not arrive');
+  const on = await useE(a, (s) => s.mode === 'ride', 'E did not get on the bike');
+  await a.page.keyboard.down('KeyW');
+  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 10, [on.x, on.z], STEPS.ride, 'bike did not get 10 m far');
+  const rideA = await a.state();
+  await b.until(() => !!window.__nnRemote().find((p) => p.name === 'Check A' && p.mode === 'ride'), null, STEPS.see, 'B did not see A riding');
+  await a.page.keyboard.up('KeyW');
+  console.log(`A rode ${Math.hypot(rideA.x - on.x, rideA.z - on.z).toFixed(1)} m; B sees A in mode ${(await remoteA(b.page)).mode}`);
+
+  if (lag) {
+    for (const [k, r] of Object.entries(results)) {
+      if (r.p95 > P95_MAX) { console.error(`FAIL: ${k} correction p95 ${r.p95.toFixed(3)} m > ${P95_MAX}`); failed = true; }
+      if (r.jump > JUMP_MAX) { console.error(`FAIL: ${k} remote jump ${r.jump.toFixed(3)} m > ${JUMP_MAX}`); failed = true; }
+    }
+  }
+} finally {
+  await browser.close();
+}
+if (failed) process.exit(1);
+console.log('mp-check: OK');
