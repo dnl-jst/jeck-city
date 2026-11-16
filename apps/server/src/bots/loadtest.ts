@@ -156,8 +156,9 @@ async function main(): Promise<number> {
     perBotP95.push(p95(secs));
   }
   const kbP95 = p95(perSecond) / 1024;
-  const at2 = samples.find((s) => s.t >= 120);
-  const rssGrowthPct = at2 && minutes >= 3 ? (100 * (last.rssMb - at2.h.rssMb)) / at2.h.rssMb : null;
+  // baseline minute 3: the heap has settled by then (a large GC around 75 s, regrowth until ~150 s)
+  const at3 = samples.find((s) => s.t >= 180);
+  const rssGrowthPct = at3 && minutes >= 4 ? (100 * (last.rssMb - at3.h.rssMb)) / at3.h.rssMb : null;
   const disconnected = bots.filter((b) => b.leftCode !== null).length;
   const sentPerS = bots.reduce((a, b) => a + b.bot.inputsSent, 0) / bots.length / ((performance.now() - t0) / 1000);
 
@@ -165,7 +166,7 @@ async function main(): Promise<number> {
     ['tick p95 (p95 of 10 s windows)', `${fmt(p95(tickP95s))} ms (max ${fmt(Math.max(...tickP95s))})`, `< ${fmt(LIMITS.tickP95Ms, 1)} ms`, p95(tickP95s) < LIMITS.tickP95Ms],
     ['dropped ticks', `${dropped} of ${ticks + dropped} (${fmt(droppedPct, 3)} %)`, `< ${LIMITS.droppedPct} %`, droppedPct < LIMITS.droppedPct],
     ['bandwidth p95 per client', `${fmt(kbP95, 1)} KB/s (worst client p95 ${fmt(Math.max(...perBotP95) / 1024, 1)})`, `< ${LIMITS.kbPerS} KB/s`, kbP95 < LIMITS.kbPerS],
-    ['RSS minute 2 → end', rssGrowthPct === null ? `n/a (run ≥ 3 min), end ${last.rssMb} MB` : `${at2!.h.rssMb} → ${last.rssMb} MB (${fmt(rssGrowthPct, 1)} %)`, `< ${LIMITS.rssGrowthPct} %`, rssGrowthPct === null || rssGrowthPct < LIMITS.rssGrowthPct],
+    ['RSS minute 3 → end', rssGrowthPct === null ? `n/a (run ≥ 4 min), end ${last.rssMb} MB` : `${at3!.h.rssMb} → ${last.rssMb} MB (${fmt(rssGrowthPct, 1)} %)`, `< ${LIMITS.rssGrowthPct} %`, rssGrowthPct === null || rssGrowthPct < LIMITS.rssGrowthPct],
     ['bots still connected', `${bots.length - disconnected} of ${bots.length}`, 'all', disconnected === 0],
   ];
   console.log('\n| criterion | measured | limit | ok |\n|---|---|---|---|');

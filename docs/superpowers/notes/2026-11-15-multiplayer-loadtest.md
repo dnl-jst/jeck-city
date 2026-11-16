@@ -10,7 +10,7 @@ The user lowered the target after the 100-bot results below.
   - tick p95 < 16.7 ms (the 60 Hz budget; the old 8 ms target is dropped)
   - dropped ticks < 1 %
   - bandwidth p95 < 50 KB/s
-  - RSS growth from minute 2 to the end < 10 %
+  - RSS growth from minute 3 to the end < 10 % (ruling 2026-11-16; was minute 2, see below)
 
 ### 10-minute run with 60 bots (30 walk, 24 drive, 6 ride; server on cores 0,1, bots on 2-5,8-11)
 
@@ -19,7 +19,8 @@ The user lowered the target after the 100-bot results below.
 | tick p95 (p95 of 10 s windows) | 16.26 ms (max 16.88) | < 16.7 ms | yes |
 | dropped ticks | 1 of 36000 (0.003 %) | < 1 % | yes |
 | bandwidth p95 per client | 23.0 KB/s (worst client 28.0) | < 50 KB/s | yes |
-| RSS minute 2 → end | 572 → 639 MB (+11.7 %) | < 10 % | **NO** |
+| RSS minute 2 → end (criterion at the time) | 572 → 639 MB (+11.7 %) | < 10 % | **NO** |
+| RSS minute 3 → end (criterion now) | 637–639 → 639 MB (≤ +0.3 %) | < 10 % | yes |
 | bots still connected | 60 of 60 | all | yes |
 
 The bot process sent 59.5 inputs/s per bot, with an event loop delay p99 of 11 ms.
@@ -34,7 +35,7 @@ RSS over the run (time in s : MB):
 - The minute-2 sample (572 MB) falls into the regrowth after that GC.
 - From 150 s to the end, RSS stays flat at 637–639 MB (+0.3 %).
 
-So the failed criterion reflects where the baseline sample landed, not a leak. The criterion was **not** changed: as instructed, the numbers are reported. A baseline after the heap has settled, such as minute 3, would pass. That is for the reviewer or the user to decide.
+So the failed criterion reflected where the baseline sample landed, not a leak. **Ruling (2026-11-16):** the baseline is minute 3 (`loadtest.ts` takes the first sample at t ≥ 180 s and needs `--minutes` ≥ 4 for the RSS row, labelled "RSS minute 3 → end"). The run was not repeated: the recorded RSS above shows only that it stayed at 637–639 MB from 150 s to the end (the 180 s sample itself is not in the excerpt), so minute 3 → end is at most +0.3 %, well below 10 %.
 
 The tick p95 passes, but only just (16.26 ms against 16.67 ms; the worst window was 16.88 ms).
 
@@ -63,7 +64,7 @@ Date: 2026-11-16. Branch `docs/multiplayer-spec`.
   - Tick p95 is the p95 over the 10 s window p95s.
   - Dropped ticks are counted from the totals between the start and the end of the measurement.
   - Bandwidth: all bytes each bot receives (every websocket message: snapshots and schema patches), per second, from 5 s after its join. The p95 is over all bot-seconds.
-  - RSS: minute 2 compared with the end.
+  - RSS: minute 2 compared with the end (since the 2026-11-16 ruling: minute 3).
   - Measuring starts 20 s after the last join.
 
 ### Runs
