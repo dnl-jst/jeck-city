@@ -37,4 +37,18 @@ describe('formatDebugLines', () => {
     expect(lines[4]).toContain('60 fps');
     expect(lines[4]).toContain('123');
   });
+  it('adds the net lines online only', () => {
+    expect(formatDebugLines(v, 50, 6, 60, 1, 1, null)).toHaveLength(5);
+    const lines = formatDebugLines(v, 50, 6, 60, 1, 1, { rttMs: 23.4, snapshotAgeMs: 41.6, predErrorM: 0.0312, players: 7 });
+    expect(lines).toHaveLength(9);
+    expect(lines[5]).toBe('RTT 23 ms');
+    expect(lines[6]).toBe('Snapshot-Alter 42 ms');
+    expect(lines[7]).toBe('Vorhersagefehler 0.03 m');
+    expect(lines[8]).toBe('Spieler 7');
+  });
+  it('shows a dash while no snapshot or round trip is known', () => {
+    const lines = formatDebugLines(v, 50, 6, 60, 1, 1, { rttMs: Infinity, snapshotAgeMs: Infinity, predErrorM: 0, players: 1 });
+    expect(lines[5]).toBe('RTT – ms');
+    expect(lines[6]).toBe('Snapshot-Alter – ms');
+  });
 });

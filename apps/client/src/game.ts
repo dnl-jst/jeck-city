@@ -25,7 +25,7 @@ const DEG = Math.PI / 180;
 
 /** What the game needs from the page: scene and camera, input, HUD, the dev URL parameters and (optionally) sound. */
 export type GameContext = {
-  scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; debug: boolean; devCam: DevCam | null;
+  scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; /** F toggles free-fly. */ flyAllowed: boolean; devCam: DevCam | null;
   audio?: GameAudio;
   /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
   bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
@@ -200,10 +200,10 @@ export class Game {
 
   /** One rendered frame: input, the session's fixed steps, poses for rendering. night 0..1 drives the car lights. */
   frame(dt: number, night: number): void {
-    const { input, debug, audio } = this.ctx;
+    const { input, flyAllowed, audio } = this.ctx;
     const mouse = input.takeMouse();
     const notches = input.takeWheel();
-    if (debug && input.consume('KeyF')) this.toggleFly();
+    if (flyAllowed && input.consume('KeyF')) this.toggleFly();
     if (input.consume('KeyN')) audio?.toggleMute();
     if (input.consume('KeyC')) this.switchCharacter();
     if (!this.flying && input.consume('KeyM')) {

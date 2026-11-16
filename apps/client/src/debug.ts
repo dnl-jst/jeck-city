@@ -24,8 +24,11 @@ export function buildViewLink(baseUrl: string, v: DebugView): string {
   return u.toString();
 }
 
+/** Online only: round trip, age of the newest snapshot, own-pose prediction error, players in the room. */
+export type NetDebug = { rttMs: number; snapshotAgeMs: number; predErrorM: number; players: number };
+
 export function formatDebugLines(
-  v: DebugView, lat: number, lon: number, fps: number, drawCalls: number, chunks: number,
+  v: DebugView, lat: number, lon: number, fps: number, drawCalls: number, chunks: number, net: NetDebug | null = null,
 ): string[] {
   const yaw = ((Math.round(v.yawDeg) % 360) + 360) % 360;
   return [
@@ -34,6 +37,12 @@ export function formatDebugLines(
     `Blick ${yaw}° / ${Math.round(v.pitchDeg) + 0}°`,
     `Zeit ${v.time} (${v.date})`,
     `${Math.round(fps)} fps · ${drawCalls} Draw Calls · ${chunks} Chunks`,
+    ...(net ? [
+      `RTT ${Number.isFinite(net.rttMs) ? Math.round(net.rttMs) : '–'} ms`,
+      `Snapshot-Alter ${Number.isFinite(net.snapshotAgeMs) ? Math.round(net.snapshotAgeMs) : '–'} ms`,
+      `Vorhersagefehler ${net.predErrorM.toFixed(2)} m`,
+      `Spieler ${net.players}`,
+    ] : []),
   ];
 }
 
@@ -45,7 +54,7 @@ export class DebugOverlay {
   private readonly field: HTMLInputElement;
   private noteTimer = 0;
 
-  constructor(root: HTMLElement, private readonly getView: () => DebugView, private readonly getStats: () => { lat: number; lon: number; fps: number; drawCalls: number; chunks: number }) {
+  constructor(root: HTMLElement, private readonly getView: () => DebugView, private readonly getStats: () => { lat: number; lon: number; fps: number; drawCalls: number; chunks: number; net?: NetDebug | null }) {
     const style = document.createElement('style');
     style.textContent = `
       .nn-debug { position: fixed; left: 8px; top: 8px; z-index: 5; padding: 6px 8px; border-radius: 4px;
@@ -71,7 +80,7 @@ export class DebugOverlay {
 
   private refresh(): void {
     const s = this.getStats();
-    this.text.textContent = formatDebugLines(this.getView(), s.lat, s.lon, s.fps, s.drawCalls, s.chunks).join('\n');
+    this.text.textContent = formatDebugLines(this.getView(), s.lat, s.lon, s.fps, s.drawCalls, s.chunks, s.net ?? null).join('\n');
   }
 
   private flash(msg: string): void {

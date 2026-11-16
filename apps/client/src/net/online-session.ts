@@ -468,3 +468,25 @@ export class OnlineSession implements Session {
   }
 
 }
+
+export type RemotePlayerInfo = { slot: number; name: string; x: number; z: number; mode: 'walk' | 'drive' | 'ride' | 'down' };
+
+/**
+ * The other players of a sample as a flat list (dev hook `__nnRemote`): walkers (`down` while knocked over), riders and
+ * drivers (at their car; the driver slot comes from the slow state). `me` is left out.
+ */
+export function remoteList(
+  sample: RemoteSample, names: ReadonlyMap<number, string>, cars: ReadonlyMap<number, { driver: number }>, me: PlayerId,
+): RemotePlayerInfo[] {
+  const out: RemotePlayerInfo[] = [];
+  const add = (slot: number, x: number, z: number, mode: RemotePlayerInfo['mode']): void => {
+    if (slot !== me) out.push({ slot, name: names.get(slot) ?? '', x, z, mode });
+  };
+  for (const w of sample.walkers.values()) add(w.slot, w.x, w.z, w.state === 2 ? 'down' : 'walk');
+  for (const r of sample.riders.values()) add(r.slot, r.x, r.z, 'ride');
+  for (const c of sample.cars.values()) {
+    const driver = cars.get(c.id)?.driver ?? -1;
+    if (driver >= 0) add(driver, c.x, c.z, 'drive');
+  }
+  return out;
+}

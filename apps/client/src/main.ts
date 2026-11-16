@@ -8,7 +8,7 @@ import {
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
 import { fetchOk, WorldLoader } from './loader';
-import { parseCamParam, withDateParam } from './devparams';
+import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
 import { loadTreeVariants } from './trees';
@@ -18,7 +18,7 @@ import { attachInput, Input } from './input';
 import { Game } from './game';
 import { storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
-import { OnlineSession } from './net/online-session';
+import { OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
 import { Lobby } from './net/lobby';
 import { Connection, connectRoom, JoinRejected, STATUS_TEXTS } from './net/connection';
 import { AudioMixer } from './audio/mixer';
@@ -46,15 +46,19 @@ declare global {
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
       /** Online: how far (m) server corrections moved the rendered own pose in the last frame (0 offline). */
       correction: number;
+      /** Playing on a server. */
+      online: boolean;
+      /** Players in the room (1 offline). */
+      players: number;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
     /** Dev/debug: the server connection (null offline). */
     __nnConn?: () => Connection | null;
-    /** Online, dev/debug: the other players as sampled for the current frame (walkers, cars, riders). */
-    __nnRemote?: () => unknown;
-    /** Online, dev/debug: remote car sound voices (engines, horns, the remote radio's station, engine fade levels by car). */
+    /** Online (read-only): the other players as sampled for the current frame; mode 'down' = knocked over. */
+    __nnRemote?: () => RemotePlayerInfo[];
+    /** Online (read-only): remote car sound voices (engines, horns, the remote radio's station, engine fade levels by car). */
     __nnRemoteAudio?: () => { engines: number; horns: number; radio: StationId | null; levels: [number, number][] };
-    /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
+    /** Dev build only (and, online, only with a dev-mode server): mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
     __nnWheelNudge?: (dx: number, dy: number) => void;
   }
   interface ImportMeta { readonly env: { readonly DEV: boolean } }
@@ -67,7 +71,7 @@ const timeOverride = params.get('time') ?? undefined;
 const dateOverride = params.get('date');
 const currentSun = (): SunState => sunState(withDateParam(new Date(), dateOverride), timeOverride);
 // dev hook: ?cam=x,y,z,yawDeg,pitchDeg spawns the player at x/z facing yaw (manifest heading convention), camera pitch
-const devCam = parseCamParam(params.get('cam'));
+const devCamParam = parseCamParam(params.get('cam'));
 // ?offline=1: a local WorldSim without a server and without the name dialog; only with the dev server or ?debug=1,
 // otherwise ignored (everyone else plays online)
 const offline = params.get('offline') === '1' && (import.meta.env.DEV || debug);
@@ -149,6 +153,8 @@ let game: Game | null = null;
 let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 let bigMapOpen = false;
 let fps = 0;
+/** The game's session once online (the debug overlay's net lines). */
+let onlineSession: OnlineSession | null = null;
 if (debug) {
   const pad = (n: number): string => String(n).padStart(2, '0');
   new DebugOverlay(document.body, () => {
@@ -167,6 +173,7 @@ if (debug) {
   }, () => ({
     ...localToWgs84(camera.position.x, camera.position.z), fps,
     drawCalls: renderer.info.render.calls, chunks: world.loadedKeys().size,
+    net: onlineSession?.stats() ?? null,
   }));
 }
 
@@ -290,7 +297,7 @@ async function connect(): Promise<Connection | null> {
   }
 }
 
-const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
+const start = devCamParam ? { x: devCamParam.x, z: devCamParam.z } : undefined;
 Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain }, mapData, conn]) => {
   connection = conn;
   // bikes still ride without their models (unseen), so a failed model download is not fatal
@@ -319,17 +326,20 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     (x, z) => heightAt(terrain, x, z),
   );
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
+  // online, ?cam / fly / write hooks need a dev-mode server (?cam then teleports once)
+  const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug);
+  const devCam = allowed.cam ? devCamParam : null;
   let session: Session;
   if (conn) {
-    sim.addPlayer(conn.welcome.slot, start);
-    if (start && conn.welcome.devMode) conn.sendTeleport(start.x, start.z);
-    session = new OnlineSession(sim, conn);
+    sim.addPlayer(conn.welcome.slot, devCam ? start : undefined);
+    if (devCam) conn.sendTeleport(devCam.x, devCam.z);
+    session = onlineSession = new OnlineSession(sim, conn);
   } else {
     sim.addPlayer(OFFLINE_ME, start);
     session = new OfflineSession(sim, OFFLINE_ME);
   }
-  game = new Game(session, m, { scene, camera, input, hud, debug, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
-  if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
+  game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
+  if (devCam && allowed.fly && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
     game.fly.setHeading(devCam.yawDeg * DEG, devCam.pitchDeg * DEG);
@@ -352,12 +362,14 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
       radio: gameAudio.station,
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,
+      online: !!conn, players: onlineSession?.stats().players ?? 1,
     };
   };
-  if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
-  if (import.meta.env.DEV || debug) window.__nnConn = () => connection;
-  if (import.meta.env.DEV || debug) window.__nnRemote = () => session.remote?.();
-  if (import.meta.env.DEV || debug) window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
+  // write hooks (they change state) only where dev tools are allowed; the read-only getters always exist
+  if (import.meta.env.DEV && allowed.writeHooks) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
+  if (allowed.writeHooks) window.__nnConn = () => connection;
+  window.__nnRemote = () => (onlineSession ? remoteList(onlineSession.remote(), onlineSession.roster().names, onlineSession.roster().cars, onlineSession.me) : []);
+  window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

@@ -6,7 +6,7 @@ import {
 import { fixtureAssets } from '../../../../packages/shared/src/sim/fixture.test-util';
 import { ServerClock } from './clock';
 import type { NetState } from './connection';
-import { OnlineSession, type NetLink } from './online-session';
+import { OnlineSession, remoteList, type NetLink } from './online-session';
 
 const ME = 1, OTHER = 2;
 const TICK_MS = 1000 / 60;
@@ -399,3 +399,22 @@ function fixtureCarPose(a: WorldAssets, i: number): CarPose {
   const c = a.manifest.parked[i]!;
   return { x: c.x, y: 0, z: c.z, qx: 0, qy: Math.sin(c.heading / 2), qz: 0, qw: Math.cos(c.heading / 2) };
 }
+
+describe('remoteList', () => {
+  test('flattens walkers, riders and drivers; leaves out me; down while knocked over', () => {
+    const w = (slot: number, state: 0 | 2) => [`w${slot}`, { slot, x: slot, y: 0, z: 2 * slot, yaw: 0, speed: 0, state }] as const;
+    const sample = {
+      walkers: new Map([w(1, 0), w(2, 2), w(9, 0)]),
+      riders: new Map([['r3', { slot: 3, bikeId: 0, x: 30, y: 0, z: 31, heading: 0, speed: 0, steer: 0, pedalling: false, airborne: false }]]),
+      cars: new Map([['c5', { id: 5, x: 50, y: 0, z: 51 }], ['c6', { id: 6, x: 60, y: 0, z: 61 }]]),
+      bikes: new Map(), lamps: new Map(),
+    } as unknown as Parameters<typeof remoteList>[0];
+    const list = remoteList(sample, new Map([[1, 'Jupp'], [2, 'Else']]), new Map([[5, { driver: 4 }], [6, { driver: -1 }]]), 9);
+    expect(list).toEqual([
+      { slot: 1, name: 'Jupp', x: 1, z: 2, mode: 'walk' },
+      { slot: 2, name: 'Else', x: 2, z: 4, mode: 'down' },
+      { slot: 3, name: '', x: 30, z: 31, mode: 'ride' },
+      { slot: 4, name: '', x: 50, z: 51, mode: 'drive' },
+    ]);
+  });
+});
