@@ -8,7 +8,7 @@ FROM node:24-bookworm-slim AS build
 WORKDIR /app
 
 # The world is generated, not versioned; fail early with a clear message.
-COPY apps/client/public/world/ ./apps/client/public/world/
+COPY apps/client/public/ ./apps/client/public/
 RUN for f in manifest.json collision.bin terrain.bin; do \
       test -f "apps/client/public/world/$f" || { \
         echo "ERROR: apps/client/public/world/$f is missing in the build context. Run 'npm run pipeline' in the repository root first (and do not exclude the folder in .dockerignore)." >&2; \
@@ -47,4 +47,6 @@ USER node
 EXPOSE 2567
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
-CMD ["npm", "start", "-w", "@nn/server"]
+# node itself is PID 1 (no npm/sh in between), so SIGTERM from `docker stop` reaches the server
+WORKDIR /app/apps/server
+CMD ["node", "--import", "tsx", "src/main.ts"]
