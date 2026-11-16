@@ -62,6 +62,25 @@ describe('WorldSim.replay', () => {
     expect(pushed.isSleeping()).toBe(false);
   }, 30_000);
 
+  test.skipIf(!haveRealAssets)('replay leaves sleeping bodies asleep, also through the next step (real assets)', async () => {
+    const sim = await WorldSim.create(await realAssets());
+    sim.addPlayer(1);
+    for (let t = 0; t < 240; t++) sim.step(new Map());
+    const asleep = () => {
+      const out: number[] = [];
+      sim.pw.world.forEachRigidBody((b) => { if (b.isDynamic() && b.isSleeping()) out.push(b.handle); });
+      return out;
+    };
+    const before = asleep();
+    expect(before.length).toBeGreaterThan(5); // parked cars and bikes around the spawn
+    const from = ownStateOf(snapOwn(sim, 1));
+    for (let k = 0; k < 3; k++) {
+      sim.replay(1, from, Array.from({ length: 10 }, () => N));
+      sim.step(new Map([[1, N]]));
+    }
+    expect(asleep()).toEqual(before);
+  }, 30_000);
+
   test('replay from a saved state retraces the stepped path', async () => {
     const sim = await WorldSim.create(fixtureAssets());
     sim.addPlayer(1, { x: -30, z: -30 });

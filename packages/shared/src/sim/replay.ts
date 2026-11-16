@@ -67,6 +67,9 @@ export function restoreDynamicBodies(world: RAPIER.World, saved: readonly BodySa
   for (const s of saved) {
     const b = s.body;
     if (skip.has(b.handle) || world.getRigidBody(b.handle) !== b || !b.isDynamic()) continue;
+    // slept through the replay (asleep, same pose): unchanged. Setting its pose anyway marks its colliders modified,
+    // and the next step wakes it (contacts recomputed): every nearby parked car and bike would wake on every replay.
+    if (s.sleeping && b.isSleeping() && samePose(b, s)) continue;
 
     b.setTranslation(s.t, !s.sleeping);
     b.setRotation(s.r, !s.sleeping);
@@ -74,4 +77,9 @@ export function restoreDynamicBodies(world: RAPIER.World, saved: readonly BodySa
     b.setAngvel(s.av, !s.sleeping);
     if (s.sleeping) b.sleep();
   }
+}
+
+function samePose(b: RAPIER.RigidBody, s: BodySave): boolean {
+  const t = b.translation(), r = b.rotation();
+  return t.x === s.t.x && t.y === s.t.y && t.z === s.t.z && r.x === s.r.x && r.y === s.r.y && r.z === s.r.z && r.w === s.r.w;
 }
