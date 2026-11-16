@@ -8,6 +8,7 @@ import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from
 import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { prepareModel, prepareProp } from './models.js';
+import { shipCharacterModels } from './characters.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
@@ -219,6 +220,7 @@ async function main() {
     await writeFile(join(OUT_DIR, `${name}.glb`), glb);
     rackModels.push({ kind, file: `${name}.glb`, bytes: glb.byteLength });
   }
+  const characterModels = await shipCharacterModels(OUT_DIR);
 
   // car models (data/models/cars, built by their build.py): full detail and the distance version
   const carModels: WorldManifest['carModels'] = [];
@@ -262,6 +264,7 @@ async function main() {
     bikeModels,
     rackModels,
     carModels,
+    characterModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
     bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
     parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),

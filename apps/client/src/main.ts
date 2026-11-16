@@ -15,6 +15,7 @@ import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game, surfaceY } from './game';
+import { storedCharacter } from './characters';
 import { AudioMixer } from './audio/mixer';
 import { Radio } from './audio/radio';
 import { RadioTuner, type StationId } from './audio/stations';
@@ -228,10 +229,18 @@ async function loadMap(): Promise<MapData | null> {
 const start = devCam ? { x: devCam.x, z: devCam.z } : undefined;
 Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }), loadPhysics(), loadMap()]).then(async ([m, { pw, terrain }, mapData]) => {
   // bikes still ride without their models (unseen), so a failed model download is not fatal
-  const bikeModels = await world.loadBikeModels(m).catch((err: unknown) => {
-    console.error(err);
-    return undefined;
-  });
+  const characters = world.characterModels(m);
+  const [bikeModels, character] = await Promise.all([
+    world.loadBikeModels(m).catch((err: unknown) => {
+      console.error(err);
+      return undefined;
+    }),
+    // only the shown figure now (the other loads when switched to); without it the player is the primitive stand-in
+    characters.variants.length ? characters.load(storedCharacter()).catch((err: unknown) => {
+      console.error(err);
+      return null;
+    }) : null,
+  ]);
   const carModels = await world.loadCarModels(m).catch((err: unknown) => {
     console.error(err);
     return undefined;
@@ -244,7 +253,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
-  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio, bikeModels, carModels });
+  game = new Game(pw, m, { scene, camera, input, hud, debug, devCam, terrain, audio: gameAudio, bikeModels, carModels, characters, character });
   if (devCam && debug && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);
