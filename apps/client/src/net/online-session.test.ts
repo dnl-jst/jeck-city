@@ -56,6 +56,9 @@ class FakeNet {
   private mail: Mail[] = [];
   private readonly listeners = new Set<(s: ReturnType<typeof decodeSnapshot> & object) => void>();
   private mirror = { players: new Map(), cars: new Map(), bikes: new Map(), lamps: new Map() };
+  private lastCars = new Map<string, Pose>();
+  /** Cars left out of the snapshots (as if out of the client's interest). */
+  hiddenCars = new Set<number>();
 
   constructor(readonly server: WorldSim, private readonly oneWayMs: number) {
     const net = this;
@@ -110,7 +113,9 @@ class FakeNet {
     inputs.set(ME, this.queue.next());
     this.events.push(...s.step(inputs));
     if (s.tick % 3 !== 0) return;
-    const bytes = encodeSnapshot(buildSnapshot(s, ME, this.interest, this.queue.ackSeq, this.events, (id) => id));
+    const snap = buildSnapshot(s, ME, this.interest, this.queue.ackSeq, this.events, (id) => id);
+    snap.cars = snap.cars.filter((c) => !this.hiddenCars.has(c.id));
+    const bytes = encodeSnapshot(snap);
     this.events = [];
     const mirror = this.slowState();
     if (this.hold) return;
@@ -144,12 +149,15 @@ class FakeNet {
         slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 3 }[p.mode], carId: p.carId ?? -1, bikeId: p.bikeId ?? -1, variant: 0,
       });
     }
-    const cars = new Map<string, unknown>();
+    // a car's pose is written when the entry appears and while the car is at rest (as the room's syncState)
+    const cars = new Map<string, Pose & { driver: number; engine: number; lights: boolean; radio: string }>();
     for (let i = 0; i < s.cars.count; i++) {
       if (s.cars.driver[i] === null && !s.cars.isMoved(i)) continue;
-      const v = s.cars.vehicle(i);
-      cars.set(String(i), { driver: s.cars.driver[i] ?? -1, engine: 0, lights: false, radio: '', ...pose(v ? v.pose() : s.cars.poses[i]!) });
+      const v = s.cars.vehicle(i), prev = this.lastCars.get(String(i));
+      const at = !prev || !v || v.chassis.isSleeping() ? pose(v ? v.pose() : s.cars.poses[i]!) : pose(prev);
+      cars.set(String(i), { driver: s.cars.driver[i] ?? -1, engine: 0, lights: false, radio: '', ...at });
     }
+    this.lastCars = cars;
     const lamps = new Map<string, unknown>();
     for (const i of s.lampsDown()) if (s.lampState(i) === 'lying') lamps.set(String(i), s.props.lampPose(i));
     const bikes = new Map<string, unknown>();
@@ -447,6 +455,70 @@ test('a bike moved before we joined is where the server has it', async () => {
   const c = client.bikes.poses[0]!, sv = server.bikes.poses[0]!;
   expect(Math.hypot(c.x - sv.x, c.z - sv.z)).toBeLessThan(0.05);
 }, 60_000);
+
+describe('OnlineSession resting cars', () => {
+  /** Shoves driverless car 0 on the server (it rolls a few metres and stops). */
+  const shove = (server: WorldSim) => server.cars.vehicle(0)!.chassis.setLinvel({ x: 0, y: 0, z: 8 }, true);
+  const gap = (client: WorldSim, server: WorldSim) => {
+    const c = client.cars.vehicle(0)?.pose() ?? client.cars.poses[0]!, s = server.cars.vehicle(0)!.pose();
+    return Math.hypot(c.x - s.x, c.y - s.y, c.z - s.z);
+  };
+
+  test('a car moved before we joined is where the server has it; back home after the idle reset', async () => {
+    const { net, session, client, server } = await setup(fixtureAssets(), { x: -20, z: -20 }, 75);
+    server.step(new Map());
+    shove(server);
+    for (let k = 0; k < 600 && server.cars.awake().length; k++) server.step(new Map());
+    expect(server.cars.awake()).toEqual([]);
+    expect(server.cars.isMoved(0)).toBe(true);
+    play(net, session, 1000, () => N, prng(10));
+    expect(client.cars.vehicle(0)).not.toBeNull();
+    expect(gap(client, server)).toBeLessThan(0.05);
+    // the server puts it back (idle reset): the slow state drops it
+    server.cars.reset(0);
+    play(net, session, 1000, () => N, prng(11));
+    const c = client.cars.vehicle(0)!.pose(), h = client.cars.homePose(0);
+    expect(Math.hypot(c.x - h.x, c.z - h.z)).toBeLessThan(0.05);
+  }, 60_000);
+
+  test('getting out of a car that was moved: it stays where it was left (the stale slow-state pose is not placed)', async () => {
+    const { net, session, client, server } = await setup(openRoad(), { x: -57.5, z: -80 }, 75);
+    const rnd = prng(13);
+    play(net, session, 500, () => N, rnd);
+    play(net, session, 100, () => ({ ...N, use: true }), rnd);
+    play(net, session, 1500, () => N, rnd); // engine starts
+    play(net, session, 2000, () => ({ ...N, forward: 1, yaw: headingOf(client.player(ME).car!) }), rnd);
+    play(net, session, 3000, () => ({ ...N, brake: true, yaw: headingOf(client.player(ME).car!) }), rnd);
+    expect(client.player(ME).mode).toBe('drive');
+    const left = client.cars.vehicle(0)!.pose(), home = client.cars.homePose(0);
+    expect(Math.hypot(left.x - home.x, left.z - home.z)).toBeGreaterThan(5);
+    play(net, session, 100, () => ({ ...N, use: true }), rnd);
+    let worst = 0;
+    play(net, session, 3000, () => N, rnd, () => {
+      const c = client.cars.vehicle(0)!.pose();
+      worst = Math.max(worst, Math.hypot(c.x - left.x, c.z - left.z));
+      return false;
+    });
+    expect(client.player(ME).mode).toBe('walk');
+    expect(server.player(ME).mode).toBe('walk');
+    expect(worst).toBeLessThan(0.5);
+  }, 60_000);
+
+  test('a car that leaves the interest set while rolling ends where the server lets it rest', async () => {
+    const { net, session, client, server } = await setup(fixtureAssets(), { x: -20, z: -20 }, 75);
+    const rnd = prng(12);
+    play(net, session, 1000, () => N, rnd);
+    shove(server);
+    play(net, session, 300, () => N, rnd);
+    expect(server.cars.awake()).toEqual([0]);
+    expect(client.cars.following().has(0)).toBe(true);
+    net.hiddenCars.add(0);
+    play(net, session, 6000, () => N, rnd);
+    expect(server.cars.awake()).toEqual([]);
+    expect(client.cars.following().has(0)).toBe(false);
+    expect(gap(client, server)).toBeLessThan(0.05);
+  }, 60_000);
+});
 
 describe('OnlineSession lamps', () => {
   /** Car 0 at (30, −40) facing +z, straight at lamp 0 (30, 0); drives into it at full throttle. Returns the frames. */

@@ -85,3 +85,35 @@ test('isMoved / reset', async () => {
   expect(cars.vehicle(0)).not.toBe(v);
   expect(cars.vehicle(0)!.chassis.isSleeping()).toBe(true);
 });
+
+test('place: a car at rest on a given pose (body, no body, followed); homePose', async () => {
+  const { pw, cars } = await pool();
+  const home = cars.homePose(0);
+  expect(home).toEqual(cars.poses[0]);
+  const at = { ...home, x: 12, z: -7 };
+  // no body: only the stored pose (a body later appears there)
+  cars.place(0, at);
+  expect(cars.poses[0]).toEqual(at);
+  cars.updateProximity([{ x: 0, z: 0 }]);
+  expect(cars.vehicle(0)!.pose().x).toBeCloseTo(12, 3);
+  // body, moving: set there, still, asleep
+  const v = cars.vehicle(0)!;
+  v.chassis.setLinvel({ x: 3, y: 0, z: 0 }, true);
+  cars.place(0, home);
+  expect(v.pose().x).toBeCloseTo(home.x, 3);
+  expect(v.chassis.isSleeping()).toBe(true);
+  expect(v.chassis.linvel().x).toBe(0);
+  expect(cars.poses[0]).toEqual(home);
+  // followed: released (dynamic again) on the pose
+  cars.follow(1, { ...cars.poses[1]!, x: 8 });
+  pw.step();
+  cars.place(1, at);
+  expect(cars.following().has(1)).toBe(false);
+  expect(cars.vehicle(1)!.pose().x).toBeCloseTo(12, 3);
+  expect(cars.vehicle(1)!.chassis.isSleeping()).toBe(true);
+  // driven: ignored
+  cars.enter(2, 1);
+  const p2 = cars.vehicle(2)!.pose();
+  cars.place(2, at);
+  expect(cars.vehicle(2)!.pose().x).toBeCloseTo(p2.x, 3);
+});

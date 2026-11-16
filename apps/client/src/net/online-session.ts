@@ -41,7 +41,6 @@ export type Roster = { names: Map<number, string>; variants: Map<number, number>
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
-/** An input not yet acknowledged, with what the prediction made of it (state after its step). */
 /** An unacknowledged input and the predicted state after its step (state: in full, for predictionMatches). */
 type Pending = {
   seq: number; input: PlayerInput; pos: Vec3; car: number | null; bike: number | null; ign: IgnitionSave | null; state: PlayerSnapshot;
@@ -67,6 +66,7 @@ const qmul = (a: Quat, b: Quat): Quat => ({
 });
 const qconj = (q: Quat): Quat => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
 const poseOf = (p: CarPose | PropPose): CarPose => ({ x: p.x, y: p.y, z: p.z, qx: p.qx, qy: p.qy, qz: p.qz, qw: p.qw });
+const carKey = (p: CarPose): string => `${p.x},${p.y},${p.z},${p.qx},${p.qy},${p.qz},${p.qw}`;
 const bikePoseOf = (p: BikePose): BikePose => ({ x: p.x, y: p.y, z: p.z, heading: p.heading });
 const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bike === b.bike;
 
@@ -119,6 +119,8 @@ export class OnlineSession implements Session {
   private readonly bikeBuf = new SnapshotBuffer<SnapshotBike>(bikeOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), riders: new Map(), bikes: new Map(), lamps: new Map() };
   private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
+  /** Resting car poses of the slow state last seen, by car ("x,y,z,qx,qy,qz,qw"; see placeRestingCars). */
+  private readonly carRest = new Map<number, string>();
   /** Resting bike poses from the slow state last put into the prediction world, by bike ("x,y,z,heading"). */
   private readonly bikeRest = new Map<number, string>();
   /** The station the own car should play (undefined: none chosen in this car) and seconds since it was last sent. */
@@ -414,10 +416,13 @@ export class OnlineSession implements Session {
       if (c.driver !== this.me) drivers.set(Number(key), c.driver);
     });
     this.sim.setRemoteDrivers(drivers);
+    // a car no longer streamed rests where the server has written a new resting pose, else where it was last streamed
+    // (a pose already seen is from before it moved; and the stream can skip a frame when the render tick steps back)
     this.sim.setProxies(feet, poses, (i) => {
       const c = state.cars.get(String(i));
-      return c ? poseOf(c) : null;
+      return c && this.carRest.get(i) !== carKey(c) ? poseOf(c) : null;
     });
+    this.placeRestingCars(poses);
     // bikes: others' riders (taken when getting on) and the poses of ridden and rolling bikes
     const bikeRiders = new Map<number, PlayerId>();
     state.bikes?.forEach((b, key) => { if (b.rider >= 0 && b.rider !== this.me) bikeRiders.set(Number(key), b.rider); });
@@ -465,6 +470,29 @@ export class OnlineSession implements Session {
       if (seen.has(i)) continue;
       this.bikeRest.delete(i);
       bikes.place(i, bikes.homePose(i));
+    }
+  }
+
+  /**
+   * Driverless cars the slow state reports away from their spot (moved before we joined, or come to rest out of our
+   * interest): placed there once per new resting pose; a car that left the slow state went back to its manifest spot
+   * (idle reset). A pose seen while the car was driven or streamed only counts as seen: the server writes a car's pose
+   * when it comes to rest, so a pose kept from before it moved (e.g. right after its driver got out) is not placed.
+   */
+  private placeRestingCars(streamed: ReadonlyMap<number, CarPose>): void {
+    const cars = this.sim.cars, seen = new Set<number>(), own = this.sim.player(this.me).carId;
+    this.link.state.cars.forEach((c, key) => {
+      const i = Number(key);
+      seen.add(i);
+      const k = carKey(c);
+      if (this.carRest.get(i) === k) return;
+      this.carRest.set(i, k);
+      if (c.driver < 0 && !streamed.has(i) && own !== i) cars.place(i, poseOf(c));
+    });
+    for (const i of [...this.carRest.keys()]) {
+      if (seen.has(i)) continue;
+      this.carRest.delete(i);
+      if (!streamed.has(i) && own !== i) cars.place(i, cars.homePose(i));
     }
   }
 

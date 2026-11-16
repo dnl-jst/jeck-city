@@ -119,6 +119,30 @@ export class CarPool {
     this.poses[i] = { ...pose };
   }
 
+  /**
+   * Driverless car i at rest on `pose` (client: where the server's slow state has it): a followed car is released
+   * there; a physics car is set there with no velocity, asleep. No-op while someone drives it.
+   */
+  place(i: number, pose: CarPose): void {
+    if (this.driver[i] !== null) return;
+    if (this.followed.has(i)) return this.release(i, pose);
+    const v = this.vehicles.get(i);
+    if (v) {
+      const b = v.chassis;
+      b.setTranslation({ x: pose.x, y: pose.y, z: pose.z }, false);
+      b.setRotation({ x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw }, false);
+      b.setLinvel({ x: 0, y: 0, z: 0 }, false);
+      b.setAngvel({ x: 0, y: 0, z: 0 }, false);
+      b.sleep();
+    }
+    this.poses[i] = { ...pose };
+  }
+
+  /** The manifest pose of car i. */
+  homePose(i: number): CarPose {
+    return { ...this.home[i]! };
+  }
+
   /** Cars currently followed (see follow). */
   following(): ReadonlySet<number> {
     return this.followed;
