@@ -287,7 +287,7 @@ export class Game {
       const prev = this.prevBike ?? this.currBike, cur = this.currBike;
       const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
       const rig = this.rig;
-      rig.update(s, this.ridden!.lean(), dt);
+      rig.update(s, this.ridden!.lean(), dt, this.ridden!.groundPose(s));
       rig.setLights(night);
       this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
         [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], POSTURE[rig.type]);
