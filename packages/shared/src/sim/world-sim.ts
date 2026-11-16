@@ -7,7 +7,7 @@ import { StreetProps } from '../physics/props';
 import { surfaceY } from '../physics/surface';
 import { TUNING } from '../physics/tuning';
 import type { VehicleState } from '../physics/vehicle';
-import { createPhysicsWorld, type PhysicsWorld } from '../physics/world';
+import { createPhysicsWorld, timeSlicer, type PhysicsWorld } from '../physics/world';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
@@ -129,14 +129,17 @@ export class WorldSim {
 
   /**
    * Builds the world from the assets. foci: where cars and parked bikes get physics bodies ('players' = around every
-   * player, default).
+   * player, default). sliceMs: build the city colliders in slices of this many ms (see createPhysicsWorld).
    */
-  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[] } = {}): Promise<WorldSim> {
-    const pw = await createPhysicsWorld(a.collision, a.terrain);
+  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; sliceMs?: number } = {}): Promise<WorldSim> {
+    const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs });
+    const slice = timeSlicer(opts.sliceMs);
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain);
+    await slice();
     const cars = new CarPool(pw, a.manifest.parked, a.terrain);
     const racks = new BikeRacks(pw, a.manifest.bikeRacks, a.terrain);
     const bikes = new ParkedBikes(pw, a.manifest.bikes, a.terrain);
+    await slice();
     const sim = new WorldSim(pw, cars, props, bikes, racks, a, opts.foci ?? 'players');
     cars.updateProximity(sim.focusPoints());
     bikes.updateProximity(sim.focusPoints());

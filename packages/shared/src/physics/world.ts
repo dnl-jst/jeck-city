@@ -75,27 +75,45 @@ export function onBeforeStep(pw: PhysicsWorld, fn: () => void): () => void {
   return () => set.delete(fn);
 }
 
+/** Side (m) of the square tiles the city's collision mesh is split into: one trimesh collider per tile. */
+export const COLLISION_TILE = 100;
+
 /**
- * Builds the world: the city as one fixed trimesh, plus an invisible wall
+ * Builds the world: the city as fixed trimeshes (one per COLLISION_TILE tile), plus an invisible wall
  * segment (thin cuboid) along every edge of the play-area boundary ring.
  * With `terrain`, the ground is additionally a fixed heightfield that coincides exactly with heightAt(terrain, …),
  * and the boundary walls follow the terrain.
+ * sliceMs: give the event loop a turn whenever building has run this long (the browser: input and rendering stay
+ * responsive while ~2.5M triangles become colliders, which otherwise blocks the page for seconds). Same world either way.
  */
-export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGrid): Promise<PhysicsWorld> {
+export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGrid, opts: { sliceMs?: number } = {}): Promise<PhysicsWorld> {
   await initRapier();
+  const slice = timeSlicer(opts.sliceMs);
   const world = new RAPIER.World({ x: 0, y: TUNING.world.gravity, z: 0 });
   world.timestep = TUNING.world.dt;
   skipSoftBodyRemap(world);
 
   const ground = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  const mesh = subdivideLargeTriangles(c.vertices, dropZeroAreaTriangles(c.vertices, c.indices), TUNING.world.maxTriangleEdge);
-  // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
-  // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
-  if (mesh.indices.length > 0) {
-    world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
+  const steps = tileSteps(c.vertices, c.indices, COLLISION_TILE);
+  let r = steps.next();
+  for (; !r.done; r = steps.next()) await slice();
+  const tiles = r.value;
+  const scratch = new Int32Array(c.vertices.length / 3).fill(-1);
+  await slice();
+  for (const tile of tiles) {
+    const local = compactMesh(c.vertices, tile, scratch);
+    const mesh = subdivideLargeTriangles(local.vertices, dropZeroAreaTriangles(local.vertices, local.indices), TUNING.world.maxTriangleEdge);
+    // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
+    // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
+    if (mesh.indices.length > 0) {
+      world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
+    }
+    await slice();
   }
   if (terrain) world.createCollider(terrainCollider(terrain), ground);
+  await slice();
   addBoundaryWalls(world, ground, c.boundary, terrain);
+  await slice();
   // One empty step builds the broad phase, so ray casts and character queries work right away
   // (World.updateSceneQueries is declared in the typings but missing at runtime in 0.21.0).
   world.step();
@@ -176,6 +194,92 @@ function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float3
   }
 }
 
+/** Returns a function that yields to the event loop once `ms` have passed since the last yield (never without ms). */
+export function timeSlicer(ms?: number): () => Promise<void> {
+  if (ms === undefined) return async () => {};
+  let last = performance.now();
+  return async () => {
+    if (performance.now() - last < ms) return;
+    await new Promise((r) => setTimeout(r, 0));
+    last = performance.now();
+  };
+}
+
+/**
+ * Groups the triangles by the tile (side `size`, x/z) their centroid lies in; per tile its triangles' indices
+ * (into `v`), tiles in row order so every build makes the same colliders in the same order. Empty tiles are left out.
+ */
+export function tileTriangles(v: Float32Array, idx: Uint32Array, size: number): Uint32Array[] {
+  const steps = tileSteps(v, idx, size);
+  for (;;) {
+    const r = steps.next();
+    if (r.done) return r.value;
+  }
+}
+
+/** Triangles per pause point of tileSteps. */
+const TILE_BATCH = 65_536;
+
+/** tileTriangles as a generator that pauses (yields) every TILE_BATCH triangles, for time-sliced building. */
+export function* tileSteps(v: Float32Array, idx: Uint32Array, size: number): Generator<void, Uint32Array[]> {
+  const tris = idx.length / 3;
+  if (tris === 0) return [];
+  const cx = new Int32Array(tris), cz = new Int32Array(tris);
+  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+  for (let t = 0; t < tris; t++) {
+    if (t % TILE_BATCH === TILE_BATCH - 1) yield;
+    const a = 3 * idx[3 * t]!, b = 3 * idx[3 * t + 1]!, c = 3 * idx[3 * t + 2]!;
+    const tx = (cx[t] = Math.floor((v[a]! + v[b]! + v[c]!) / (3 * size)));
+    const tz = (cz[t] = Math.floor((v[a + 2]! + v[b + 2]! + v[c + 2]!) / (3 * size)));
+    if (tx < x0) x0 = tx;
+    if (tx > x1) x1 = tx;
+    if (tz < z0) z0 = tz;
+    if (tz > z1) z1 = tz;
+  }
+  const w = x1 - x0 + 1;
+  const cell = new Int32Array(tris);
+  const counts = new Int32Array(w * (z1 - z0 + 1));
+  for (let t = 0; t < tris; t++) {
+    if (t % TILE_BATCH === TILE_BATCH - 1) yield;
+    counts[(cell[t] = (cz[t]! - z0) * w + (cx[t]! - x0))]!++;
+  }
+  const out: (Uint32Array | null)[] = Array.from(counts, (n) => (n > 0 ? new Uint32Array(3 * n) : null));
+  const fill = new Int32Array(counts.length);
+  for (let t = 0; t < tris; t++) {
+    if (t % TILE_BATCH === TILE_BATCH - 1) yield;
+    const k = cell[t]!;
+    out[k]!.set(idx.subarray(3 * t, 3 * t + 3), fill[k]!);
+    fill[k]! += 3;
+  }
+  return out.filter((x): x is Uint32Array => x !== null);
+}
+
+/**
+ * The vertices `idx` uses, and `idx` renumbered into them (first use order). `scratch`: a reusable remap buffer of
+ * v.length / 3 entries, all -1 (left that way again on return).
+ */
+export function compactMesh(v: Float32Array, idx: Uint32Array, scratch = new Int32Array(v.length / 3).fill(-1)): { vertices: Float32Array; indices: Uint32Array } {
+  const indices = new Uint32Array(idx.length);
+  const used: number[] = [];
+  for (let k = 0; k < idx.length; k++) {
+    const i = idx[k]!;
+    let j = scratch[i]!;
+    if (j < 0) {
+      j = scratch[i] = used.length;
+      used.push(i);
+    }
+    indices[k] = j;
+  }
+  const vertices = new Float32Array(3 * used.length);
+  used.forEach((i, j) => {
+    vertices[3 * j] = v[3 * i]!;
+    vertices[3 * j + 1] = v[3 * i + 1]!;
+    vertices[3 * j + 2] = v[3 * i + 2]!;
+    scratch[i] = -1;
+  });
+  return { vertices, indices };
+}
+
 /** Indices without the triangles of zero area (coincident or collinear corners); the same array if there are none. */
 export function dropZeroAreaTriangles(v: Float32Array, idx: Uint32Array): Uint32Array {
   const keep: number[] = [];
@@ -200,15 +304,25 @@ export function subdivideLargeTriangles(v: Float32Array, idx: Uint32Array, maxEd
   const outV: number[] = [];
   const outI: number[] = [];
   let next = v.length / 3;
-  const keep: number[] = [];
+  const keep = new Uint32Array(idx.length);
+  let kept = 0;
+  const max2 = maxEdge * maxEdge;
   for (let t = 0; t < idx.length; t += 3) {
     const ia = idx[t]!, ib = idx[t + 1]!, ic = idx[t + 2]!;
+    // most triangles are small: compare squared edge lengths before building anything
+    if (edge2(v, ia, ib) <= max2 && edge2(v, ib, ic) <= max2 && edge2(v, ic, ia) <= max2) {
+      keep[kept++] = ia; keep[kept++] = ib; keep[kept++] = ic;
+      continue;
+    }
     const a = [v[3 * ia]!, v[3 * ia + 1]!, v[3 * ia + 2]!];
     const b = [v[3 * ib]!, v[3 * ib + 1]!, v[3 * ib + 2]!];
     const c = [v[3 * ic]!, v[3 * ic + 1]!, v[3 * ic + 2]!];
     const d = (p: number[], q: number[]) => Math.hypot(p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!);
     const n = Math.ceil(Math.max(d(a, b), d(b, c), d(c, a)) / maxEdge);
-    if (n <= 1) { keep.push(ia, ib, ic); continue; }
+    if (n <= 1) {
+      keep[kept++] = ia; keep[kept++] = ib; keep[kept++] = ic;
+      continue;
+    }
     // Grid point (i, j) = a + (b − a)·i/n + (c − a)·j/n, for i + j ≤ n.
     const row: number[][] = [];
     for (let i = 0; i <= n; i++) {
@@ -229,5 +343,14 @@ export function subdivideLargeTriangles(v: Float32Array, idx: Uint32Array, maxEd
   const vertices = new Float32Array(v.length + outV.length);
   vertices.set(v);
   vertices.set(outV, v.length);
-  return { vertices, indices: Uint32Array.from([...keep, ...outI]) };
+  const indices = new Uint32Array(kept + outI.length);
+  indices.set(keep.subarray(0, kept));
+  indices.set(outI, kept);
+  return { vertices, indices };
+}
+
+/** Squared distance between vertices p and q of v. */
+function edge2(v: Float32Array, p: number, q: number): number {
+  const dx = v[3 * p]! - v[3 * q]!, dy = v[3 * p + 1]! - v[3 * q + 1]!, dz = v[3 * p + 2]! - v[3 * q + 2]!;
+  return dx * dx + dy * dy + dz * dz;
 }

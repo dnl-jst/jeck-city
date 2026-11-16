@@ -167,7 +167,7 @@ export class Game {
     this.character = next;
     storeCharacter(next);
     this.session.setVariant?.(CHARACTER_VARIANTS.indexOf(next));
-    this.ctx.hud.flash(next === 'woman' ? 'Figur: Frau' : 'Figur: Mann');
+    this.ctx.hud.flash(`Figur ${CHARACTER_VARIANTS.indexOf(next) + 1}`);
     // the first switch to a figure downloads it; the old one stays until it is there
     models.load(next).then((model) => {
       if (this.character === next) this.figure.setModel(model); // unless switched on meanwhile

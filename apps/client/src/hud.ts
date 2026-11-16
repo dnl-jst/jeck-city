@@ -1,3 +1,4 @@
+import { downloadSummary, formatBytes, type DownloadCategory, type DownloadSnapshot } from './downloads';
 import { FetchError, NoWebGLError } from './errors';
 
 /** User-facing (German) text for a boot failure. */
@@ -22,6 +23,17 @@ export const HUD_CSS = `
   .nn-loading-track { margin-top: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); overflow: hidden; }
   .nn-loading-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.15s; }
   .nn-loading-status { margin-top: 8px; font-size: 12px; opacity: 0.8; }
+  .nn-dl { margin-top: 16px; padding: 10px 12px; border-radius: 8px; background: rgba(255,255,255,0.06); font-size: 12px;
+    letter-spacing: 0.02em; text-align: left; font-variant-numeric: tabular-nums; }
+  .nn-dl[hidden] { display: none; }
+  .nn-dl-summary { text-align: center; color: #f2c46b; }
+  .nn-dl-track { margin: 6px 0 8px; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.18); overflow: hidden; }
+  .nn-dl-fill { height: 100%; width: 0; background: linear-gradient(90deg, #f2c46b, #ffdf9e); transition: width 0.25s; }
+  .nn-dl-row { display: grid; grid-template-columns: 1fr 64px 108px; gap: 8px; align-items: center; margin-top: 3px; opacity: 0.8; }
+  .nn-dl-row.nn-done { opacity: 0.45; }
+  .nn-dl-row-track { height: 3px; border-radius: 2px; background: rgba(255,255,255,0.15); overflow: hidden; }
+  .nn-dl-row-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.25s; }
+  .nn-dl-row-size { text-align: right; white-space: nowrap; }
   .nn-loading-controls { margin-top: 18px; font-size: 12px; opacity: 0.65; }
   .nn-error { color: #ffb4a8; }
   .nn-attribution { position: fixed; z-index: 2; right: 8px; bottom: 6px; color: rgba(255,255,255,0.85);
@@ -88,12 +100,20 @@ export class Hud {
   private noteTimer = 0;
   private readonly loading: HTMLDivElement;
   private readonly attribution: HTMLDivElement;
+  private readonly dl: HTMLDivElement;
+  private readonly dlSummary: HTMLDivElement;
+  private readonly dlFill: HTMLDivElement;
+  private readonly dlRows = new Map<DownloadCategory, { row: HTMLDivElement; fill: HTMLDivElement; size: HTMLDivElement }>();
 
   constructor(root: HTMLElement) {
     this.loading = el('div', 'nn-loading', root);
     el('div', 'nn-loading-label', this.loading).textContent = 'Nippes lädt …';
     this.bar = el('div', 'nn-loading-fill', el('div', 'nn-loading-track', this.loading));
     this.status = el('div', 'nn-loading-status', this.loading);
+    this.dl = el('div', 'nn-dl', this.loading);
+    this.dl.hidden = true;
+    this.dlSummary = el('div', 'nn-dl-summary', this.dl);
+    this.dlFill = el('div', 'nn-dl-fill', el('div', 'nn-dl-track', this.dl));
     el('div', 'nn-loading-controls', this.loading).textContent = CONTROLS_HINT;
     this.attribution = el('div', 'nn-attribution', root);
     this.hint = el('div', 'nn-hint', root);
@@ -112,6 +132,27 @@ export class Hud {
   /** Short line under the bar: what is being loaded right now. */
   setStatus(text: string): void {
     this.status.textContent = text;
+  }
+
+  /** Detailed download panel on the loading screen (shown from the first call): total bar, size, speed, per category. */
+  setDownloads(s: DownloadSnapshot): void {
+    this.dl.hidden = false;
+    this.dlSummary.textContent = downloadSummary(s);
+    const pct = (r: number, t: number): string => `${t > 0 ? Math.min(100, (100 * r) / t).toFixed(1) : 100}%`;
+    this.dlFill.style.width = pct(s.received, s.total);
+    for (const c of s.categories) {
+      let row = this.dlRows.get(c.cat);
+      if (!row) {
+        const r = el('div', 'nn-dl-row', this.dl);
+        el('div', 'nn-dl-row-label', r).textContent = c.label;
+        row = { row: r, fill: el('div', 'nn-dl-row-fill', el('div', 'nn-dl-row-track', r)), size: el('div', 'nn-dl-row-size', r) };
+        this.dlRows.set(c.cat, row);
+      }
+      this.dl.append(row.row); // keeps the rows in the snapshot's category order
+      row.fill.style.width = pct(c.received, c.total);
+      row.size.textContent = c.received >= c.total ? formatBytes(c.total) : `${formatBytes(c.received)} / ${formatBytes(c.total)}`;
+      row.row.classList.toggle('nn-done', c.received >= c.total);
+    }
   }
 
   hideLoading(): void {
