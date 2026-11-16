@@ -6,7 +6,9 @@
 // Two headless Chromium contexts (host GPU; NN_SOFTWARE_GL=1: SwiftShader) join as "Check A" and "Check B" (name
 // dialog: fill, Enter) and both must see 2 players. A enters the car at the spawn and drives >= 30 m; B must see A
 // move that far (__nnRemote). A then gets out, is teleported next to the nearest bike (dev hook) and rides it >= 10 m;
-// B must see A in mode 'ride'. All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
+// B must see A in mode 'ride'. Against a production server (no dev hooks: no teleport) nobody is teleported: A enters the
+// parked car that stands at the spawn and drives it, and B walks the few metres to the bike by the spawn and rides it
+// (A must see B in mode 'ride'). All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
 // B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
 // figure must not teleport (spec 13.4): its move in a frame may exceed what its speed over the two frames before
@@ -132,7 +134,8 @@ const phaseStats = (rec, remote) => {
   };
 };
 const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; A ${r.fps.toFixed(1)} fps, ${r.inputsPerS.toFixed(1)} inputs/s, reconciles ${JSON.stringify(r.reconciles)}; B ${r.remoteFps.toFixed(1)} fps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, teleport max ${r.tele.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
-const remoteA = (page) => page.evaluate(() => window.__nnRemote().find((p) => p.name === 'Check A') ?? null);
+const remoteNamed = (page, name) => page.evaluate((name) => window.__nnRemote().find((p) => p.name === name) ?? null, name);
+const remoteA = (page) => remoteNamed(page, 'Check A');
 const teleport = (page, x, z) => page.evaluate(([x, z]) => window.__nnConn().sendTeleport(x, z), [x, z]);
 
 /**
@@ -186,11 +189,17 @@ try {
     const along = dx * Math.sin(c.heading) + dz * Math.cos(c.heading), side = dx * Math.cos(c.heading) - dz * Math.sin(c.heading);
     return !(along > -3 && along < 45 && Math.abs(side) < 3);
   });
-  const car = parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
+  // no dev hooks (production server): the spawn is where everything happens, see the header
+  const canTeleport = await a.page.evaluate(() => typeof window.__nnConn === 'function');
+  if (!canTeleport) console.log('production server (no teleport): using the car and the bike at the spawn');
+  const nearSpawn = (o) => ({ ...o, d: Math.hypot(o.x - spawn.x, o.z - spawn.z) });
+  const car = !canTeleport ? parked.map(nearSpawn).sort((p, q) => p.d - q.d)[0] : parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
     .map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((p, q) => p.d - q.d)[0];
   const sx = car.x + Math.cos(car.heading) * 1.5, sz = car.z - Math.sin(car.heading) * 1.5;
-  await teleport(a.page, sx, sz);
-  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1, [sx, sz], STEPS.tele, 'teleport next to the car did not arrive');
+  if (canTeleport) {
+    await teleport(a.page, sx, sz);
+    await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1, [sx, sz], STEPS.tele, 'teleport next to the car did not arrive');
+  }
   const s0 = await useE(a, (s) => s.mode === 'drive', 'E did not enter the car');
   await a.until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
   const startA = await remoteA(b.page);
@@ -248,26 +257,41 @@ try {
   // still-queued E input would get on the bike right away (and the press below would get off again)
   await b.until(() => window.__nnRemote().find((p) => p.name === 'Check A')?.mode === 'walk', null, STEPS.see, 'B did not see A get out');
 
-  // ride: the nearest bike with no other bike within 4 m (so E there can only mean this one) and away from the car's
-  // start (the car just drove off and may have pushed a bike around there)
-  const lone = bikes.filter((k, i) => Math.hypot(k.x - s0.x, k.z - s0.z) > 10 && bikes.every((o, j) => j === i || Math.hypot(o.x - k.x, o.z - k.z) >= 4));
-  const bike = lone.map((k) => ({ ...k, d: Math.hypot(k.x - out.x, k.z - out.z) })).sort((p, q) => p.d - q.d)[0];
-  const bx = bike.x + Math.cos(bike.heading), bz = bike.z - Math.sin(bike.heading);
-  console.log(`nearest lone bike (${bike.x.toFixed(1)}, ${bike.z.toFixed(1)}), ${bike.d.toFixed(0)} m away: teleporting beside it`);
-  await teleport(a.page, bx, bz);
-  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1.5, [bx, bz], STEPS.tele, 'teleport next to the bike did not arrive');
-  const on = await useE(a, (s) => s.mode === 'ride', 'E did not get on the bike');
-  await a.page.keyboard.down('KeyW');
-  await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 10, [on.x, on.z], STEPS.ride, 'bike did not get 10 m far');
-  const rideA = await a.state();
+  // ride (A with teleports, else B who is still by the spawn): the nearest bike with no other bike within 4 m (so E there
+  // can only mean this one) and, with teleports, away from the car's start (the car just drove off and may have pushed a
+  // bike around there)
+  const [rider, watcher] = canTeleport ? [a, b] : [b, a];
+  const rName = rider.name;
+  const rOut = await rider.state();
+  const lone = bikes.filter((k, i) => (!canTeleport || Math.hypot(k.x - s0.x, k.z - s0.z) > 10) && bikes.every((o, j) => j === i || Math.hypot(o.x - k.x, o.z - k.z) >= 4));
+  const bike = lone.map((k) => ({ ...k, d: Math.hypot(k.x - rOut.x, k.z - rOut.z) })).sort((p, q) => p.d - q.d)[0];
+  if (canTeleport) {
+    const bx = bike.x + Math.cos(bike.heading), bz = bike.z - Math.sin(bike.heading);
+    console.log(`nearest lone bike (${bike.x.toFixed(1)}, ${bike.z.toFixed(1)}), ${bike.d.toFixed(0)} m away: teleporting beside it`);
+    await teleport(rider.page, bx, bz);
+    await rider.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1.5, [bx, bz], STEPS.tele, 'teleport next to the bike did not arrive');
+  } else {
+    // walk to within 2 m of the bike: W when it is ahead of the spawn heading (the camera yaw starts there), else S
+    const key = (bike.x - rOut.x) * Math.sin(spawn.heading) + (bike.z - rOut.z) * Math.cos(spawn.heading) > 0 ? 'KeyW' : 'KeyS';
+    console.log(`bike at the spawn (${bike.x.toFixed(1)}, ${bike.z.toFixed(1)}), ${bike.d.toFixed(1)} m away: walking to it (${key})`);
+    if (bike.d > 2) {
+      await rider.page.keyboard.down(key);
+      await rider.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 2, [bike.x, bike.z], STEPS.tele, 'did not walk to the bike');
+      await rider.page.keyboard.up(key);
+    }
+  }
+  const on = await useE(rider, (s) => s.mode === 'ride', 'E did not get on the bike');
+  await rider.page.keyboard.down('KeyW');
+  await rider.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 10, [on.x, on.z], STEPS.ride, 'bike did not get 10 m far');
+  const rideA = await rider.state();
   try {
-    await b.until(() => !!window.__nnRemote().find((p) => p.name === 'Check A' && p.mode === 'ride'), null, STEPS.see, 'B did not see A riding');
+    await watcher.until((s, n) => !!window.__nnRemote().find((p) => p.name === n && p.mode === 'ride'), rName, STEPS.see, `${watcher.name} did not see ${rName} riding`);
   } catch (e) {
-    console.error('A now', JSON.stringify(await a.state()), 'B sees', JSON.stringify(await b.page.evaluate(() => window.__nnRemote())));
+    console.error(`${rName} now`, JSON.stringify(await rider.state()), `${watcher.name} sees`, JSON.stringify(await watcher.page.evaluate(() => window.__nnRemote())));
     throw e;
   }
-  await a.page.keyboard.up('KeyW');
-  console.log(`A rode ${Math.hypot(rideA.x - on.x, rideA.z - on.z).toFixed(1)} m; B sees A in mode ${(await remoteA(b.page)).mode}`);
+  await rider.page.keyboard.up('KeyW');
+  console.log(`${rName} rode ${Math.hypot(rideA.x - on.x, rideA.z - on.z).toFixed(1)} m; ${watcher.name} sees it in mode ${(await remoteNamed(watcher.page, rName)).mode}`);
 
   if (lag) {
     for (const [k, r] of Object.entries(results)) {
