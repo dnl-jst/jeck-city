@@ -161,7 +161,7 @@ describe('lamp reset and follow', () => {
       pw.step();
     }
     expect(props.isStanding(0)).toBe(false);
-    const b = props['lamps'][0]!;
+    const b = props['bodies'].get(0)!;
     for (let t = 0; t < 55; t++) {
       pw.step();
       expect(b.angularDamping()).toBe(0);

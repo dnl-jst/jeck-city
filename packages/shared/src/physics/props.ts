@@ -35,9 +35,19 @@ export type PropPose = { x: number; y: number; z: number; qx: number; qy: number
  * would hold the post upright and shove it down the road); the wheel rays roll over it. Lamp bodies have their origin
  * at the foot of the post. With `terrain`, trunks and posts stand on the terrain (heightAt), like the rendered props;
  * without it at y = 0.
+ *
+ * Every trunk and every standing post is a collider on one shared fixed body: a city's ~14k props as bodies of their
+ * own made each step and each body scan (replay's save/restore, rapier.js bookkeeping) walk ~14k bodies. A lamp gets
+ * a body of its own only when it leaves the post (knocked over, or followed): its collider moves from the shared body
+ * to a new body at the same pose. standUp removes that body and puts a post collider back on the shared body.
  */
 export class StreetProps {
-  private readonly lamps: RAPIER.RigidBody[] = [];
+  /** The fixed body all trunks and standing posts belong to. */
+  private readonly shared: RAPIER.RigidBody;
+  /** Per lamp: its post collider on the shared body while standing, else null. */
+  private readonly posts: (RAPIER.Collider | null)[] = [];
+  /** Lamps that left their post (knocked over or followed) → their own body (dynamic or kinematic). */
+  private readonly bodies = new Map<number, RAPIER.RigidBody>();
   /** Manifest spot of every lamp (the foot of the post, on the ground). */
   private readonly home: Vec3[] = [];
   /** Collider handle → lamp index, for standing lamps only. */
@@ -55,32 +65,28 @@ export class StreetProps {
   ) {
     const { rapier: R, world } = pw;
     const groundY = (x: number, z: number) => (terrain ? heightAt(terrain, x, z) : 0);
+    this.shared = world.createRigidBody(R.RigidBodyDesc.fixed());
     for (const [x, z] of trees) {
       const k = treeScale(x, z);
-      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, groundY(x, z), z));
       world.createCollider(
-        R.ColliderDesc.cylinder((T.trunkHeight * k) / 2, T.trunkRadius * k).setTranslation(0, (T.trunkHeight * k) / 2, 0).setCollisionGroups(PROP_GROUPS),
-        body,
+        R.ColliderDesc.cylinder((T.trunkHeight * k) / 2, T.trunkRadius * k).setTranslation(x, groundY(x, z) + (T.trunkHeight * k) / 2, z)
+          .setCollisionGroups(PROP_GROUPS),
+        this.shared,
       );
     }
     lamps.forEach(([x, z], i) => {
-      const body = world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(x, groundY(x, z), z).setCcdEnabled(true));
-      const c = world.createCollider(
-        R.ColliderDesc.cylinder(T.lampHeight / 2, T.lampRadius).setTranslation(0, T.lampHeight / 2, 0).setMass(T.lampMass).setCollisionGroups(PROP_GROUPS),
-        body,
-      );
-      this.lamps.push(body);
+      this.home.push({ x, y: groundY(x, z), z });
       this.calm.push(0);
       this.age.push(0);
-      this.home.push({ x, y: groundY(x, z), z });
-      this.standing.set(c.handle, i);
+      this.posts.push(null);
+      this.placePost(i);
     });
     this.unsubscribe = onBeforeStep(pw, () => { this.checkHits(); this.settle(); });
   }
 
   /** Number of lamps. */
   get count(): number {
-    return this.lamps.length;
+    return this.home.length;
   }
 
   /** Indices of lamps knocked over since the last call. */
@@ -90,45 +96,35 @@ export class StreetProps {
 
   /** Whether lamp i is still standing. */
   isStanding(i: number): boolean {
-    return this.standing.has(this.lamps[i]!.collider(0).handle);
+    return this.posts[i] !== null;
   }
 
   /** Whether lamp i lies on the ground simulated (dynamic) and asleep: nothing more to stream. */
   isResting(i: number): boolean {
-    const b = this.lamps[i]!;
-    return b.isDynamic() && b.isSleeping();
+    const b = this.bodies.get(i);
+    return b !== undefined && b.isDynamic() && b.isSleeping();
   }
 
   /** Puts lamp i back on its manifest spot: fixed, upright, solid for cars again. */
   standUp(i: number): void {
-    const b = this.lamps[i]!;
-    const R = this.pw.rapier;
-    const c = b.collider(0);
-    b.setBodyType(R.RigidBodyType.Fixed, true);
-    const h = this.home[i]!;
-    b.setTranslation(h, true);
-    b.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
-    b.setLinvel({ x: 0, y: 0, z: 0 }, false);
-    b.setAngvel({ x: 0, y: 0, z: 0 }, false);
-    b.setLinearDamping(0);
-    b.setAngularDamping(0);
-    c.setCollisionGroups(PROP_GROUPS);
-    this.standing.set(c.handle, i);
+    const b = this.bodies.get(i);
+    if (!b) return; // standing
+    this.bodies.delete(i);
+    this.pw.world.removeRigidBody(b);
+    this.placePost(i);
   }
 
   /** Lamp i as a kinematic body on `pose` (a lamp the server streams); lying groups, never breaks by itself. */
   follow(i: number, pose: PropPose): void {
-    const b = this.lamps[i]!;
     const R = this.pw.rapier;
-    const c = b.collider(0);
     const t = { x: pose.x, y: pose.y, z: pose.z }, q = { x: pose.qx, y: pose.qy, z: pose.qz, w: pose.qw };
-    if (b.bodyType() === R.RigidBodyType.KinematicPositionBased) {
+    let b = this.bodies.get(i);
+    if (b?.bodyType() === R.RigidBodyType.KinematicPositionBased) {
       b.setNextKinematicTranslation(t);
       b.setNextKinematicRotation(q);
       return;
     }
-    this.standing.delete(c.handle);
-    c.setCollisionGroups(LYING_PROP_GROUPS);
+    b ??= this.leavePost(i, R.RigidBodyDesc.kinematicPositionBased());
     b.setBodyType(R.RigidBodyType.KinematicPositionBased, true);
     b.setTranslation(t, true);
     b.setRotation(q, true);
@@ -138,13 +134,46 @@ export class StreetProps {
 
   /** Pose of lamp i (origin at the foot of the post). */
   lampPose(i: number): PropPose {
-    const b = this.lamps[i]!;
+    const b = this.bodies.get(i);
+    if (!b) {
+      const h = this.home[i]!;
+      return { x: h.x, y: h.y, z: h.z, qx: 0, qy: 0, qz: 0, qw: 1 };
+    }
     const p = b.translation(), q = b.rotation();
     return { x: p.x, y: p.y, z: p.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
   }
 
   dispose(): void {
     this.unsubscribe();
+  }
+
+  /** A post collider for lamp i on the shared body, at its manifest spot; the lamp counts as standing. */
+  private placePost(i: number): void {
+    const h = this.home[i]!;
+    const c = this.pw.world.createCollider(this.lampCollider().setTranslation(h.x, h.y + T.lampHeight / 2, h.z).setCollisionGroups(PROP_GROUPS), this.shared);
+    this.posts[i] = c;
+    this.standing.set(c.handle, i);
+  }
+
+  /**
+   * Lamp i leaves its post: the post collider leaves the shared body, and a body of `desc`'s type with the lamp's
+   * collider (lying groups) takes its place, upright on the manifest spot.
+   */
+  private leavePost(i: number, desc: RAPIER.RigidBodyDesc): RAPIER.RigidBody {
+    const { world } = this.pw;
+    const post = this.posts[i]!;
+    this.standing.delete(post.handle);
+    world.removeCollider(post, false);
+    this.posts[i] = null;
+    const h = this.home[i]!;
+    const b = world.createRigidBody(desc.setTranslation(h.x, h.y, h.z).setCcdEnabled(true));
+    world.createCollider(this.lampCollider().setTranslation(0, T.lampHeight / 2, 0).setCollisionGroups(LYING_PROP_GROUPS), b);
+    this.bodies.set(i, b);
+    return b;
+  }
+
+  private lampCollider(): RAPIER.ColliderDesc {
+    return this.pw.rapier.ColliderDesc.cylinder(T.lampHeight / 2, T.lampRadius).setMass(T.lampMass);
   }
 
   /** Before every step: fast cars about to touch a standing lamp (within the distance they cover this step) break it. */
@@ -174,8 +203,8 @@ export class StreetProps {
    * keeps jittering just above Rapier's own sleep threshold forever, and a lamp that never sleeps is never "resting".
    */
   private settle(): void {
-    this.lamps.forEach((b, i) => {
-      if (!b.isDynamic() || b.isSleeping()) { this.calm[i] = 0; return; }
+    for (const [i, b] of this.bodies) {
+      if (!b.isDynamic() || b.isSleeping()) { this.calm[i] = 0; continue; }
       if (++this.age[i]! === LAMP_DAMP_AFTER) {
         // a post on flat ground has no friction about its axis: undamped it rolls (and is streamed) for minutes
         b.setLinearDamping(T.lampLinearDamping);
@@ -184,16 +213,12 @@ export class StreetProps {
       const l = b.linvel(), a = b.angvel();
       this.calm[i] = Math.hypot(l.x, l.y, l.z) < LAMP_CALM_LINVEL && Math.hypot(a.x, a.y, a.z) < LAMP_CALM_ANGVEL ? this.calm[i]! + 1 : 0;
       if (this.calm[i]! >= LAMP_CALM_TICKS) b.sleep();
-    });
+    }
   }
 
   private knockOver(i: number, car: RAPIER.RigidBody): void {
-    const lamp = this.lamps[i]!;
-    if (lamp.isDynamic()) return; // two cars at once
-    const collider = lamp.collider(0);
-    this.standing.delete(collider.handle);
-    collider.setCollisionGroups(LYING_PROP_GROUPS);
-    lamp.setBodyType(this.pw.rapier.RigidBodyType.Dynamic, true);
+    if (!this.isStanding(i)) return; // two cars at once
+    const lamp = this.leavePost(i, this.pw.rapier.RigidBodyDesc.dynamic());
     const v = car.linvel();
     const speed = Math.hypot(v.x, v.z);
     const dx = v.x / speed, dz = v.z / speed;
