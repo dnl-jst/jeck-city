@@ -172,7 +172,15 @@ let sun = currentSun();
 let nightFactor = sun.nightFactor;
 let sunAge = 0;
 const timer = new Timer();
+/** Frame cap: high-refresh displays (120/144 Hz) render at most 60 fps. */
+const FRAME_MS = 1000 / 60;
+let lastFrame = -Infinity;
 renderer.setAnimationLoop((t: number) => {
+  const elapsed = t - lastFrame;
+  if (elapsed < FRAME_MS - 1) return; // 1 ms slack so a 60 Hz vsync never skips a frame
+  // Advance on a fixed 60 Hz grid so 144 Hz averages 60 fps instead of 48;
+  // the clamp drops the backlog after a stall instead of bursting to catch up.
+  lastFrame = Math.max(lastFrame + FRAME_MS, t - FRAME_MS);
   timer.update(t);
   const dt = Math.min(timer.getDelta(), 0.1);
   if (dt > 0) fps += (1 / dt - fps) * 0.1;

@@ -9,11 +9,14 @@ const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 const USER_AGENT = 'nippes-nights-pipeline/0.1';
 
-// Nippes bbox (UTM 32N) + 150 m backdrop margin.
-const BOUNDS = { minE: 355389 - 150, minN: 5646699 - 150, maxE: 357399 + 150, maxN: 5648852 + 150 };
+// Play area bbox (UTM 32N): Nippes + Neustadt-Nord (Agnesviertel), + 250 m: covers the 150 m backdrop and the
+// world rect (boundary bbox + 200 m, see worldRect) that the terrain is cut from.
+const MARGIN = 250;
+const BOUNDS = { minE: 354180 - MARGIN, minN: 5644720 - MARGIN, maxE: 357875 + MARGIN, maxN: 5648852 + MARGIN };
 
-// Overpass bbox: Nippes (50.9537445..50.9735975, 6.9410780..6.9688318) + ~150 m.
-const OSM_BBOX = '50.95234,6.93898,50.97500,6.97093'; // S,W,N,E
+// Overpass bbox: Nippes (50.9537445..50.9735975, 6.9410780..6.9688318) ∪ Neustadt-Nord
+// (50.9365632..50.9592877, 6.9247210..6.9755545) + ~150 m.
+const OSM_BBOX = '50.93521,6.92259,50.97500,6.97768'; // S,W,N,E
 
 export function tileNamesForBounds(minE: number, minN: number, maxE: number, maxN: number): string[] {
   const names: string[] = [];
@@ -100,7 +103,7 @@ export async function fetchDgmTiles(dir: string): Promise<string[]> {
 
 export const OVERPASS_QUERY = `[out:json][timeout:180];
 (
-  relation(2613766);
+  relation(id:2613766,2613763);
 );
 out geom;
 (

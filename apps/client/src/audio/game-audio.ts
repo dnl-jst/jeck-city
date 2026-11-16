@@ -65,7 +65,7 @@ export class GameAudio {
     this.rand = d.rand ?? Math.random;
     this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'sfx') });
     this.tramBell = new TramBell(this.rand);
-    this.bike = new BikeSound({ loop: (id) => d.mixer.loop(id, 'sfx'), oneShot: (id, o) => d.mixer.oneShot(id, o) });
+    this.bike = new BikeSound({ oneShot: (id, o) => d.mixer.oneShot(id, o) });
   }
 
   /** Chosen station while in a car, null on foot. */
@@ -189,7 +189,7 @@ export class GameAudio {
     this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, cueDt);
   }
 
-  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked); `soundBox`: the radio comes on through its box. */
+  /** Getting on a bike: its freewheel ticks (once loaded + unlocked); `soundBox`: the radio comes on through its box. */
   mountBike(soundBox = false): void {
     this.riding = true;
     this.startLoops();
@@ -210,7 +210,7 @@ export class GameAudio {
     }
   }
 
-  /** On a bike, every frame: rolling, chain and freewheel. Speed in m/s. */
+  /** On a bike, every frame: freewheel ticks while coasting. Speed in m/s. */
   ride(s: { speed: number; pedalling: boolean; grounded: boolean }, dt: number): void {
     this.bike.update(s, Math.min(dt, MAX_DT));
   }
