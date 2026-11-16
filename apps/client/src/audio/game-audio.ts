@@ -5,6 +5,7 @@ import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
 import { VehicleSound } from './vehicle-sound';
 import { BikeSound } from './bike-sound';
+import { HornState } from './horn';
 
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
@@ -44,6 +45,8 @@ export class GameAudio {
   private riding = false;
   private impacts = new ImpactDetector();
   private staticVoice: LoopVoice | null = null;
+  private readonly hornState = new HornState();
+  private hornVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
   private unlocking: Promise<void> | null = null;
   private unlocked = false;
@@ -141,6 +144,7 @@ export class GameAudio {
     this.d.radio.tune(null);
     this.d.tuner.exitCar();
     this.vehicle.stop();
+    this.stopHorn();
     if (running) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
@@ -204,6 +208,15 @@ export class GameAudio {
     this.bike.bell();
   }
 
+  /** In a car, every frame: the horn sounds while H is held (a tap still gives a short toot). Works without the engine. */
+  horn(held: boolean, dt: number): void {
+    const on = this.inCar && this.hornState.update(this.inCar && held, Math.min(dt, MAX_DT));
+    if (on && !this.hornVoice && this.loaded && this.unlocked) {
+      this.hornVoice = this.d.mixer.loop('carHorn', 'sfx');
+      this.hornVoice.setGain(MIX.horn);
+    } else if (!on) this.stopHorn();
+  }
+
   /** Fell off the bike. */
   crashBike(): void {
     this.d.mixer.oneShot('impact2', { gain: MIX.impact * 0.7 });
@@ -221,6 +234,12 @@ export class GameAudio {
     this.stopStatic(); // Radio never reports 'playing' after a retune
     this.d.radio.tune(id);
     this.d.flash(stationLabel(id));
+  }
+
+  private stopHorn(): void {
+    this.hornVoice?.stop();
+    this.hornVoice = null;
+    this.hornState.reset();
   }
 
   private stopStatic(): void {
