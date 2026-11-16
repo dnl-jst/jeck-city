@@ -5,6 +5,7 @@ import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
 import { VehicleSound } from './vehicle-sound';
 import { BikeSound } from './bike-sound';
+import { HornState } from './horn';
 
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
@@ -42,8 +43,12 @@ export class GameAudio {
   private readonly bike: BikeSound;
   /** On a bike: its loops run (once loaded + unlocked). */
   private riding = false;
+  /** On the sound Long John: the radio plays through its box. */
+  private boxRadio = false;
   private impacts = new ImpactDetector();
   private staticVoice: LoopVoice | null = null;
+  private readonly hornState = new HornState();
+  private hornVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
   private unlocking: Promise<void> | null = null;
   private unlocked = false;
@@ -101,7 +106,7 @@ export class GameAudio {
       this.d.mixer.suspend();
     } else {
       this.d.mixer.resume();
-      if (this.inCar) this.d.radio.resume();
+      if (this.inCar || this.boxRadio) this.d.radio.resume();
     }
   }
 
@@ -141,6 +146,7 @@ export class GameAudio {
     this.d.radio.tune(null);
     this.d.tuner.exitCar();
     this.vehicle.stop();
+    this.stopHorn();
     if (running) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
@@ -149,13 +155,13 @@ export class GameAudio {
 
   /** Next (1) or previous (-1) station; only in a car with the engine running. */
   radioStep(dir: 1 | -1): void {
-    if (!this.engineOn) return;
+    if (!this.radioOn) return;
     this.tune(dir === 1 ? this.d.tuner.next() : this.d.tuner.prev());
   }
 
   /** Radio wheel pick; only with the engine running. Same station as now: no retune, just the name again. */
   radioSelect(id: StationId | null): void {
-    if (!this.engineOn) return;
+    if (!this.radioOn) return;
     if (id === this.d.tuner.current) this.d.flash(stationLabel(id));
     else this.tune(this.d.tuner.select(id));
   }
@@ -183,15 +189,25 @@ export class GameAudio {
     this.vehicle.update({ speed: s.forward, throttle: s.throttle, skid: skidAmount(s.forward, s.lateral, s.handbrake) }, cueDt);
   }
 
-  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked). */
-  mountBike(): void {
+  /** Getting on a bike: its rolling and chain loops (once loaded + unlocked); `soundBox`: the radio comes on through its box. */
+  mountBike(soundBox = false): void {
     this.riding = true;
     this.startLoops();
+    if (soundBox) {
+      this.boxRadio = true;
+      this.tune(this.d.tuner.enterCar());
+    }
   }
 
   dismountBike(): void {
     this.riding = false;
     this.bike.stop();
+    if (this.boxRadio) {
+      this.boxRadio = false;
+      this.stopStatic();
+      this.d.radio.tune(null);
+      this.d.tuner.exitCar();
+    }
   }
 
   /** On a bike, every frame: rolling, chain and freewheel. Speed in m/s. */
@@ -202,6 +218,15 @@ export class GameAudio {
   /** H on the bike. */
   bell(): void {
     this.bike.bell();
+  }
+
+  /** In a car, every frame: the horn sounds while H is held (a tap still gives a short toot). Works without the engine. */
+  horn(held: boolean, dt: number): void {
+    const on = this.inCar && this.hornState.update(this.inCar && held, Math.min(dt, MAX_DT));
+    if (on && !this.hornVoice && this.loaded && this.unlocked) {
+      this.hornVoice = this.d.mixer.loop('carHorn', 'sfx');
+      this.hornVoice.setGain(MIX.horn);
+    } else if (!on) this.stopHorn();
   }
 
   /** Fell off the bike. */
@@ -217,10 +242,21 @@ export class GameAudio {
     }
   }
 
+  /** The radio is on: engine running, or sitting on the sound Long John. */
+  private get radioOn(): boolean {
+    return this.engineOn || this.boxRadio;
+  }
+
   private tune(id: StationId | null): void {
     this.stopStatic(); // Radio never reports 'playing' after a retune
     this.d.radio.tune(id);
     this.d.flash(stationLabel(id));
+  }
+
+  private stopHorn(): void {
+    this.hornVoice?.stop();
+    this.hornVoice = null;
+    this.hornState.reset();
   }
 
   private stopStatic(): void {

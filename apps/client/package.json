@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@colyseus/sdk": "0.18.10",
+    "@dgreenheck/ez-tree": "1.1.0",
     "@nn/shared": "*",
     "three": "0.187.0"
   },

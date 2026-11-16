@@ -29,5 +29,9 @@ or inside Blender (MCP): `exec(open(PATH).read(), {'__file__': PATH})`. Each run
 | `pedal_l`, `pedal_r` | crank | pedal axle (the client counter-rotates them to stay level) |
 | `light_front`, `light_rear` | frame/fork | lamps; materials `lamp_front` / `lamp_rear` glow at night |
 | `seat`, `grip_l`, `grip_r` | frame / bar | empties: where the rider sits and holds the bar |
+| `disco` | frame | optional: mirror ball (sound Long John); spins about the vertical when switched on (L) |
 
-Material `paint` is the frame colour; the client recolours it per bike.
+Material `paint` is the frame colour; the client recolours it per bike. Material `mirror` (disco ball) shimmers while the ball is on.
+
+`soundjohn/` reuses `longjohn/build.py` (`build(coll_name, cargo)`) and adds the sound box and the disco ball; there is
+exactly one in the world (pipeline `SOUND_BIKE`, in front of Neusser Str. 381), and riding it plays the radio.

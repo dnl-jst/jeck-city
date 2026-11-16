@@ -1,5 +1,7 @@
-import { Box3, Group, Mesh, MeshStandardMaterial, Object3D, SpotLight, Vector3, type Material } from 'three';
+import { Box3, Color, Group, Mesh, MeshStandardMaterial, Object3D, SpotLight, Vector3, type Material } from 'three';
 import type { BikeState, BikeType } from '@nn/shared';
+
+const DISCO_HUE = new Color();
 
 /** Wheel rotation (rad) for a distance rolled (m) on a wheel of `radius` (m). */
 export const wheelSpin = (distance: number, radius: number): number => distance / radius;
@@ -13,6 +15,14 @@ const LAMP_GLOW = 3;
 const WHEELS = ['wheel_front', 'wheel_front_l', 'wheel_front_r', 'wheel_rear'];
 /** The shown lean follows the physics lean with this time constant (s): the bike tips in and out softly. */
 const LEAN_TAU = 0.22;
+
+/** Disco ball (node `disco`, sound Long John): spin (rad/s), mirror shimmer and its light dots. */
+const DISCO_SPIN = 1.3;
+const DISCO_GLOW = 0.9;
+const DISCO_COLORS = [0xff2d6f, 0x2de1ff, 0xfff04a, 0x7cff4a, 0xb04aff, 0xff8a2d, 0x2d6fff, 0xff4ae0];
+/** Spots per colour: narrow beams fanned round the ball, mostly down onto the street and the house walls. */
+const DISCO_ELEVATION = [-0.75, -0.4, -0.15, 0.1];
+const DISCO_DOT = { angle: 0.06, penumbra: 0.35, distance: 22, decay: 1.6, intensity: 1500 };
 
 /**
  * The ridden bike: a clone of a bike model (nodes per data/models/bikes/README.md) under a pose group (position,
@@ -29,6 +39,12 @@ export class BikeRig {
   private readonly nodes = new Map<string, Object3D>();
   private readonly radius = new Map<string, number>();
   private spot: SpotLight | null = null;
+  private disco: Object3D | null = null;
+  private discoMirror: MeshStandardMaterial | null = null;
+  private readonly discoDots: SpotLight[] = [];
+  private discoT = 0;
+  /** Disco ball spinning with its light dots (only bikes with a `disco` node). */
+  discoOn = false;
   private lean = 0;
   private snap = false;
 
@@ -49,12 +65,16 @@ export class BikeRig {
       const mesh = o as Mesh;
       if (!mesh.isMesh) return;
       const swap = (m: Material): Material => {
-        if (!(m instanceof MeshStandardMaterial) || !['paint', 'lamp_front', 'lamp_rear'].includes(m.name)) return m;
+        if (!(m instanceof MeshStandardMaterial) || !['paint', 'lamp_front', 'lamp_rear', 'mirror'].includes(m.name)) return m;
         let c = copies.get(m);
         if (!c) {
           c = m.clone();
           copies.set(m, c);
           if (m.name === 'paint') this.paint = c;
+          else if (m.name === 'mirror') {
+            c.emissiveIntensity = 0;
+            this.discoMirror = c;
+          }
           else {
             c.emissive.copy(c.color);
             c.emissiveIntensity = 0;
@@ -77,6 +97,32 @@ export class BikeRig {
       spot.visible = false;
       this.spot = spot;
     }
+    const disco = this.nodes.get('disco');
+    if (disco) {
+      this.disco = disco;
+      DISCO_COLORS.forEach((col, k) => {
+        const az = (2 * Math.PI * k) / DISCO_COLORS.length;
+        const el = DISCO_ELEVATION[k % DISCO_ELEVATION.length]!;
+        const d = DISCO_DOT;
+        const s = new SpotLight(col, d.intensity, d.distance, d.angle, d.penumbra, d.decay);
+        s.target.position.set(Math.cos(az) * Math.cos(el) * 5, Math.sin(el) * 5, Math.sin(az) * Math.cos(el) * 5);
+        disco.add(s, s.target);
+        s.visible = false;
+        this.discoDots.push(s);
+      });
+    }
+  }
+
+  /** Whether this bike carries a disco ball. */
+  get hasDisco(): boolean {
+    return this.disco !== null;
+  }
+
+  /** Disco ball on (spins, shimmers, throws coloured dots) or off. */
+  setDisco(on: boolean): void {
+    this.discoOn = on && this.hasDisco;
+    for (const s of this.discoDots) s.visible = this.discoOn;
+    if (this.discoMirror) this.discoMirror.emissiveIntensity = this.discoOn ? DISCO_GLOW : 0;
   }
 
   /** Shows the target lean at once on the next update (getting on, tests). */
@@ -102,6 +148,11 @@ export class BikeRig {
       if (o) o.rotation.y = yaw;
     }
     for (const [w, r] of this.radius) this.nodes.get(w)!.rotation.x += wheelSpin(s.speed * dt, r);
+    if (this.discoOn && this.disco) {
+      this.discoT += dt;
+      this.disco.rotation.y += DISCO_SPIN * dt;
+      this.discoMirror?.emissive.copy(DISCO_HUE.setHSL((this.discoT * 0.25) % 1, 0.9, 0.5));
+    }
     const crank = this.nodes.get('crank');
     if (crank) crank.rotation.x = s.crank;
     for (const p of ['pedal_l', 'pedal_r']) {

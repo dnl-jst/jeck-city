@@ -11,6 +11,7 @@ import { fetchOk, WorldLoader } from './loader';
 import { parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { Props } from './props';
+import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
@@ -298,7 +299,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
-  props = new Props(scene, m, terrain);
+  props = new Props(scene, m, terrain, await loadTreeVariants());
   lighting = new Lighting(
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),

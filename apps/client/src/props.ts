@@ -1,9 +1,10 @@
 import {
   AdditiveBlending, BoxGeometry, BufferAttribute, BufferGeometry, CanvasTexture, Color, CylinderGeometry,
-  DoubleSide, DynamicDrawUsage, Group, IcosahedronGeometry, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial,
+  DoubleSide, DynamicDrawUsage, Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial,
   Object3D, Points, PointsMaterial, Quaternion, SRGBColorSpace, Vector3, type Scene, type Texture,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { TreeLevel, TreeVariant } from './trees';
 import { chunkKey, heightAt, propHash as hash, treeScale, type PropPose, type TerrainGrid, type WorldManifest } from '@nn/shared';
 
 /** Street trees are drawn only within this distance of the camera (m)… */
@@ -85,16 +86,6 @@ function lampGeometries(): { metal: BufferGeometry; glass: BufferGeometry } {
   const finial = new CylinderGeometry(0.02, 0.05, 0.25, 6).translate(0, 5.6 + 0.42 + 0.12, 0);
   const glass = new CylinderGeometry(0.3, 0.17, 0.58, 8).translate(0, 5.6, 0);
   return { metal: merge([base, mast, collar, cap, finial]), glass };
-}
-
-/** Low-poly tree: trunk and a crown of three blobs, about 9 m at scale 1. */
-function treeGeometries(): { trunk: BufferGeometry; crown: BufferGeometry } {
-  const trunk = new CylinderGeometry(0.16, 0.24, 4.2, 6).translate(0, 2.1, 0);
-  const blob = (r: number, x: number, y: number, z: number) => new IcosahedronGeometry(r, 1).translate(x, y, z);
-  const crown = merge([blob(2.5, 0, 5.6, 0), blob(2.0, 1.3, 7.0, 0.6), blob(1.8, -1.0, 7.4, -0.8)]);
-  // flat shading via per-face normals of the non-indexed geometry
-  crown.computeVertexNormals();
-  return { trunk, crown };
 }
 
 /** Radial glow sprite for the lamp halos. */
@@ -288,8 +279,6 @@ export class Props {
   /** Additive halo sprites over the lanterns; Lighting drives the opacity. */
   readonly halo = new PointsMaterial({ size: 4, map: glowTexture(), transparent: true, depthWrite: false, blending: AdditiveBlending, opacity: 0, fog: true });
   private readonly lampMetal = new MeshStandardMaterial({ color: 0x2c3530, roughness: 0.55, metalness: 0.6 });
-  private readonly trunkMat = new MeshStandardMaterial({ color: 0x5a4636, roughness: 0.95 });
-  private readonly crownMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, flatShading: true });
   private readonly stopFrame = new MeshStandardMaterial({ color: 0x4a5258, roughness: 0.5, metalness: 0.15 });
   private readonly stopGlass = new MeshStandardMaterial({ color: 0xbcd0d8, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.25, depthWrite: false });
   /** Lantern glass of a knocked-down lamp: dark, it no longer glows. */
@@ -299,8 +288,8 @@ export class Props {
   private readonly fallen = new Map<number, Group>();
   private loaded: ReadonlySet<string> = new Set();
   private readonly lamps: [InstancedMesh, InstancedMesh];
-  /** Trunks and crowns: trees within TREE_SHADOW_RADIUS (casting shadows), and those beyond (not casting). */
-  private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] };
+  /** Per tree variant, bark and leaves: trees within TREE_SHADOW_RADIUS (casting shadows), and those beyond (not casting). */
+  private readonly trees: { near: [InstancedMesh, InstancedMesh]; far: [InstancedMesh, InstancedMesh] }[];
   private lastTrees: XZ | null = null;
   private readonly haloPoints: Points;
   /** Tram shelters in the scene, by index in manifest.tramStops (names need not be unique). */
@@ -308,20 +297,19 @@ export class Props {
   /** Shop sign boards; their lettering glows at night (setNight). */
   private readonly signMat = new MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0, roughness: 0.55 });
 
-  constructor(private readonly scene: Scene, private readonly manifest: WorldManifest, private readonly terrain: TerrainGrid) {
+  constructor(private readonly scene: Scene, private readonly manifest: WorldManifest, private readonly terrain: TerrainGrid, treeVariants: readonly TreeVariant[]) {
     const signs = buildShopSigns(manifest.shops, this.signMat);
     if (signs) scene.add(signs);
     const lg = this.lampGeo = lampGeometries();
-    const tg = treeGeometries();
     const n = manifest.lamps.length, t = manifest.trees.length;
     this.lamps = [new InstancedMesh(lg.metal, this.lampMetal, n), new InstancedMesh(lg.glass, this.lampGlass, n)];
-    const pair = (): [InstancedMesh, InstancedMesh] => {
-      const p: [InstancedMesh, InstancedMesh] = [new InstancedMesh(tg.trunk, this.trunkMat, t), new InstancedMesh(tg.crown, this.crownMat, t)];
+    const pair = (v: TreeVariant, l: TreeLevel): [InstancedMesh, InstancedMesh] => {
+      const p: [InstancedMesh, InstancedMesh] = [new InstancedMesh(l.bark, v.barkMat, t), new InstancedMesh(l.leaves, v.leafMat, t)];
       p[1].setColorAt(0, new Color()); // allocate instanceColor
-      p[1].receiveShadow = true;
+      p[0].receiveShadow = p[1].receiveShadow = true;
       return p;
     };
-    this.trees = { near: pair(), far: pair() };
+    this.trees = treeVariants.map((v) => ({ near: pair(v, v.near), far: pair(v, v.far) }));
     const haloGeo = new BufferGeometry().setAttribute('position', new BufferAttribute(new Float32Array(n * 3), 3).setUsage(DynamicDrawUsage));
     this.haloPoints = new Points(haloGeo, this.halo);
     this.haloPoints.frustumCulled = false;
@@ -331,10 +319,12 @@ export class Props {
       m.frustumCulled = false; // instances spread over the whole loaded area
       scene.add(m);
     }
-    for (const m of [...this.trees.near, ...this.trees.far]) {
-      m.count = 0;
-      m.castShadow = this.trees.near.includes(m);
-      scene.add(m); // frustum-culled by the bounding sphere of the drawn instances
+    for (const v of this.trees) {
+      for (const m of [...v.near, ...v.far]) {
+        m.count = 0;
+        m.castShadow = v.near.includes(m);
+        scene.add(m); // frustum-culled by the bounding sphere of the drawn instances
+      }
     }
     scene.add(this.haloPoints);
   }
@@ -435,22 +425,32 @@ export class Props {
     const loaded = this.loaded;
     const sets = treeSets(this.manifest.trees, x, z, (tx, tz) => loaded.has(chunkKey(tx, tz)));
     const m = new Matrix4(), c = new Color();
-    for (const [which, idx] of [['near', sets.near], ['far', sets.far]] as const) {
-      const [trunk, crown] = this.trees[which];
-      idx.forEach((ti, i) => {
+    const nv = this.trees.length;
+    for (const which of ['near', 'far'] as const) {
+      const byVariant: number[][] = this.trees.map(() => []);
+      for (const ti of sets[which]) {
         const [tx, tz] = this.manifest.trees[ti]!;
-        treeMatrix(this.terrain, tx, tz, m);
-        trunk.setMatrixAt(i, m);
-        crown.setMatrixAt(i, m);
-        c.setHSL(0.24 + 0.06 * hash(tx, tz, 5), 0.42 + 0.15 * hash(tx, tz, 6), 0.2 + 0.08 * hash(tx, tz, 7));
-        crown.setColorAt(i, c);
-      });
-      for (const im of [trunk, crown]) {
-        im.count = idx.length;
-        im.instanceMatrix.needsUpdate = true;
-        im.computeBoundingSphere();
+        byVariant[Math.min(nv - 1, Math.floor(hash(tx, tz, 8) * nv))]!.push(ti);
       }
-      crown.instanceColor!.needsUpdate = true;
+      this.trees.forEach((v, vi) => {
+        const [bark, leaves] = v[which];
+        const idx = byVariant[vi]!;
+        idx.forEach((ti, i) => {
+          const [tx, tz] = this.manifest.trees[ti]!;
+          treeMatrix(this.terrain, tx, tz, m);
+          bark.setMatrixAt(i, m);
+          leaves.setMatrixAt(i, m);
+          // leaf texture is already green: tint only slightly (hue, brightness)
+          c.setHSL(0.2 + 0.08 * hash(tx, tz, 5), 0.35 + 0.2 * hash(tx, tz, 6), 0.78 + 0.18 * hash(tx, tz, 7));
+          leaves.setColorAt(i, c);
+        });
+        for (const im of [bark, leaves]) {
+          im.count = idx.length;
+          im.instanceMatrix.needsUpdate = true;
+          im.computeBoundingSphere();
+        }
+        leaves.instanceColor!.needsUpdate = true;
+      });
     }
   }
 }

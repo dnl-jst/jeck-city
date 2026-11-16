@@ -56,7 +56,7 @@ export const TUNING = {
     /** Damping of a knocked-down lamp, so it comes to rest within a few seconds. */
     lampLinearDamping: 1,
     lampAngularDamping: 2,
-    /** Tree trunk collider at scale 1 (render trunk: radius 0.16–0.24 m, 4.2 m high). */
+    /** Tree trunk collider at scale 1 (render trunk: TREE_TRUNK_RADIUS in client trees.ts). */
     trunkRadius: 0.24,
     trunkHeight: 4.2,
   },

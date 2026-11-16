@@ -1,4 +1,5 @@
 import { synthBell, synthNoiseLoop, synthTick } from './bike-sound';
+import { synthHorn } from './horn';
 import { SOUNDS, type FileSoundId, type SoundId, type SynthSoundId } from './sounds';
 
 /** All mix levels in one place; callers multiply their voice gains by these. */
@@ -16,6 +17,7 @@ export const MIX = {
   bikeChain: 0.18,
   bikeTick: 0.8,
   bikeBell: 0.7,
+  horn: 0.6,
 } as const;
 
 /** Synthesised samples (made once the AudioContext exists): sample rate → mono samples. */
@@ -24,6 +26,7 @@ const SYNTH: Record<SynthSoundId, (rate: number) => Float32Array> = {
   bikeBell: synthBell,
   bikeRoll: (r) => synthNoiseLoop(r, 1.5, 700),
   bikeChain: (r) => synthNoiseLoop(r, 1, 2400),
+  carHorn: synthHorn,
 };
 
 export interface LoopVoice {

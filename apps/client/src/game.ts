@@ -5,7 +5,7 @@ import {
 } from '@nn/shared';
 import { BikeRig } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { RIDE_HINT } from './hud';
+import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
@@ -36,7 +36,7 @@ export type GameContext = {
 };
 
 /** Upper-body posture per bike type. */
-const POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright' };
+const POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
 
 const STATIC_ONLY = staticWorldFilter();
 
@@ -188,7 +188,7 @@ export class Game {
     }
     this.mapInput = this.map.open ? { dx: mouse.dx, dy: mouse.dy, notches } : { dx: 0, dy: 0, notches: 0 };
     if (this.map.takeClosed()) input.clearPresses();
-    let use = false, jump = false;
+    let use = false, jump = false, honk = false;
     if (this.flying) {
       this.fly.turn(mouse.dx, mouse.dy);
       this.fly.update(dt);
@@ -196,7 +196,7 @@ export class Game {
       const rPressed = input.consume('KeyR'); // a press+release between two frames still counts as held once
       if (input.takeBlur()) this.closeWheel(); // window blur: the wheel is cancelled, not committed
       if (this.mode === 'drive' && this.engine !== 'running') this.closeWheel(); // R does nothing until the engine runs
-      else if (this.mode === 'drive') {
+      else if (this.radioOn) {
         this.wheelState = this.wheel.update({ held: input.held('KeyR') || rPressed, dx: mouse.dx, dy: mouse.dy, dt, current: audio?.station ?? null });
         if (this.wheelState.tap) audio?.radioStep(1);
         if (this.wheelState.commit !== undefined) audio?.radioSelect(this.wheelState.commit);
@@ -206,10 +206,17 @@ export class Game {
       const busy = this.figure.busy; // fallen off: no control until up again
       // Space: jump on foot, hop on the bike
       if (input.consume('Space') && !busy && this.mode !== 'drive') jump = true;
-      if (input.consume('KeyH') && this.mode === 'ride') audio?.bell();
+      const hPressed = input.consume('KeyH'); // a tap between two frames still honks
+      if (hPressed && this.mode === 'ride') audio?.bell();
+      if (input.consume('KeyL') && this.mode === 'ride' && this.rig?.hasDisco) {
+        this.rig.setDisco(!this.rig.discoOn);
+        this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
+      }
+      honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
       if (input.consume('KeyE') && !busy) use = true;
-      if (this.mode === 'drive') for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
+      if (this.radioOn) for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
+    audio?.horn(honk, dt);
     const still = this.flying || this.figure.busy;
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
@@ -334,8 +341,8 @@ export class Game {
     }
     this.follow.setDriving(true, s.heading, 'bike');
     this.mode = 'ride';
-    this.ctx.hud.setHint(RIDE_HINT);
-    this.ctx.audio?.mountBike();
+    this.ctx.hud.setHint(ridden.type === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT);
+    this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
   /** Off the bike (heading: the bike's): stepped off, or crashed and fell. */
@@ -344,6 +351,7 @@ export class Game {
     if (this.rig) {
       this.ctx.scene.remove(this.rig.root);
       this.rig.setLights(0);
+      this.rig.setDisco(false);
     }
     this.rig = null;
     this.ctx.scene.add(this.figure.group);
@@ -351,6 +359,7 @@ export class Game {
     this.follow.setDriving(false);
     this.mode = 'walk';
     this.airTime = 0;
+    this.closeWheel();
     this.ctx.hud.setHint('');
     this.ctx.audio?.dismountBike();
     if (crash) {
@@ -448,6 +457,11 @@ export class Game {
     this.closeWheel();
     if (this.flying) this.fly.setHeading(this.follow.yaw, this.follow.pitch);
     else this.follow.snap();
+  }
+
+  /** The radio can be tuned: in a car with the engine running, or on the sound Long John. */
+  private get radioOn(): boolean {
+    return (this.mode === 'drive' && this.engine === 'running') || (this.mode === 'ride' && this.bikeType() === 'soundjohn');
   }
 
   private closeWheel(): void {

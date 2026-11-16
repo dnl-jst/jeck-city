@@ -300,3 +300,45 @@ test('bike loops wait for unlock', async () => {
   audio.ride({ speed: 6, pedalling: true, grounded: true }, 1 / 60);
   expect(voices.find((v) => v.id === 'bikeRoll')).toBeDefined();
 });
+
+test('horn: loop while held in the car, stops on release and on getting out, never on foot', async () => {
+  const { audio, voices } = setup();
+  audio.unlock();
+  await audio.load();
+  await flush();
+  audio.horn(true, 0.016);
+  expect(voices.filter((v) => v.id === 'carHorn')).toHaveLength(0);
+  audio.enterCar();
+  audio.horn(true, 0.016);
+  audio.horn(true, 0.016);
+  const horns = () => voices.filter((v) => v.id === 'carHorn');
+  expect(horns()).toHaveLength(1);
+  expect(horns()[0]!.gain).toBeGreaterThan(0);
+  audio.horn(false, 0.1);
+  audio.horn(false, 0.1); // the tap minimum has run out
+  expect(horns()[0]!.stopped).toBe(true);
+  audio.horn(true, 0.016);
+  expect(horns()).toHaveLength(2);
+  audio.exitCar();
+  expect(horns()[1]!.stopped).toBe(true);
+});
+
+test('sound Long John: radio on while sitting on it, tunable, off on getting off; plain bikes stay silent', () => {
+  const { audio, tunes } = setup();
+  audio.mountBike();
+  expect(tunes).toEqual([]);
+  expect(audio.station).toBeNull();
+  audio.radioStep(1);
+  expect(tunes).toEqual([]);
+  audio.dismountBike();
+  audio.mountBike(true);
+  expect(tunes).toEqual(['koellefornia']);
+  expect(audio.station).toBe('koellefornia');
+  audio.radioStep(1);
+  expect(tunes).toEqual(['koellefornia', 'radiokoeln']);
+  audio.dismountBike();
+  expect(tunes.at(-1)).toBeNull();
+  expect(audio.station).toBeNull();
+  audio.radioStep(1);
+  expect(tunes).toHaveLength(3);
+});

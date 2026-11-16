@@ -11,7 +11,7 @@ export const STATIONS: readonly { id: StationId; name: string; url: string }[] =
 export const stationLabel = (s: StationId | null): string =>
   s === null ? 'Radio aus' : (STATIONS.find((st) => st.id === s)?.name ?? 'Radio aus');
 
-/** Remembers the chosen station (or off); changes only while sitting in a car. */
+/** Remembers the chosen station (or off); changes only while seated at a radio (car, or the sound Long John). */
 export class RadioTuner {
   current: StationId | null = 'koellefornia';
   inCar = false;
