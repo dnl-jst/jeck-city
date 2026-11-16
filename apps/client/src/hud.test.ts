@@ -25,7 +25,7 @@ test('the hidden loading box lets clicks through to the canvas (pointer lock)', 
 });
 
 test('controls hint names radio and mute keys', () => {
-  expect(CONTROLS_HINT).toBe('WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · H hupen · R Radio · N Ton · M Karte · Maus umsehen (klicken)');
+  expect(CONTROLS_HINT).toBe('WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · H hupen · R Radio · N Ton · M Karte · G Grafik · Maus umsehen (klicken)');
 });
 
 test('controls hint names the map key', () => {

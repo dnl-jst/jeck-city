@@ -1,0 +1,77 @@
+/**
+ * Graphics quality levels. 'high' is the full look (all lights, big shadow maps, up to 2× pixel ratio); 'medium' (the
+ * default) and 'low' trade the most expensive parts for frame rate: every light in the scene is evaluated in every
+ * pixel of every standard material (also at intensity 0), so fewer lights is the biggest saving, then resolution and
+ * shadows. Everything but antialiasing switches live (G); antialiasing is a WebGL context option, read at startup.
+ */
+export type QualityLevel = 'low' | 'medium' | 'high';
+
+export const QUALITY_LEVELS: readonly QualityLevel[] = ['low', 'medium', 'high'];
+
+export const QUALITY_LABEL: Record<QualityLevel, string> = { low: 'Niedrig', medium: 'Mittel', high: 'Hoch' };
+
+export type Quality = {
+  /** Upper bound of the renderer pixel ratio (devicePixelRatio is capped at this). */
+  pixelRatio: number;
+  /** MSAA (startup only). */
+  antialias: boolean;
+  /** Real point lights at the nearest street lamps. */
+  lampLights: number;
+  /** Disco ball spot lights (of 8; picked evenly round the ball). */
+  discoDots: number;
+  /** The own car's red tail-lamp spot lights (the lamp glass and glare glow regardless). */
+  tailLights: boolean;
+  /** Shadow map size of the own car's headlight beams; 0 = the beams cast no shadows. */
+  beamShadow: number;
+  /** Sun shadow map size. */
+  sunShadow: number;
+  /** Sun shadows are cast within this radius (m) around the camera. */
+  shadowRadius: number;
+  /** Street trees cast shadows within this radius (m). */
+  treeShadowRadius: number;
+};
+
+export const QUALITY: Record<QualityLevel, Quality> = {
+  high: { pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80 },
+  medium: { pixelRatio: 1.5, antialias: true, lampLights: 5, discoDots: 4, tailLights: false, beamShadow: 512, sunShadow: 2048, shadowRadius: 100, treeShadowRadius: 50 },
+  low: { pixelRatio: 1, antialias: false, lampLights: 3, discoDots: 2, tailLights: false, beamShadow: 0, sunShadow: 1024, shadowRadius: 70, treeShadowRadius: 30 },
+};
+
+/** The most of each light kind any level uses: they are all created once, the level only hides some. */
+export const MAX_LAMP_LIGHTS = Math.max(...QUALITY_LEVELS.map((l) => QUALITY[l].lampLights));
+
+export const DEFAULT_QUALITY: QualityLevel = 'medium';
+
+/** localStorage key of the chosen level (a per-viewer convenience; missing storage = the default). */
+const QUALITY_KEY = 'nn.quality';
+
+/** The level from `?quality=` if valid, else the stored one, else the default. */
+export function storedQuality(param: string | null = null): QualityLevel {
+  if (param && (QUALITY_LEVELS as readonly string[]).includes(param)) return param as QualityLevel;
+  try {
+    const v = localStorage.getItem(QUALITY_KEY);
+    if (v && (QUALITY_LEVELS as readonly string[]).includes(v)) return v as QualityLevel;
+  } catch {
+    // storage blocked: default
+  }
+  return DEFAULT_QUALITY;
+}
+
+export function storeQuality(v: QualityLevel): void {
+  try {
+    localStorage.setItem(QUALITY_KEY, v);
+  } catch {
+    // storage blocked: the choice just is not remembered
+  }
+}
+
+/** The next level for the G key: low → medium → high → low. */
+export const nextQuality = (v: QualityLevel): QualityLevel => QUALITY_LEVELS[(QUALITY_LEVELS.indexOf(v) + 1) % QUALITY_LEVELS.length]!;
+
+/** Which of `total` lights (fanned evenly round a circle) stay on when only `n` may: an even spread of indices. */
+export function spreadIndices(total: number, n: number): Set<number> {
+  const out = new Set<number>();
+  const k = Math.max(0, Math.min(total, n));
+  for (let i = 0; i < k; i++) out.add(Math.floor((i * total) / k));
+  return out;
+}

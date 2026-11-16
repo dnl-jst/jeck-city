@@ -7,6 +7,7 @@ import {
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
+import { nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
@@ -116,24 +117,28 @@ function bootFailed(err: unknown): never {
 }
 // WebGL2 is checked before anything else is set up
 if (!document.createElement('canvas').getContext('webgl2')) bootFailed(new NoWebGLError());
+/** Graphics quality (G cycles it; ?quality=low|medium|high overrides the stored choice). */
+let qualityLevel: QualityLevel = storedQuality(params.get('quality'));
+/** Antialiasing is fixed with the WebGL context: a level switch changes it only on the next page load. */
+const bootAntialias = QUALITY[qualityLevel].antialias;
 let renderer: WebGLRenderer;
 try {
-  renderer = new WebGLRenderer({ canvas, antialias: true, reversedDepthBuffer: true });
+  renderer = new WebGLRenderer({ canvas, antialias: bootAntialias, reversedDepthBuffer: true });
 } catch (err) {
   bootFailed(new NoWebGLError(String(err)));
 }
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 // PCFSoftShadowMap was removed in three r18x (falls back with a warning); PCFShadowMap + radius is the soft path
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = PCFShadowMap;
-window.__nnInfo = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles });
+window.__nnInfo = () => ({ calls: renderer.info.render.calls, triangles: renderer.info.render.triangles, quality: qualityLevel });
 
 const scene = new Scene();
 
 const camera = new PerspectiveCamera(CAMERA_FOV, 1, 0.3, 2000);
 function resize(): void {
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY[qualityLevel].pixelRatio));
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -204,6 +209,14 @@ if (debug) {
 }
 
 let lighting: Lighting | null = null;
+/** Applies the current quality level to the renderer, the lights, the shadows and the trees (all live but MSAA). */
+function applyQuality(): void {
+  const q = QUALITY[qualityLevel];
+  resize();
+  lighting?.setQuality(q);
+  props?.setTreeShadowRadius(q.treeShadowRadius);
+  game?.setQuality(q);
+}
 let props: Props | null = null;
 let propsRevision = -1;
 let sun = currentSun();
@@ -223,6 +236,13 @@ renderer.setAnimationLoop((t: number) => {
   const dt = Math.min(timer.getDelta(), 0.1);
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
+    if (input.consume('KeyG')) {
+      qualityLevel = nextQuality(qualityLevel);
+      storeQuality(qualityLevel);
+      applyQuality();
+      const aa = QUALITY[qualityLevel].antialias === bootAntialias ? '' : ' (Kantenglättung ab dem nächsten Laden)';
+      hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
+    }
     game.frame(dt, nightFactor);
     for (const i of game.takeFallenLamps()) {
       props.knockDown(i);
@@ -376,6 +396,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     session = new OfflineSession(sim, OFFLINE_ME);
   }
   game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
+  applyQuality(); // before the first frame with the world's lights: materials compile once, for this level
   if (devCam && allowed.fly && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof
     camera.position.set(devCam.x, devCam.y, devCam.z);

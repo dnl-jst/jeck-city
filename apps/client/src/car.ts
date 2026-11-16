@@ -428,6 +428,19 @@ export class DrivenCar {
     this.tailK = (brake ? 1 : 0.3 * night) * power;
   }
 
+  /**
+   * Quality level: the tail-lamp spots shown or hidden, the beams' shadow map size (0 = no beam shadows). Hidden lights
+   * and fewer shadow maps cost nothing in the shaders; a change recompiles the materials (only on a level switch).
+   */
+  setQuality({ tailLights, beamShadow }: { tailLights: boolean; beamShadow: number }): void {
+    for (const l of this.tails) l.visible = tailLights;
+    for (const l of this.beams) {
+      l.castShadow = beamShadow > 0;
+      if (beamShadow > 0) l.shadow.mapSize.set(beamShadow, beamShadow);
+      l.shadow.needsUpdate = true;
+    }
+  }
+
   private setBeams(k: number): void {
     const on = k > 0.02;
     for (const l of this.beams) {

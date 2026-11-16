@@ -4,11 +4,7 @@ import {
 } from 'three';
 import type { SunState } from '@nn/shared';
 import { LAMP_LIGHT_Y } from './props';
-
-/** Shadows are cast within this radius (m) around the camera. */
-export const SHADOW_RADIUS = 150;
-/** Number of real point lights at the nearest lamps. */
-export const LAMP_LIGHTS = 8;
+import { MAX_LAMP_LIGHTS, QUALITY, type Quality } from './quality';
 /** The lamp light pool is reassigned when the camera has moved farther than this (m). */
 export const LAMP_REASSIGN = 10;
 
@@ -108,6 +104,10 @@ export class Lighting {
   /** Knocked-down lamps: no light. */
   private readonly out = new Set<number>();
   private readonly sunDir = new Vector3();
+  /** Pool lights in use (the rest stay hidden: hidden lights cost nothing in the shaders). */
+  private lampCount: number = MAX_LAMP_LIGHTS;
+  /** Sun shadows are cast within this radius (m) around the camera. */
+  private shadowRadius = 0;
 
   constructor(
     private readonly scene: Scene,
@@ -122,9 +122,6 @@ export class Lighting {
     scene.fog = this.fog;
     scene.background = null;
     const s = this.sun.shadow;
-    s.mapSize.set(2048, 2048);
-    s.camera.left = s.camera.bottom = -SHADOW_RADIUS;
-    s.camera.right = s.camera.top = SHADOW_RADIUS;
     s.camera.near = 1;
     s.camera.far = 900;
     s.bias = -0.0004;
@@ -148,12 +145,29 @@ export class Lighting {
     this.sky.renderOrder = -10;
     scene.add(this.sky);
 
-    for (let i = 0; i < LAMP_LIGHTS; i++) {
+    for (let i = 0; i < MAX_LAMP_LIGHTS; i++) {
       const l = new PointLight(0xffb36a, 0, 32, 2);
       l.position.set(0, -100, 0);
       this.pool.push(l);
       scene.add(l);
     }
+    this.setQuality(QUALITY.high);
+  }
+
+  /**
+   * Lamp lights and sun shadow of a quality level. A changed number of lights recompiles the scene's materials
+   * (a short stall), so this runs only at startup and when the player switches the level.
+   */
+  setQuality(q: Quality): void {
+    this.lampCount = Math.min(q.lampLights, MAX_LAMP_LIGHTS);
+    this.pool.forEach((l, i) => { l.visible = i < this.lampCount; });
+    this.poolAt = null; // reassign the pool on the next update
+    const s = this.sun.shadow;
+    s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
+    this.shadowRadius = q.shadowRadius;
+    s.camera.left = s.camera.bottom = -q.shadowRadius;
+    s.camera.right = s.camera.top = q.shadowRadius;
+    s.camera.updateProjectionMatrix();
   }
 
   /** Lamp i was knocked over: it no longer gets a light. */
@@ -190,12 +204,12 @@ export class Lighting {
     this.hemi.groundColor.copy(mood.hemiGround);
     this.hemi.intensity = mood.hemiI;
 
-    // sun: directional light with a shadow box of ±SHADOW_RADIUS around the camera, snapped to texels
+    // sun: directional light with a shadow box of ±shadowRadius around the camera, snapped to texels
     const lit = sun.altitude > 0;
     this.sun.color.copy(mood.sun);
     this.sun.intensity = mood.sunI;
     this.sun.castShadow = lit;
-    const texel = (2 * SHADOW_RADIUS) / 2048;
+    const texel = (2 * this.shadowRadius) / this.sun.shadow.mapSize.x;
     const t = this.sun.target.position.set(Math.round(cameraPos.x / texel) * texel, cameraPos.y, Math.round(cameraPos.z / texel) * texel);
     this.sun.position.copy(t).addScaledVector(dir, 400);
     this.sun.target.updateMatrixWorld();
@@ -208,7 +222,7 @@ export class Lighting {
     const at = this.poolAt;
     if (!at || Math.hypot(cameraPos.x - at.x, cameraPos.z - at.z) > LAMP_REASSIGN) {
       this.poolAt = { x: cameraPos.x, z: cameraPos.z };
-      const idx = nearestLamps(this.lamps, cameraPos.x, cameraPos.z, LAMP_LIGHTS, this.out);
+      const idx = nearestLamps(this.lamps, cameraPos.x, cameraPos.z, this.lampCount, this.out);
       this.pool.forEach((l, i) => {
         const lamp = idx[i] !== undefined ? this.lamps[idx[i]!] : undefined;
         if (lamp) l.position.set(lamp[0], this.groundY(lamp[0], lamp[1]) + LAMP_LIGHT_Y - 0.25, lamp[1]);
