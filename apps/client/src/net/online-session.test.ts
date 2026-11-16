@@ -315,6 +315,30 @@ describe('OnlineSession', () => {
     expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(1);
   }, 60_000);
 
+  test('large error hard-sets but keeps pending inputs', async () => {
+    const { net, session, client, server } = await setup(fixtureAssets(), { x: -70, z: -70 }, 75);
+    const rnd = prng(5);
+    const run = () => ({ ...N, forward: 1, run: true });
+    play(net, session, 1500, run, rnd);
+    // the server puts us 3 m to the side (as a server-side push would): a correction above HARD_SNAP_M
+    const p = server.player(ME).pos;
+    server.removePlayer(ME);
+    server.addPlayer(ME, { x: p.x + 3, z: p.z });
+    const frames = play(net, session, 1500, run, rnd);
+    const jump = frames.findIndex((f) => f.correction > 2);
+    expect(jump).toBeGreaterThanOrEqual(0);
+    // one jump onto the server's path, inputs on top: the following snapshots bring no second correction (faded or not)
+    // (predErrorM keeps the jump's size until the next reconciliation)
+    const later = frames.slice(jump + 1);
+    const next = later.findIndex((f) => f.predErrorM !== frames[jump]!.predErrorM);
+    expect(next).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...later.map((f) => f.correction))).toBeLessThan(0.1);
+    expect(Math.max(...later.slice(next).map((f) => f.predErrorM))).toBeLessThan(0.1);
+    expect(session.reconciles.hard).toBe(2); // the first snapshot and this one
+    const c = client.player(ME).pos, s = server.player(ME).pos;
+    expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(2);
+  }, 60_000);
+
   test('denied enter is rolled back', async () => {
     const a = fixtureAssets();
     const car = 0;

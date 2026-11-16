@@ -7,7 +7,7 @@ import {
 import type { RenderOffset, Session } from '../session';
 import type { ServerClock } from './clock';
 import type { NetState, Welcome } from './connection';
-import { bikeOps, poseOps, riderOps, SnapshotBuffer } from './interp';
+import { bikeOps, CatchUp, poseOps, riderOps, SnapshotBuffer } from './interp';
 import type { RemoteCarInfo } from '../remote/remote-players';
 
 /** What OnlineSession uses of a Connection (tests put a fake server behind it). */
@@ -75,7 +75,8 @@ const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bi
  * (numbered with seq, kept until the server acknowledges it); other players are kinematic stand-ins on the
  * interpolated snapshot poses (WorldSim.setProxies). Each snapshot resets the own state to the server's at ackSeq and
  * replays the unacknowledged inputs (WorldSim.replay); the difference to the old prediction fades out of the rendered
- * pose over CORRECTION_BLEND_S. More than MAX_REPLAY_STEPS inputs outstanding or an error above HARD_SNAP_M: set hard.
+ * pose over CORRECTION_BLEND_S. An error above HARD_SNAP_M is not faded (set hard, still replayed); more than
+ * MAX_REPLAY_STEPS inputs outstanding: set hard onto the server state, the pending inputs dropped.
  * If the prediction for ackSeq already matches the server's state (predictionMatches), nothing is replayed.
  * Riding is predicted like driving (the own bike is simulated, other riders are kinematic bikes on their poses).
  *
@@ -111,6 +112,10 @@ export class OnlineSession implements Session {
   private readonly carBuf = new SnapshotBuffer<SnapshotCar>(poseOps());
   private readonly lampBuf = new SnapshotBuffer<SnapshotLamp>(poseOps());
   private readonly riderBuf = new SnapshotBuffer<SnapshotRider>(riderOps());
+  /** Drawn (not simulated) remote people, cars and riders: catch-ups after a freeze or a long frame are blended. */
+  private readonly walkerDraw = new CatchUp<SnapshotWalker>();
+  private readonly carDraw = new CatchUp<SnapshotCar>();
+  private readonly riderDraw = new CatchUp<SnapshotRider>('heading');
   private readonly bikeBuf = new SnapshotBuffer<SnapshotBike>(bikeOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), riders: new Map(), bikes: new Map(), lamps: new Map() };
   private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
@@ -143,6 +148,9 @@ export class OnlineSession implements Session {
         this.riderBuf.clear();
         this.bikeBuf.clear();
         this.lampBuf.clear();
+        this.walkerDraw.clear();
+        this.carDraw.clear();
+        this.riderDraw.clear();
         link.clock.reset();
         link.clock.onSnapshot(w.tick, this.now());
       }),
@@ -157,7 +165,10 @@ export class OnlineSession implements Session {
     return this.offset;
   }
 
-  /** Remote players, cars, riders, moving bikes and tipping lamps as sampled for this frame (at the render tick). */
+  /**
+   * Remote players, cars, riders, moving bikes and tipping lamps for this frame: sampled at the render tick; people,
+   * cars and riders as drawn (catch-ups blended, see CatchUp).
+   */
   remote(): RemoteSample {
     return this.sample;
   }
@@ -309,7 +320,10 @@ export class OnlineSession implements Session {
     // error of the prediction for the acknowledged input (only comparable in the same car / on the same bike / on foot)
     const same = ackEntry !== null && ackEntry.car === server.carId && ackEntry.bike === (server.bikeId ?? null);
     const err = ackEntry && same ? dist(ackEntry.pos, server.car ?? server.bike ?? server.char) : 0;
-    const hard = this.first || this.pending.length > MAX_REPLAY_STEPS || err > HARD_SNAP_M;
+    // the pending inputs are thrown away only on the first snapshot (the local spawn was a guess) and after a gap too
+    // long to replay; a large error alone sets hard onto the server state but still replays them (no fade)
+    const drop = this.first || this.pending.length > MAX_REPLAY_STEPS;
+    const hard = drop || err > HARD_SNAP_M;
     this.first = false;
     if (!hard && ackEntry && predictionMatches(ackEntry.state, server)) {
       // the prediction for ackSeq is the server's state: replaying from it would reproduce the current prediction
@@ -320,7 +334,7 @@ export class OnlineSession implements Session {
     this.reconciles[hard ? 'hard' : 'replayed']++;
 
     const before = this.ownPose();
-    if (hard) {
+    if (drop) {
       this.pending = [];
       this.enterSeq = null;
       this.mountSeq = null;
@@ -367,10 +381,14 @@ export class OnlineSession implements Session {
    * over that the server does not report within LAMP_CONFIRM_STEPS stands up again.
    */
   private updateRemote(ev: SimEvent[]): void {
-    const rt = this.link.clock.renderTick(this.now());
+    const now = this.now();
+    const rt = this.link.clock.renderTick(now);
     const walkers = this.walkerBuf.sample(rt), cars = this.carBuf.sample(rt), lamps = this.lampBuf.sample(rt);
     const riders = this.riderBuf.sample(rt), bikes = this.bikeBuf.sample(rt);
-    this.sample = { walkers, cars, riders, bikes, lamps };
+    // drawn poses smoothed; the prediction world's stand-ins below use the sampled ones
+    this.sample = {
+      walkers: this.walkerDraw.apply(walkers, now), cars: this.carDraw.apply(cars, now), riders: this.riderDraw.apply(riders, now), bikes, lamps,
+    };
     const state = this.link.state;
 
     const feet = new Map<PlayerId, Vec3>();
