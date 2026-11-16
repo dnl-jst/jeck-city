@@ -17,7 +17,7 @@ import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
 import { Game } from './game';
-import { storedCharacter } from './characters';
+import { storeCharacter, storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
 import { OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
 import { Lobby } from './net/lobby';
@@ -311,12 +311,13 @@ let connection: Connection | null = null;
  */
 async function connect(): Promise<Connection | null> {
   if (offline) return null;
-  const dialog = lobby = new Lobby(document.body);
+  const dialog = lobby = new Lobby(document.body, CHARACTER_VARIANTS.map((v) => `/portraits/${v}.webp`), CHARACTER_VARIANTS.indexOf(storedCharacter()));
   // the dialog shows at once; the world hash (needs the whole manifest) is only awaited on joining
   const hashing = manifestBytes.then((b) => worldHash(b));
   hashing.catch(() => undefined); // a failed manifest download fails the boot elsewhere
   for (;;) {
     const name = await dialog.ask();
+    storeCharacter(CHARACTER_VARIANTS[dialog.variant] ?? CHARACTER_VARIANTS[0]);
     dialog.showStatus(STATUS_TEXTS.connecting);
     const hash = await hashing;
     try {
