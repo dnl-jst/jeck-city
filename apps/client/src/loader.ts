@@ -2,6 +2,7 @@ import { BufferAttribute, BufferGeometry, Mesh, MeshStandardMaterial, type Mater
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type BikeType, type WorldManifest } from '@nn/shared';
+import { CharacterModels } from './characters';
 import { FetchError } from './errors';
 import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
@@ -177,6 +178,12 @@ export class WorldLoader {
       Promise.all(m.rackModels.map(async (r) => [r.kind, await parse(r.file)] as const)),
     ]);
     return { bikes: new Map(bikes), racks: new Map(racks) };
+  }
+
+  /** Player character models of the manifest (character_<variant>.glb), each downloaded when first asked for. */
+  characterModels(m: WorldManifest): CharacterModels {
+    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    return new CharacterModels(new Map(m.characterModels.map((c) => [c.variant, c.file])), parse);
   }
 
   /** A replacement model (world space, own materials); marked so unload() frees its materials too. */

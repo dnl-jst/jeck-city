@@ -1,5 +1,9 @@
 import { BIKE_TYPES, type BikeType } from '../physics/biketypes';
 
+/** Player character models (data/models/character, character_<variant>.glb). */
+export const CHARACTER_VARIANTS = ['man', 'woman'] as const;
+export type CharacterVariant = (typeof CHARACTER_VARIANTS)[number];
+
 /**
  * World manifest (apps/client/public/world/manifest.json), written by the pipeline.
  *
@@ -72,6 +76,11 @@ export type WorldManifest = {
   bikeModels: { type: BikeType; file: string; bytes: number }[];
   /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
   rackModels: { kind: 0 | 1; file: string; bytes: number }[];
+  /**
+   * Skinned player figures (character_<variant>.glb, bones of MPFB's game_engine rig, rest pose standing with the arms
+   * hanging; see data/models/character/README.md). Missing in older manifests → [].
+   */
+  characterModels: { variant: CharacterVariant; file: string; bytes: number }[];
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -171,6 +180,12 @@ export function parseManifest(json: unknown): WorldManifest {
       const kind = num(r.kind, `${p}.kind`);
       if (kind !== 0 && kind !== 1) fail(`${p}.kind`, 'must be 0 or 1');
       return { kind: kind as 0 | 1, file: str(r.file, `${p}.file`), bytes: num(r.bytes, `${p}.bytes`) };
+    }),
+    characterModels: o.characterModels === undefined ? [] : arr(o.characterModels, 'characterModels', (v, p) => {
+      const c = obj(v, p);
+      const variant = str(c.variant, `${p}.variant`);
+      if (!(CHARACTER_VARIANTS as readonly string[]).includes(variant)) fail(`${p}.variant`, `must be one of ${CHARACTER_VARIANTS.join(', ')}`);
+      return { variant: variant as CharacterVariant, file: str(c.file, `${p}.file`), bytes: num(c.bytes, `${p}.bytes`) };
     }),
     terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
     datum: num(o.datum, 'datum'),

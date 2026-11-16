@@ -1,5 +1,5 @@
 import { NodeIO, type Document, type Node } from '@gltf-transform/core';
-import { EXTMeshoptCompression, KHRMaterialsEmissiveStrength, KHRTextureTransform } from '@gltf-transform/extensions';
+import { EXTMeshoptCompression, EXTTextureWebP, KHRMaterialsEmissiveStrength, KHRTextureTransform } from '@gltf-transform/extensions';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 /** Nodes whose name ends in this suffix are collision-only: they go to collision.bin, not into the rendered model. */
@@ -17,7 +17,7 @@ export type PreparedModel = {
 const io = async () => {
   await Promise.all([MeshoptDecoder.ready, MeshoptEncoder.ready]);
   return new NodeIO()
-    .registerExtensions([EXTMeshoptCompression, KHRMaterialsEmissiveStrength, KHRTextureTransform])
+    .registerExtensions([EXTMeshoptCompression, EXTTextureWebP, KHRMaterialsEmissiveStrength, KHRTextureTransform])
     .registerDependencies({ 'meshopt.decoder': MeshoptDecoder, 'meshopt.encoder': MeshoptEncoder });
 };
 
