@@ -10,7 +10,9 @@
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
 // B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
 // figure's per-frame step must not change by more than 1 m between frames (speed itself is no jump). Per-frame
-// numbers are printed too: a slow headless renderer puts several steps into one frame.
+// numbers are printed too: a slow headless renderer puts several steps into one frame. Every recorded phase (also the
+// drive without --lag) prints A's frame rate, inputs sent per second (= physics steps), its reconciliations (replayed,
+// skipped because the prediction matched, set hard) and B's frame rate.
 import { chromium } from 'playwright';
 import { browserArgs } from './browser-args.mjs';
 
@@ -67,10 +69,11 @@ async function join(browser, name) {
 /** Per-frame recorder in the page: own correction, and the biggest frame-to-frame jump of one remote player. */
 async function installRecorder(page, remoteName) {
   await page.evaluate((remoteName) => {
-    const r = (window.__mpRec = { on: false, corr: [], speed: [], dsteps: [], lastSteps: null, jumps: [], excess: [], prev: null, prev2: null });
+    const r = (window.__mpRec = { on: false, corr: [], speed: [], dsteps: [], times: [], lastSteps: null, jumps: [], excess: [], prev: null, prev2: null });
     const frame = () => {
       if (r.on) {
         const st = window.__nnState();
+        r.times.push(performance.now());
         r.corr.push(st.correction);
         r.speed.push(st.speed);
         r.dsteps.push(r.lastSteps === null ? 1 : st.steps - r.lastSteps);
@@ -87,21 +90,38 @@ async function installRecorder(page, remoteName) {
     requestAnimationFrame(frame);
   }, remoteName);
 }
-const record = (page, on) => page.evaluate((on) => { window.__mpRec.on = on; }, on);
-const takeRecord = (page) => page.evaluate(() => { const r = window.__mpRec; const out = { corr: r.corr, speed: r.speed, dsteps: r.dsteps, jumps: r.jumps, excess: r.excess }; r.corr = []; r.speed = []; r.dsteps = []; r.jumps = []; r.excess = []; return out; });
+const record = (page, on) => page.evaluate((on) => {
+  const r = window.__mpRec;
+  r.on = on;
+  // reconciliations during the phase: counters at the start, the difference at the end
+  if (on) r.rec0 = window.__nnState().reconciles;
+  else {
+    const now = window.__nnState().reconciles, was = r.rec0;
+    r.rec = now && was ? { replayed: now.replayed - was.replayed, skipped: now.skipped - was.skipped, hard: now.hard - was.hard } : null;
+  }
+}, on);
+const takeRecord = (page) => page.evaluate(() => {
+  const r = window.__mpRec;
+  const out = { corr: r.corr, speed: r.speed, dsteps: r.dsteps, times: r.times, jumps: r.jumps, excess: r.excess, rec: r.rec };
+  r.corr = []; r.speed = []; r.dsteps = []; r.times = []; r.jumps = []; r.excess = [];
+  return out;
+});
 const p95 = (xs) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.ceil(xs.length * 0.95) - 1)] : 0);
 const maxOf = (xs) => xs.reduce((m, v) => Math.max(m, v), 0);
 /** Correction stats of one phase: per frame, per physics step (frame correction / steps that frame), frames above 2 m/s. */
 const phaseStats = (rec, remote) => {
   const step = rec.corr.map((c, i) => c / Math.max(1, rec.dsteps[i]));
+  const seconds = rec.times.length > 1 ? (rec.times[rec.times.length - 1] - rec.times[0]) / 1000 : 0;
+  const steps = rec.dsteps.reduce((a, b) => a + b, 0);
   return {
-    frames: rec.corr.length, steps: rec.dsteps.reduce((a, b) => a + b, 0),
+    frames: rec.corr.length, steps, fps: seconds ? (rec.corr.length - 1) / seconds : 0, inputsPerS: seconds ? steps / seconds : 0,
+    reconciles: rec.rec, remoteFps: remote.times.length > 1 ? (remote.times.length - 1) / ((remote.times[remote.times.length - 1] - remote.times[0]) / 1000) : 0,
     frameP95: p95(rec.corr), frameMax: maxOf(rec.corr), stepP95: p95(step), stepMax: maxOf(step),
     movingStepP95: p95(step.filter((_, i) => rec.speed[i] > 2)), moving: rec.speed.filter((v) => v > 2).length,
     jump: maxOf(remote.jumps), excess: maxOf(remote.excess),
   };
 };
-const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
+const showStats = (k, r) => console.log(`${k}: ${r.frames} frames, ${r.steps} steps; A ${r.fps.toFixed(1)} fps, ${r.inputsPerS.toFixed(1)} inputs/s, reconciles ${JSON.stringify(r.reconciles)}; B ${r.remoteFps.toFixed(1)} fps; correction per frame p95 ${r.frameP95.toFixed(3)} m (max ${r.frameMax.toFixed(3)}), per step p95 ${r.stepP95.toFixed(4)} m (max ${r.stepMax.toFixed(4)}; frames above 2 m/s: ${r.moving}, p95 ${r.movingStepP95.toFixed(4)}); remote: frame jump max ${r.jump.toFixed(3)} m, step change max ${r.excess.toFixed(3)} m`);
 const remoteA = (page) => page.evaluate(() => window.__nnRemote().find((p) => p.name === 'Check A') ?? null);
 const teleport = (page, x, z) => page.evaluate(([x, z]) => window.__nnConn().sendTeleport(x, z), [x, z]);
 
@@ -167,7 +187,7 @@ try {
   if (!startA) throw new Error('B does not see A');
   console.log(`A entered the car at (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)}); B sees A as ${startA.mode}`);
   let maxD = 0;
-  if (lag) { await record(a.page, true); await record(b.page, true); }
+  await record(a.page, true); await record(b.page, true);
   await a.page.keyboard.down('KeyW');
   if (lag) {
     // 20 s shuttling along the street the car stands in (no steering: it keeps to its lane): W until 28 m from where it
@@ -189,11 +209,11 @@ try {
     await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 32, [s0.x, s0.z], STEPS.drive, 'car did not get 32 m far');
   }
   await a.page.keyboard.up('KeyW');
-  if (lag) {
+  {
     await record(a.page, false); await record(b.page, false);
     const dA = await takeRecord(a.page), dB = await takeRecord(b.page);
     results.drive = phaseStats(dA, dB);
-    showStats('drive 20 s', results.drive);
+    showStats(lag ? 'drive 20 s' : 'drive', results.drive);
   }
   const sA = await a.state();
   const movedA = lag ? maxD : Math.hypot(sA.x - s0.x, sA.z - s0.z); // --lag shuttles: the farthest point counts
