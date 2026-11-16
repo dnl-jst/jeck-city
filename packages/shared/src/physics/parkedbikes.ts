@@ -189,6 +189,27 @@ export class ParkedBikes {
     b.sleep();
   }
 
+  /**
+   * Client prediction: puts unridden, unfollowed bike `id` at rest on `pose` (where the server's slow state says it
+   * stands). No-op while ridden or followed.
+   */
+  place(id: number, pose: BikePose): void {
+    if (this.rider[id] !== null || this.followed.has(id)) return;
+    this.poses[id] = { ...pose };
+    const b = this.bodies.get(id);
+    if (!b) return;
+    b.setTranslation({ x: pose.x, y: pose.y + BOX_HALF_Y + 0.005, z: pose.z }, false);
+    b.setRotation(yawQuat(pose.heading), false);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, false);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, false);
+    b.sleep();
+  }
+
+  /** The manifest pose of bike `id`. */
+  homePose(id: number): BikePose {
+    return { ...this.home[id]! };
+  }
+
   /** Bikes currently followed (see follow). */
   following(): ReadonlySet<number> {
     return this.followed;

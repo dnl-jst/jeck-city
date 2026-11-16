@@ -108,6 +108,8 @@ export class OnlineSession implements Session {
   private readonly bikeBuf = new SnapshotBuffer<SnapshotBike>(bikeOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), riders: new Map(), bikes: new Map(), lamps: new Map() };
   private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
+  /** Resting bike poses from the slow state last put into the prediction world, by bike ("x,y,z,heading"). */
+  private readonly bikeRest = new Map<number, string>();
   /** Other riders' bells from the snapshots since the last frame (as `bell` events, id = slot). */
   private bells: SimEvent[] = [];
   private readonly offset: RenderOffset = { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 };
@@ -365,6 +367,7 @@ export class OnlineSession implements Session {
       const b = state.bikes?.get(String(i));
       return b && b.rider < 0 ? bikePoseOf(b) : null;
     });
+    this.placeRestingBikes(bikePoses);
 
     const props = this.sim.props;
     const fallen = (i: number, pose: PropPose): void => {
@@ -378,6 +381,28 @@ export class OnlineSession implements Session {
       if (this.steps - at < LAMP_CONFIRM_STEPS) continue;
       props.standUp(i);
       this.lampSeen.delete(i);
+    }
+  }
+
+  /**
+   * Unridden bikes the slow state reports away from their spot (moved before we joined, or come to rest): placed there
+   * once per new resting pose; a bike that left the slow state went back to its manifest spot (idle reset).
+   */
+  private placeRestingBikes(streamed: ReadonlyMap<number, BikePose>): void {
+    const bikes = this.sim.bikes, seen = new Set<number>();
+    this.link.state.bikes?.forEach((b, key) => {
+      const i = Number(key);
+      seen.add(i);
+      if (b.rider >= 0 || streamed.has(i)) return;
+      const k = `${b.x},${b.y},${b.z},${b.heading}`;
+      if (this.bikeRest.get(i) === k) return;
+      this.bikeRest.set(i, k);
+      bikes.place(i, bikePoseOf(b));
+    });
+    for (const i of [...this.bikeRest.keys()]) {
+      if (seen.has(i)) continue;
+      this.bikeRest.delete(i);
+      bikes.place(i, bikes.homePose(i));
     }
   }
 

@@ -4,7 +4,7 @@ import type { BikeType, SnapshotCar, SnapshotRider, SnapshotWalker } from '@nn/s
 import { labelOpacity, type Label } from './name-label';
 import { RemotePlayers, type CarView, type RemoteCarInfo, type RiderRig } from './remote-players';
 
-const walker = (slot: number, x = slot * 2, state: 0 | 1 | 2 = 0): SnapshotWalker => ({ slot, x, y: 0, z: 0, yaw: 0, speed: 0, state });
+const walker = (slot: number, x = slot * 2, state: 0 | 1 | 2 | 3 = 0): SnapshotWalker => ({ slot, x, y: 0, z: 0, yaw: 0, speed: 0, state });
 const car = (id: number, hasDriver = true): SnapshotCar => ({ id, x: 5, y: 1, z: 5, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0, steer: 0, brakeLight: false, hasDriver, horn: false });
 
 class FakeLabel implements Label {
@@ -151,5 +151,18 @@ describe('RemotePlayers', () => {
     const { frame, variantsAsked } = setup();
     frame([walker(1), walker(2)], [], new Map(), new Map(), [rider(3)], new Map([[1, 1], [3, 1]]));
     expect(variantsAsked.sort()).toEqual([0, 1, 1]);
+  });
+
+  test('a player thrown off a bike (walker state 3) falls over once', () => {
+    const { frame, scene } = setup();
+    frame([walker(2, 4, 3)]);
+    const figs = () => scene.children.filter((c) => c.type === 'Group' && c.visible);
+    expect(figs()).toHaveLength(1);
+    // lying: the figure's body (a child of its group) is tipped over about x
+    const g = figs()[0]!;
+    const tilt = () => { let m = 0; g.traverse((o) => { m = Math.max(m, Math.abs(o.rotation.x)); }); return m; };
+    expect(tilt()).toBeLessThan(0.5);
+    for (let k = 0; k < 30; k++) frame([walker(2, 4, 3)]);
+    expect(tilt()).toBeGreaterThan(1);
   });
 });

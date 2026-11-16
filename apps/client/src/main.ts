@@ -41,7 +41,7 @@ declare global {
      * height of the first static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive' | 'ride'; bikeType: string | null; flying: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      mode: 'walk' | 'drive' | 'ride'; bikeType: string | null; flying: boolean; /** Fell off a bike: lying or getting up. */ fallen: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
       /** Online: how far (m) server corrections moved the rendered own pose in the last frame (0 offline). */
       correction: number;
@@ -49,6 +49,8 @@ declare global {
     __nnSurfaceY?: (x: number, z: number) => number | null;
     /** Dev/debug: the server connection (null offline). */
     __nnConn?: () => Connection | null;
+    /** Online, dev/debug: the other players as sampled for the current frame (walkers, cars, riders). */
+    __nnRemote?: () => unknown;
     /** Dev build only: mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
     __nnWheelNudge?: (dx: number, dy: number) => void;
   }
@@ -333,7 +335,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnState = () => {
     const f = game!.focus();
     return {
-      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, fallen: game!.figure.busy, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
       radio: gameAudio.station,
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,
@@ -341,6 +343,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   };
   if (import.meta.env.DEV) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   if (import.meta.env.DEV || debug) window.__nnConn = () => connection;
+  if (import.meta.env.DEV || debug) window.__nnRemote = () => session.remote?.();
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   hud.hideLoading();
   hud.setHint(LOOK_HINT);

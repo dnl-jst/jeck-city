@@ -340,6 +340,23 @@ describe('OnlineSession bikes', () => {
   }, 60_000);
 });
 
+test('a bike moved before we joined is where the server has it', async () => {
+  const { net, session, client, server } = await setup(fixtureAssets(), { x: -40, z: -70 }, 75);
+  // before our first snapshot: OTHER rides bike 0 (−6, −30) 3 s north, stops and gets off; it rests there
+  server.addPlayer(OTHER, { x: -5, z: -30 });
+  const step = (i: PlayerInput, n = 1) => { for (let k = 0; k < n; k++) server.step(new Map([[OTHER, i]])); };
+  step(N, 10);
+  step({ ...N, use: true });
+  step({ ...N, forward: 1 }, 180);
+  step({ ...N, forward: -1 }, 120);
+  step({ ...N, use: true });
+  step(N, 240);
+  expect(server.bikes.isMoved(0)).toBe(true);
+  play(net, session, 1000, () => N, prng(8));
+  const c = client.bikes.poses[0]!, sv = server.bikes.poses[0]!;
+  expect(Math.hypot(c.x - sv.x, c.z - sv.z)).toBeLessThan(0.05);
+}, 60_000);
+
 describe('OnlineSession lamps', () => {
   /** Car 0 at (30, −40) facing +z, straight at lamp 0 (30, 0); drives into it at full throttle. Returns the frames. */
   async function ram(serverLamps: boolean) {
