@@ -1,4 +1,5 @@
 import { showIntro, skipIntro, type DownloadSize } from './intro';
+import { startIntroMusic } from './intro-music';
 
 declare global {
   /** Measured at build time (vite.config.ts); null when the build had no generated world. */
@@ -6,5 +7,9 @@ declare global {
 }
 
 // the intro first: the game's code, world, models and sound only load once the player continues
-if (!skipIntro(new URLSearchParams(location.search))) await showIntro(document.body, __NN_DOWNLOAD__);
+// the title song plays on the intro and while loading; boot.ts fades it out when the game starts
+if (!skipIntro(new URLSearchParams(location.search))) {
+  startIntroMusic(document.body);
+  await showIntro(document.body, __NN_DOWNLOAD__);
+}
 await import('./boot');

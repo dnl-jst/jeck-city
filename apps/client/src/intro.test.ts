@@ -20,10 +20,11 @@ describe('sizeText', () => {
 });
 
 describe('skipIntro', () => {
-  it('skips for the dev hooks and ?intro=0 only', () => {
+  it('skips for the dev hooks and ?intro=0, ?intro=1 forces it', () => {
     expect(skipIntro(new URLSearchParams('offline=1'))).toBe(true);
     expect(skipIntro(new URLSearchParams('debug=1'))).toBe(true);
     expect(skipIntro(new URLSearchParams('intro=0'))).toBe(true);
     expect(skipIntro(new URLSearchParams('time=12:00'))).toBe(false);
+    expect(skipIntro(new URLSearchParams('offline=1&intro=1'))).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import {
   type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
+import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
@@ -114,6 +115,7 @@ function stopDownloadMeter(): void {
 function bootFailed(err: unknown): never {
   console.error(err);
   stopDownloadMeter();
+  fadeOutIntroMusic();
   hud.showError(bootErrorMessage(err));
   window.__nnReady = 'error';
   throw err;
@@ -462,11 +464,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   stopDownloadMeter();
   hud.hideLoading();
+  fadeOutIntroMusic();
   hud.setHint(LOOK_HINT);
   window.__nnReady = true;
 }, (err: unknown) => {
   console.error(err);
   stopDownloadMeter();
+  fadeOutIntroMusic();
   hud.showError(bootErrorMessage(err));
   window.__nnReady = 'error';
 });
