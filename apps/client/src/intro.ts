@@ -3,6 +3,8 @@
  * before the player clicks "Weiter".
  */
 
+import { introMusicNeedsClick } from './intro-music';
+
 export interface DownloadSize {
   /** Bytes until the game runs and the area around the start has streamed in. */
   start: number;
@@ -10,8 +12,9 @@ export interface DownloadSize {
   total: number;
 }
 
-/** Dev/test runs skip the intro: ?offline=1 or ?debug=1 (the dev hooks), or explicitly ?intro=0. */
+/** Dev/test runs skip the intro: ?offline=1 or ?debug=1 (the dev hooks), or explicitly ?intro=0; ?intro=1 forces it. */
 export function skipIntro(params: URLSearchParams): boolean {
+  if (params.get('intro') === '1') return false;
   return params.get('offline') === '1' || params.get('debug') === '1' || params.get('intro') === '0';
 }
 
@@ -35,8 +38,25 @@ const INTRO_CSS = `
   .nn-intro { position: fixed; z-index: 20; inset: 0; overflow-y: auto; color: #e8ecf8; font: 15px/1.5 system-ui, sans-serif;
     background: radial-gradient(120% 80% at 50% 110%, #2a2350 0%, #141a3a 45%, #0b1230 100%); transition: opacity 0.35s; }
   .nn-intro.nn-leaving { opacity: 0; pointer-events: none; }
-  .nn-intro-inner { box-sizing: border-box; min-height: 100%; max-width: 760px; margin: 0 auto; padding: 28px 16px 24px;
-    display: flex; flex-direction: column; justify-content: center; }
+  .nn-intro-inner { position: relative; box-sizing: border-box; min-height: 100%; max-width: 760px; margin: 0 auto;
+    padding: 28px 16px 24px; display: flex; flex-direction: column; justify-content: center; }
+  .nn-intro-stage { position: fixed; inset: 0; opacity: 0.3; pointer-events: none; }
+  @media (min-width: 1100px) {
+    .nn-intro-inner { margin: 0 0 0 max(16px, 4vw); max-width: min(760px, 54vw); }
+    .nn-intro-stage { left: auto; width: calc(100vw - min(760px, 54vw) - max(16px, 4vw)); opacity: 1;
+      -webkit-mask: linear-gradient(90deg, transparent, #000 12%); mask: linear-gradient(90deg, transparent, #000 12%); }
+  }
+  .nn-intro-start { position: fixed; z-index: 25; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 14px; cursor: pointer; background: rgba(8,10,24,0.72); backdrop-filter: blur(6px);
+    transition: opacity 0.45s; }
+  .nn-intro-start.nn-leaving { opacity: 0; pointer-events: none; }
+  .nn-intro-start-play { width: 92px; height: 92px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: #f2c46b; color: #1a1408; font-size: 38px; padding-left: 6px; box-sizing: border-box;
+    box-shadow: 0 0 0 0 rgba(242,196,107,0.6); animation: nn-pulse 1.6s infinite; }
+  .nn-intro-start-text { font-size: 20px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #f2c46b; }
+  .nn-intro-start-sub { font-size: 13px; opacity: 0.75; }
+  @keyframes nn-pulse { 0% { box-shadow: 0 0 0 0 rgba(242,196,107,0.55); } 70% { box-shadow: 0 0 0 26px rgba(242,196,107,0); }
+    100% { box-shadow: 0 0 0 0 rgba(242,196,107,0); } }
   .nn-intro-dom { display: block; width: 74px; height: auto; margin: 0 auto 6px; color: #f2c46b;
     filter: drop-shadow(0 0 14px rgba(242,196,107,0.35)); }
   .nn-intro-title { margin: 0; text-align: center; font-size: clamp(38px, 9vw, 60px); font-weight: 800; line-height: 1.05;
@@ -81,7 +101,7 @@ export function showIntro(root: HTMLElement, size: DownloadSize | null): Promise
   document.head.append(style);
   const intro = document.createElement('div');
   intro.className = 'nn-intro';
-  intro.innerHTML = `<div class="nn-intro-inner">
+  intro.innerHTML = `<div class="nn-intro-stage"></div><div class="nn-intro-inner">
     ${DOM_SVG}
     <h1 class="nn-intro-title">Jeck City</h1>
     <p class="nn-intro-tagline">Ein Open-World-Spiel mitten in Köln – zusammen mit allen, die gerade da sind.</p>
@@ -94,15 +114,58 @@ export function showIntro(root: HTMLElement, size: DownloadSize | null): Promise
   intro.querySelector('.nn-intro-size')!.textContent = sizeText(size);
   root.append(intro);
   const button = intro.querySelector<HTMLButtonElement>('.nn-intro-go')!;
-  button.focus({ preventScroll: true });
+  // the animation loads three.js on its own: the text is there at once, the scene follows
+  let stopScene: (() => void) | null = null;
+  let closed = false;
+  void import('./intro-scene').then(({ startIntroScene }) => {
+    if (!closed) stopScene = startIntroScene(intro.querySelector<HTMLElement>('.nn-intro-stage')!);
+  }).catch((err: unknown) => console.error(err));
+  // browsers play sound only after a click: a start overlay asks for it (the click itself starts the song)
+  let start: HTMLDivElement | null = null;
+  const needsClick = introMusicNeedsClick();
+  const closeStart = (): void => {
+    if (!start) return;
+    const s = start;
+    start = null;
+    s.classList.add('nn-leaving');
+    window.setTimeout(() => s.remove(), 500);
+    button.focus({ preventScroll: true });
+  };
+  if (needsClick.now) {
+    start = document.createElement('div');
+    start.className = 'nn-intro-start';
+    start.setAttribute('role', 'button');
+    start.tabIndex = 0;
+    start.innerHTML = `<div class="nn-intro-start-play" aria-hidden="true">▶</div>
+      <div class="nn-intro-start-text">Klick zum Starten</div><div class="nn-intro-start-sub">mit Musik 🔊</div>`;
+    start.addEventListener('click', closeStart);
+    intro.append(start);
+    start.focus({ preventScroll: true });
+    // autoplay allowed after all: no click needed
+    void needsClick.settled.then((needed) => { if (!needed) closeStart(); });
+  } else {
+    button.focus({ preventScroll: true });
+  }
   return new Promise((resolve) => {
     const go = (): void => {
+      closed = true;
       window.removeEventListener('keydown', onKey);
       intro.classList.add('nn-leaving');
-      window.setTimeout(() => { intro.remove(); style.remove(); }, 400);
+      window.setTimeout(() => {
+        stopScene?.();
+        intro.remove();
+        style.remove();
+      }, 400);
       resolve();
     };
     const onKey = (e: KeyboardEvent): void => {
+      if (start) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          closeStart();
+        }
+        return;
+      }
       if (e.key === 'Enter' && e.target === document.body) go();
     };
     button.addEventListener('click', go, { once: true });

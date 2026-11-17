@@ -28,3 +28,9 @@ loops were made seamless with a short tail-into-head crossfade (sample-continuou
 | tram-bell.ogg | [11-3 Tram bell](https://freesound.org/s/497561/) | 16HPanskaWillheimova_Sara | CC0 | Prague tram electric bell |
 | rain.ogg | [rain medium on street pavement.flac](https://freesound.org/s/454143/) | kyles | CC0 | stereo, 33.5 s loop (whole 35.5 s take, 2 s tail-into-head crossfade) |
 | static.ogg | [Radio static](https://freesound.org/s/110739/) | clesquir | CC0 | steady section 26–46 s |
+
+## Music
+
+| File | Source | Notes |
+|---|---|---|
+| intro-song.m4a | „Kölle, du bist unser Ding“, made by the project owner with [Suno](https://suno.com) | title song on the intro and loading screens; converted from Opus to AAC 160 kbit/s |
