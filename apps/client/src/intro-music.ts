@@ -110,11 +110,11 @@ export function startIntroMusic(root: HTMLElement): void {
     connectGraph(m);
     audio.play().then(() => stopGestures?.(), () => undefined);
   };
-  window.addEventListener('pointerdown', onGesture, true);
-  window.addEventListener('keydown', onGesture, true);
+  // Safari only lets a finger start sound on its pointerup/touchend (a touch's pointerdown is no user activation)
+  const GESTURES = ['pointerdown', 'pointerup', 'touchend', 'keydown'] as const;
+  for (const t of GESTURES) window.addEventListener(t, onGesture, true);
   stopGestures = () => {
-    window.removeEventListener('pointerdown', onGesture, true);
-    window.removeEventListener('keydown', onGesture, true);
+    for (const t of GESTURES) window.removeEventListener(t, onGesture, true);
     stopGestures = null;
   };
   // no gesture yet: plays only where autoplay is allowed (without Web Audio until the first click)
