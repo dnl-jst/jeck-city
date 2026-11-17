@@ -728,29 +728,29 @@ def crossing_spire(B):
         B.face([(0, 0, z(108.0)), (0.5 * sgn, 0, z(108.6)), (0, 0, z(109.2)), (-0.5 * sgn, 0, z(108.6))], 'Gold')
 
 
+# Stairs are straight flights at an even pitch where DGM1 has them (the middle of its slope). DGM1 smooths steps into
+# a bulging slope that would show through them, so each flight comes with a *_cut surface along its inner corners:
+# the pipeline lowers the terrain to just below it (see packages/pipeline/src/terraincut.ts).
+DOMTREPPE = dict(u0=-31.0, u1=21.0, v_top=63.0, v_bot=77.0, n=29, top=5.85, bottom=1.1)
+
+
 def domtreppe(B):
-    """The Domtreppe down to the Bahnhofsvorplatz (DGM1): 29 steps, u -31..21, top edge v 63 at F, bottom v 77."""
-    u0, u1 = -31.0, 21.0
-    v_top, v_bot = 63.0, 77.0
-    n = 29
-    z_bot = 1.1
-    rise = (F - z_bot) / n
-    tread = (v_bot - v_top) / n
-    for k in range(n):
-        vv = v_top + (k + 1) * tread       # nosing of step k (counted from the top)
-        top = F - (k + 1) * rise + rise    # its tread height
-        boxm(B, u0, u1, v_top - 0.5 if k == 0 else v_top + k * tread, vv, SINK, top, 'Steps')
-    # cheek walls
-    for u, out in ((u0 - 1.2, -1), (u1, 1)):
-        prism(B, [(u, v_top - 2.0), (u + 1.2, v_top - 2.0), (u + 1.2, v_bot), (u, v_bot)], SINK, F + 0.6, 'Stone', top='Stone')
+    """The Domtreppe down to the Bahnhofsvorplatz: 29 steps, u -31..21, from v 63 (Domplatte) to 77."""
+    d = DOMTREPPE
+    tread = (d['v_bot'] - d['v_top']) / d['n']
+    rise = (d['top'] - d['bottom']) / d['n']
+    for k in range(d['n']):
+        boxm(B, d['u0'], d['u1'], d['v_top'] + k * tread - (0.5 if k == 0 else 0.01), d['v_top'] + (k + 1) * tread, SINK, d['top'] - k * rise, 'Steps')
+    for u in (d['u0'] - 1.2, d['u1']):  # cheek walls
+        prism(B, [(u, d['v_top'] - 2.0), (u + 1.2, d['v_top'] - 2.0), (u + 1.2, d['v_bot']), (u, d['v_bot'])], SINK, d['top'] + 0.6, 'Stone', top='Stone')
 
 
 # ---------------------------------------------------------------- Domplatte west: stairs, Kreuzblume, Taubenbrunnen
 # positions from OSM (Kreuzblume node 1094776262, Taubenbrunnen way 530671643), levels from DGM1, shapes after photos
 # ("Kreuzblume Nachbildung vor Kölner Dom 2", "Kardinal-Höffner-Platz mit Nachbildung Kreuzblume und Taubenbrunnen")
 
-KHP_STAIRS = (-123.8, -119.0, -20.0, 21.0)  # u foot, u top, v south, v north
-KHP_LOW, KHP_HIGH = 4.0, 4.85               # Kardinal-Höffner-Platz and the Domplatte above the stairs
+KHP_STAIRS = (-123.8, -119.0, -20.0, 20.0)  # u foot, u top, v south, v north
+KHP_LOW, KHP_HIGH = 4.15, 4.95              # Kardinal-Höffner-Platz at the foot, the top step
 KREUZBLUME = (-127.5, 1.7, 3.95)            # u, v, ground
 TAUBENBRUNNEN = (-130.2, -8.3, 4.2)  # DGM1 rises to 4.24 under the disc: it stands just proud of the paving
 
@@ -762,7 +762,7 @@ def khp_stairs(B):
     rise, tread = (KHP_HIGH - KHP_LOW) / n, (u1 - u0) / n
     for k in range(n):
         top = KHP_LOW + (k + 1) * rise
-        boxm(B, u0 + k * tread, u1 + 1.0, v0, v1, SINK, top, 'Steps')
+        boxm(B, u0 + k * tread, (u0 + (k + 1) * tread + 0.01) if k < n - 1 else u1 + 0.5, v0, v1, SINK, top, 'Steps')
 
 
 def kreuzblume(B, cu, cv, zg):
@@ -868,20 +868,37 @@ def build_collision(C):
         boxm(C, -TRU, TRU, sgn * TRV if sgn > 0 else -TRV - 3.6, sgn * TRV + 3.6 if sgn > 0 else -TRV, SINK, z(30.0), x)
     boxm(C, TU0 - 2.0, TU0, -TV0, TV0, SINK, z(20.0), x)
     # Domtreppe: a ramp through the nosings, cheek walls
-    u0, u1, v_top, v_bot = -31.0, 21.0, 63.0, 77.0
-    rise = (F - 1.1) / 29
-    C.face([(u0, v_top - 0.5, F), (u1, v_top - 0.5, F), (u1, v_bot, 1.1 + rise), (u0, v_bot, 1.1 + rise)], x, out=(0, 0, 1))
-    for u in (u0 - 1.2, u1):
-        boxm(C, u, u + 1.2, v_top - 2.0, v_bot, SINK, F + 0.6, x)
+    d = DOMTREPPE
+    rise = (d['top'] - d['bottom']) / d['n']
+    tread = (d['v_bot'] - d['v_top']) / d['n']
+    # the ramp runs on one tread past the lowest step down to the ground, so there is no lip to climb at the foot
+    C.face([(d['u0'], d['v_top'] - 0.5, d['top']), (d['u1'], d['v_top'] - 0.5, d['top']), (d['u1'], d['v_bot'] + tread, d['bottom']),
+            (d['u0'], d['v_bot'] + tread, d['bottom'])], x, out=(0, 0, 1))
+    for u in (d['u0'] - 1.2, d['u1']):
+        boxm(C, u, u + 1.2, d['v_top'] - 2.0, d['v_bot'], SINK, d['top'] + 0.6, x)
     # stairs to the Kardinal-Höffner-Platz: a ramp through the nosings; the Kreuzblume; the fountain's low disc
     a0, a1, b0, b1 = KHP_STAIRS
-    rise = (KHP_HIGH - KHP_LOW) / 5
-    C.face([(a0, b0, KHP_LOW + rise), (a1, b0, KHP_HIGH), (a1, b1, KHP_HIGH), (a0, b1, KHP_LOW + rise)], x, out=(0, 0, 1))
+    tread = (a1 - a0) / 5
+    C.face([(a0 - tread, b0, KHP_LOW), (a1, b0, KHP_HIGH), (a1, b1, KHP_HIGH), (a0 - tread, b1, KHP_LOW)], x, out=(0, 0, 1))
+    boxm(C, a1, a1 + 0.5, b0, b1, SINK, KHP_HIGH, x)
     cu, cv, zg = KREUZBLUME
     prism(C, poly_n(cu, cv, 1.25, 8), zg - 0.3, zg + 2.25, x)
     prism(C, poly_n(cu, cv, 0.75, 8), zg + 2.25, zg + 9.5, x)
     cu, cv, zg = TAUBENBRUNNEN
     prism(C, poly_n(cu, cv, 4.2, 16), zg - 0.3, zg + 0.08, x)
+
+
+def build_cuts(K):
+    """Terrain cuts: ramps along the inner corners of both flights (just below every tread), cheek walls included."""
+    x = 'x'
+    d = DOMTREPPE
+    u0, u1 = d['u0'] - 1.2, d['u1'] + 1.2
+    # from the top step down to the ground at the foot: below every tread, and level with the ground in front of the
+    # lowest step (lower, and the terrain in front would drop into a ditch the figure must climb out of)
+    K.face([(u0, d['v_top'] - 0.5, d['top']), (u1, d['v_top'] - 0.5, d['top']), (u1, d['v_bot'], d['bottom']),
+            (u0, d['v_bot'], d['bottom'])], x, out=(0, 0, 1))
+    a0, a1, b0, b1 = KHP_STAIRS
+    K.face([(a0, b0, KHP_LOW), (a1 + 0.5, b0, KHP_HIGH), (a1 + 0.5, b1, KHP_HIGH), (a0, b1, KHP_LOW)], x, out=(0, 0, 1))
 
 
 def main():
@@ -896,12 +913,17 @@ def main():
     col = C.to_object(f'{NAME}_col', coll, ORIGIN, 0.0)
     col.display_type = 'WIRE'
     col.hide_render = True
-    return dom, col
+    K = Builder()
+    build_cuts(K)
+    cut = K.to_object(f'{NAME}_cut', coll, ORIGIN, 0.0)
+    cut.display_type = 'WIRE'
+    cut.hide_render = True
+    return dom, col, cut
 
 
-dom, col = main()
+dom, col, cut = main()
 stats = {'tris': tris(dom), 'col_tris': tris(col)}
 print('KOELNER_DOM', stats)
 if globals().get('EXPORT', True):
-    export_glb(os.path.join(HERE, f'{NAME}.glb'), [dom, col])
+    export_glb(os.path.join(HERE, f'{NAME}.glb'), [dom, col, cut])
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(HERE, f'{NAME}.blend'), copy=True)

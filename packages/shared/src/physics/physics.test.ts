@@ -536,7 +536,7 @@ const TERRAIN_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/
 const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST) && existsSync(TERRAIN_BIN);
 
 test.skipIf(!haveReal)(
-  haveReal ? 'real collision.bin + terrain.bin: world builds, character at spawn stands on the sidewalk (y ≈ spawn.y)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
+  haveReal ? 'real collision.bin + terrain.bin: world builds, character stands at the spawn (y ≈ spawn.y) and walks up the Dom stairs' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
   async () => {
     const file = readFileSync(COLLISION_BIN);
     const asset = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
@@ -550,6 +550,21 @@ test.skipIf(!haveReal)(
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
     expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = the walkable surface there
+    // the Domtreppe down to the Bahnhofsvorplatz and the steps up from the Kardinal-Höffner-Platz (data/models/
+    // koelner-dom): walked up from 3 m in front of the lowest step, without jumping (autostep is 0.25 m; a lip at the
+    // foot left the figure stuck)
+    const flights = [
+      { name: 'Domtreppe', from: { x: 350.5, z: 2352.8 }, yaw: 0, up: (p: { x: number; z: number }) => p.z > 2372.8, top: 8.7 },
+      { name: 'Kardinal-Höffner-Platz', from: { x: 228.5, z: 2420.8 }, yaw: Math.PI / 2, up: (p: { x: number; z: number }) => p.x > 243.5, top: 7.75 },
+    ];
+    for (const f of flights) {
+      const w = new Character(pw, { x: f.from.x, y: heightAt(terrain, f.from.x, f.from.z) + 0.05, z: f.from.z });
+      runChar(pw, w, idle, 0.5);
+      runChar(pw, w, { forward: 1, right: 0, run: false, yaw: f.yaw }, 20); // walking pace: ~1.4 m/s up the flight
+      const p = w.position();
+      expect({ name: f.name, up: f.up(p), y: p.y > f.top - 0.3 }).toEqual({ name: f.name, up: true, y: true });
+      w.dispose();
+    }
   },
   // decoding and building the whole city in a full parallel test run can take longer than the build bound alone
   30_000,
