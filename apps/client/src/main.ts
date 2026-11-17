@@ -292,7 +292,7 @@ renderer.setAnimationLoop((t: number) => {
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
     look = weatherBlend.update(dt);
-    lighting.update(sun, camera.position);
+    lighting.update(sun, camera.position, look);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
     const far = lighting.viewFar + 5;
     if (Math.abs(camera.far - far) > 0.5) {
