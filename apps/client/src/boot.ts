@@ -437,6 +437,8 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     session = new OfflineSession(sim, OFFLINE_ME, npcNet ? { net: npcNet, terrain } : undefined);
   }
   game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
+  // debug: the NPCs shown (kind, x, z, action, alpha), for screenshots and tests
+  (window as unknown as { __nnNpcs?: () => unknown }).__nnNpcs = () => session.npcs().map((d) => [d.kind, Math.round(d.pose.x), Math.round(d.pose.z), d.action, Math.round(d.alpha * 10) / 10]);
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level
   if (devCam && allowed.fly && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof

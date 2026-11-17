@@ -16,6 +16,7 @@
     "screenshot": "node scripts/screenshot.mjs",
     "drive-check": "node scripts/drive-check.mjs",
     "accept": "node scripts/accept.mjs",
+    "npc-shots": "node scripts/npc-shots.mjs",
     "ride-check": "node scripts/ride-check.mjs",
     "mp-check": "node scripts/mp-check.mjs",
     "loadtest": "tsx apps/server/src/bots/loadtest.ts"
