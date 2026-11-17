@@ -20,11 +20,12 @@ test('worldHash: first 12 hex digits of SHA-256, without Web Crypto (plain-http 
 });
 
 test.skipIf(!haveRealAssets)(
-  haveRealAssets ? 'loadWorldAssets reads the three world files' : 'loadWorldAssets [SKIPPED: apps/client/public/world not found — run the pipeline]',
+  haveRealAssets ? 'loadWorldAssets reads the world files (npc.json when the manifest lists it)' : 'loadWorldAssets [SKIPPED: apps/client/public/world not found — run the pipeline]',
   async () => {
     const read: string[] = [];
     const a = await loadWorldAssets(async (f) => (read.push(f), readWorldFile(f)));
-    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', 'terrain.bin']);
+    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', ...(a.manifest.npc ? ['npc.json'] : []), 'terrain.bin']);
+    if (a.manifest.npc) expect(a.npc!.walk.edges.length).toBeGreaterThan(0);
     expect(a.manifest.parked.length).toBeGreaterThan(0);
     expect(a.collision.indices.length).toBeGreaterThan(0);
     expect(a.terrain.cols * a.terrain.rows).toBe(a.terrain.heights.length);

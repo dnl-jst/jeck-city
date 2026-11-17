@@ -71,10 +71,12 @@ test('walker waits on a narrow sidewalk and goes on when the player leaves', () 
 test('turns back after 20 s', () => {
   const { d, walker } = setup(1.5);
   const w = walker(40);
-  run(d, 0, 22 * TICK_HZ, () => [P(-50, 5)]);
-  const a = pos(w, 22 * TICK_HZ);
-  run(d, 22 * TICK_HZ, 26 * TICK_HZ, () => [P(-50, 5)]);
-  const b = pos(w, 26 * TICK_HZ);
+  // it reaches the player after about 5 s and gives up 20 s later
+  run(d, 0, 24 * TICK_HZ, () => [P(-50, 5)]);
+  const a = pos(w, 24 * TICK_HZ);
+  expect(a.speed).toBeLessThan(0.05); // still waiting
+  run(d, 24 * TICK_HZ, 30 * TICK_HZ, () => [P(-50, 5)]);
+  const b = pos(w, 30 * TICK_HZ);
   expect(b.x).toBeLessThan(a.x - 2); // walking back west
 });
 

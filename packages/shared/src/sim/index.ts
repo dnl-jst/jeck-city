@@ -9,3 +9,6 @@ export * from './proxies';
 export * from './replay';
 export * from './pick';
 export * from './prng';
+export * from './npc-director';
+export * from './npc-bodies';
+export * from './npc-junctions';

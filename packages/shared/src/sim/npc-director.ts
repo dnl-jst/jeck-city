@@ -673,8 +673,8 @@ export class NpcDirector {
     const legs = this.legsFrom(n, pose.s);
     // a player in the way (2.5 m ahead)
     if (n.overtakeUntil <= tick && this.players.length) {
-      const pts = this.routePoints('walk', legs, 3);
-      const ahead = NpcDirector.samples(pts, 3, 0.4);
+      const pts = this.routePoints('walk', legs, 4);
+      const ahead = NpcDirector.samples(pts, 4, 0.4);
       let hit: { o: Obstacle; d: number } | null = null;
       for (const pl of this.players) {
         if (Math.abs(pl.x - pose.x) > 6 || Math.abs(pl.z - pose.z) > 6) continue;
@@ -721,7 +721,9 @@ export class NpcDirector {
     if (vme - lv < 2) return false;
     const gain = leaderD + SIZE.car.len + 6;
     const along = (vme * gain) / (vme - lv);
-    const total = along + 2 * OVERTAKE.ramp;
+    // round a standing obstacle close ahead: swerve over the room there is (at least 3 m); a moving one: OVERTAKE.ramp
+    const ramp = lv < 0.8 ? Math.min(OVERTAKE.ramp, Math.max(3, leaderD - SIZE.car.len / 2 - 0.8)) : OVERTAKE.ramp;
+    const total = along + 2 * ramp;
     // no junction within the manoeuvre (+ margin)
     let off = 0;
     for (const leg of legs) {
@@ -749,7 +751,7 @@ export class NpcDirector {
     let acc = 0;
     const path = base.map((p, i) => {
       if (i > 0) acc += Math.hypot(p.x - base[i - 1]!.x, p.z - base[i - 1]!.z);
-      const k = acc < OVERTAKE.ramp ? acc / OVERTAKE.ramp : acc > total - OVERTAKE.ramp ? Math.max(0, (total - acc) / OVERTAKE.ramp) : 1;
+      const k = acc < ramp ? acc / ramp : acc > total - ramp ? Math.max(0, (total - acc) / ramp) : 1;
       const o = OVERTAKE.offset * smooth(k);
       const q = base[Math.min(base.length - 1, i + 1)]!, r = base[Math.max(0, i - 1)]!;
       const dl = Math.hypot(q.x - r.x, q.z - r.z) || 1;
@@ -764,6 +766,8 @@ export class NpcDirector {
     msgs.push(this.replan(n, tick, path, ramps, 'move', routeLegs));
     this.setShift(n, path, pathLen - legsLen);
     n.overtakeUntil = tick + Math.ceil((pathLen / vme) * TICK_HZ);
+    n.hold = false;
+    n.waitingSince = null;
     n.cap = Infinity;
     n.lastTraffic = tick;
     return true;
@@ -952,14 +956,16 @@ export class NpcDirector {
   bodiesNear(tick: number, points: readonly { x: number; z: number }[], r: number): NpcBody[] {
     const out: NpcBody[] = [];
     const seen = new Set<number>();
-    for (const q of points) {
-      for (const n of this.npcs.values()) {
-        if (seen.has(n.id)) continue;
-        const p = planAt(n.plan, tick);
-        if (Math.abs(p.x - q.x) > r || Math.abs(p.z - q.z) > r || Math.hypot(p.x - q.x, p.z - q.z) > r) continue;
-        seen.add(n.id);
-        out.push({ id: n.id, kind: n.kind, x: p.x, y: p.y, z: p.z, heading: p.heading, pitch: p.pitch, vehicleType: n.look.vehicleType, lying: n.plan.action === 'down' });
-      }
+    // candidates from the positions of the last refresh (at most TRAFFIC_EVERY ticks old: 20 m margin), then exact
+    const cached = this.obstacles.length || !this.npcs.size;
+    const cand = cached ? new Set<NpcState>() : new Set(this.npcs.values());
+    if (cached) for (const q of points) for (const o of this.nearNpcObstacles(q.x, q.z, r + 20)) cand.add(o.npc!);
+    for (const n of cand) {
+      if (seen.has(n.id) || !this.npcs.has(n.id)) continue;
+      const p = planAt(n.plan, tick);
+      if (!points.some((q) => Math.hypot(p.x - q.x, p.z - q.z) <= r)) continue;
+      seen.add(n.id);
+      out.push({ id: n.id, kind: n.kind, x: p.x, y: p.y, z: p.z, heading: p.heading, pitch: p.pitch, vehicleType: n.look.vehicleType, lying: n.plan.action === 'down' });
     }
     return out;
   }

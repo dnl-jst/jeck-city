@@ -13,6 +13,8 @@ import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
+import { NpcBodies, type NpcSource } from './npc-bodies';
+import { NPC_BODY_RADIUS } from '../net/constants';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
 import { pickVehicle } from './pick';
 import { Proxies } from './proxies';
@@ -108,6 +110,14 @@ const BELL_EVERY = 15;
  */
 export class WorldSim {
   tick = 0;
+  /**
+   * The tick NPC plans are evaluated at: 'sim' = this.tick (server, offline), 'external' = npcTick, which the client
+   * sets to the predicted server tick of the step it is about to take.
+   */
+  npcClock: 'sim' | 'external' = 'sim';
+  npcTick = 0;
+  private npcSource: NpcSource | null = null;
+  private npcBodies: NpcBodies | null = null;
   private readonly list = new Map<PlayerId, Player>();
   private readonly ignitions: Ignition[];
   /** Per car: whether the last applied driver input brakes (brake lights). */
@@ -189,6 +199,24 @@ export class WorldSim {
     return this.list.has(id);
   }
 
+  /** NPCs near players get kinematic bodies from `source` before every step (see NpcBodies). */
+  attachNpcs(source: NpcSource): void {
+    this.npcSource = source;
+    this.npcBodies ??= new NpcBodies(this.pw);
+  }
+
+  /** NPC bodies near the players at NPC tick `tick` (for the coming step). */
+  private syncNpcs(tick: number): void {
+    if (!this.npcSource || !this.npcBodies) return;
+    const pts = this.playerPoints();
+    this.npcBodies.sync(pts.length ? this.npcSource.bodiesNear(tick, pts, NPC_BODY_RADIUS) : []);
+  }
+
+  /** Number of NPC bodies in the physics world (tests, debug). */
+  get npcBodyCount(): number {
+    return this.npcBodies?.count ?? 0;
+  }
+
   /** Ignition of car i (engine sound and lights follow it). */
   ignition(i: number): Ignition {
     return this.ignitions[i]!;
@@ -241,6 +269,7 @@ export class WorldSim {
       this.cars.updateProximity(foci);
       this.bikes.updateProximity(foci);
     }
+    this.syncNpcs((this.npcClock === 'sim' ? this.tick : this.npcTick) + 1);
     this.pw.step();
     this.cars.sync();
     this.bikes.sync();
@@ -301,7 +330,7 @@ export class WorldSim {
    * and every lamp is put back afterwards, so only the own entity ends up on the new state. onStep(k) runs after
    * input k.
    */
-  replay(id: PlayerId, from: OwnState, inputs: readonly PlayerInput[], onStep?: (k: number) => void): void {
+  replay(id: PlayerId, from: OwnState, inputs: readonly PlayerInput[], onStep?: (k: number) => void, npcTickAt?: (k: number) => number): void {
     const pl = this.list.get(id);
     if (!pl) throw new Error(`no player ${id}`);
     this.setOwn(id, pl, from);
@@ -314,6 +343,7 @@ export class WorldSim {
       this.useEdge(id, pl, input, ev);
       if (pl.car !== null) this.ignitions[pl.car]!.update();
       this.applyInput(id, pl, input, ev);
+      if (npcTickAt) this.syncNpcs(npcTickAt(k) + 1);
       this.pw.step();
       onStep?.(k);
     });
