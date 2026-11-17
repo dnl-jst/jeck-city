@@ -83,6 +83,9 @@ export class Bot {
     this.target = { ...o.start };
     this.bucketsT0 = this.now();
     room.onMessage('welcome', () => undefined);
+    room.onMessage('n', (bytes: Uint8Array) => {
+      this.npcBytes += bytes.byteLength;
+    });
     room.onMessage('s', (bytes: Uint8Array) => {
       const s = decodeSnapshot(bytes);
       if (s) this.onSnapshot(s);
@@ -99,6 +102,9 @@ export class Bot {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
   }
+
+  /** NPC message bytes received so far (part of the received bytes). */
+  npcBytes = 0;
 
   /** Inputs sent so far. */
   get inputsSent(): number {

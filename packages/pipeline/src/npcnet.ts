@@ -145,7 +145,7 @@ export class NetBuilder {
         const piece = l.pts.slice(start, i + 1);
         const a = node(piece[0]!), b = node(piece[piece.length - 1]!);
         if (a !== b) {
-          const e: NetEdge = { a, b, pts: densify(piece).map((p) => [r2(p.x), r2(p.z)]), width: r2(l.width), oneway: l.oneway };
+          const e: NetEdge = { a, b, pts: simplifyStraight(piece, 0.05).map((p) => [r2(p.x), r2(p.z)]), width: r2(l.width), oneway: l.oneway };
           if (l.crossing) e.crossing = true;
           const list = this.edgesOf.get(l);
           if (list) list.push(g.edges.length);
@@ -383,10 +383,10 @@ export function buildWalkGraph(roads: Road[], sidewalks: Map<Road, SidewalkWidth
 }
 
 /** Drops vertices that lie on the straight line between their neighbours (within 1 cm). */
-function simplifyStraight(pts: Pt[]): Pt[] {
+function simplifyStraight(pts: Pt[], tol = 0.01): Pt[] {
   if (pts.length < 3) return pts;
   const out = [pts[0]!];
-  for (let i = 1; i < pts.length - 1; i++) if (distToPolyline(pts[i]!, [out[out.length - 1]!, pts[i + 1]!]) > 0.01) out.push(pts[i]!);
+  for (let i = 1; i < pts.length - 1; i++) if (distToPolyline(pts[i]!, [out[out.length - 1]!, pts[i + 1]!]) > tol) out.push(pts[i]!);
   out.push(pts[pts.length - 1]!);
   return out;
 }

@@ -1,15 +1,17 @@
 import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
-  parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
-  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
+  CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeNpcBatch, encodeSnapshot, FixedStepper, heightAt, Interest, MAX_MESSAGE_BYTES,
+  NpcDirector, parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, surfaceY, TICK_HZ, WorldSim,
+  type NpcMsg, type PlayerId, type PlayerInput, type PlayerNear, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
 import { LagLine } from './fake-lag';
 import { TickStats, type Health } from './health';
 import { InputQueue } from './inputs';
 import { JoinLimiter } from './join-limit';
+import { LoadBrake } from './load-brake';
+import { NpcFeed } from './npc-feed';
 import { ipHash, log } from './log';
 import { BikeSlowState, CarState, LampState, NippesState, PlayerState } from './state';
 
@@ -41,7 +43,12 @@ type Seat = {
   /** Fake lag (dev) per direction; null when off. */
   lagIn: LagLine | null;
   lagOut: LagLine | null;
+  /** The NPCs this client knows. */
+  npcFeed: NpcFeed;
 };
+
+/** Seed of the NPC director (spawns, routes, looks). */
+const NPC_SEED = 1766132;
 
 /** Byte size of a raw ws 'message' payload (Buffer, ArrayBuffer or fragments). */
 function rawSize(data: unknown): number {
@@ -76,6 +83,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   private readonly stats = new TickStats();
   /** Sim events of the last SNAPSHOT_EVERY ticks, by tick % SNAPSHOT_EVERY: a client's snapshot gets all of them. */
   private readonly recentEvents: SimEvent[][] = Array.from({ length: SNAPSHOT_EVERY }, () => []);
+  /** The NPCs (null: the world has no npc.json) and their messages of the last SNAPSHOT_EVERY ticks, like recentEvents. */
+  npcs: NpcDirector | null = null;
+  private readonly recentNpc: NpcMsg[][] = Array.from({ length: SNAPSHOT_EVERY }, () => []);
+  private readonly brake = new LoadBrake();
 
   async onCreate(): Promise<void> {
     const { cfg, assets } = this.deps;
@@ -85,6 +96,23 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     this.joins = new JoinLimiter(cfg.joinPerMin);
     this.setState(new NippesState());
     this.sim = await WorldSim.create(assets);
+    if (assets.npc) {
+      // NPCs stand on whatever the collision has there (sidewalk, road, lawn), looked up once per metre
+      const heights = new Map<number, number>();
+      const pw = this.sim.pw, terrain = assets.terrain;
+      const groundAt = (x: number, z: number): number => {
+        const k = Math.round(x) * 100003 + Math.round(z);
+        let y = heights.get(k);
+        if (y === undefined) {
+          const g = heightAt(terrain, x, z);
+          y = surfaceY(pw, x, z, g + 3) ?? g;
+          heights.set(k, y);
+        }
+        return y;
+      };
+      this.npcs = new NpcDirector(assets.npc, groundAt, NPC_SEED);
+      this.sim.attachNpcs(this.npcs);
+    }
 
     this.onMessageBytes('i', (client, bytes: Uint8Array) => {
       const seat = this.seatOf(client);
@@ -156,7 +184,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const lag = this.deps.cfg.fakeLag;
     const seat: Seat = {
       slot, name, ipHash: auth.ipHash, queue: new InputQueue(this.sim.player(slot).yaw), kicked: false, client,
-      interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
+      interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag), npcFeed: new NpcFeed(),
     };
     this.seats.set(client.sessionId, seat);
     this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant }));
@@ -182,6 +210,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     seat.client = client; // a new Client object for the new connection
     seat.away = false;
     seat.interest = new Interest(); // the new connection knows nothing yet
+    seat.npcFeed = new NpcFeed();
     this.watchMessageSize(client);
     this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick }));
     log('info', 'reconnect', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash });
@@ -227,9 +256,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
    * /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks, plus the totals since start
    * (ticks run, steps dropped) and the process' resident memory.
    */
-  health(): Health & { ticks: number; droppedTotal: number; rssMb: number } {
+  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; npcs: number; npcDensity: number } {
     return {
       ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
+      npcs: this.npcs?.count ?? 0, npcDensity: this.npcs?.density ?? 0,
       rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
     };
   }
@@ -302,9 +332,18 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const events = this.sim.step(inputs);
     const phase = this.sim.tick % SNAPSHOT_EVERY;
     this.recentEvents[phase] = events;
+    if (this.npcs) {
+      this.npcs.setPlayers(this.playersNear());
+      this.recentNpc[phase] = this.npcs.update(this.sim.tick, this.foci());
+    }
     if (phase === 0) this.syncState();
     this.sendSnapshots(phase);
-    this.stats.record(performance.now() - t0);
+    const ms = performance.now() - t0;
+    this.stats.record(ms);
+    if (this.npcs) {
+      this.brake.record(ms);
+      this.npcs.density = this.brake.factor();
+    }
   }
 
   /**
@@ -320,7 +359,42 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const snap = snapshotFor(round, this.sim, seat.slot, seat.interest, seat.queue.ackSeq);
       const bytes = encodeSnapshot(snap);
       this.outbound(seat, () => seat.client.sendBytes('s', bytes));
+      if (this.npcs) {
+        const p = this.sim.player(seat.slot).pos;
+        const batch = seat.npcFeed.collect(this.npcs, this.sim.tick, p, this.npcSince(phase));
+        if (batch) {
+          const nb = encodeNpcBatch(batch);
+          this.outbound(seat, () => seat.client.sendBytes('n', nb));
+        }
+      }
     }
+  }
+
+  /** The NPC messages of the last SNAPSHOT_EVERY ticks in order. */
+  private npcSince(phase: number): NpcMsg[] {
+    const out: NpcMsg[] = [];
+    for (let k = 1; k <= SNAPSHOT_EVERY; k++) out.push(...this.recentNpc[(phase + k) % SNAPSHOT_EVERY]!);
+    return out;
+  }
+
+  /** Where the players are and look (the NPCs spawn around them, out of their view). */
+  private foci(): { x: number; z: number; heading: number }[] {
+    const out: { x: number; z: number; heading: number }[] = [];
+    for (const seat of this.seats.values()) {
+      const p = this.sim.player(seat.slot);
+      out.push({ x: p.pos.x, z: p.pos.z, heading: p.yaw });
+    }
+    return out;
+  }
+
+  /** The players as NPC traffic sees them. */
+  private playersNear(): PlayerNear[] {
+    const out: PlayerNear[] = [];
+    for (const seat of this.seats.values()) {
+      const p = this.sim.player(seat.slot);
+      out.push({ id: seat.slot, x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, mode: p.mode === 'drive' ? 'drive' : p.mode === 'ride' ? 'ride' : 'walk' });
+    }
+    return out;
   }
 
   /** The events of the last SNAPSHOT_EVERY ticks in order, the current tick (phase `phase`) last. */

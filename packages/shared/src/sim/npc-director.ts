@@ -123,6 +123,8 @@ const smooth = (k: number): number => k * k * (3 - 2 * k);
 
 type Obstacle = { id: number; x: number; z: number; vx: number; vz: number; len: number; half: number; npc: NpcState | null; mode: 'walk' | 'drive' | 'ride' };
 const OBST_CELL = 20;
+/** Plan paths get a point at least this often (m): NPCs follow the ground between them. */
+const NET_POINT_STEP = 4;
 
 /**
  * Spawns, routes and dissolves the NPCs around the players (foci), deterministically from its seed and the foci.
@@ -224,6 +226,13 @@ export class NpcDirector {
     return this.npcs.get(id);
   }
 
+  /** Ids of the NPCs within r (m) of (x, z) by their positions of the last traffic refresh (≤ 0.1 s old). */
+  idsNear(x: number, z: number, r: number): number[] {
+    const out: number[] = [];
+    for (const o of this.nearNpcObstacles(x, z, r)) if (Math.hypot(o.x - x, o.z - z) <= r && this.npcs.has(o.id)) out.push(o.id);
+    return out;
+  }
+
   /** NPCs within r (m) of (x, z) at tick. */
   near(x: number, z: number, r: number, tick: number): NpcState[] {
     const out: NpcState[] = [];
@@ -286,7 +295,18 @@ export class NpcDirector {
       out.push({ x, y: this.heightAt(x, z, layer), z });
     }
     out.push(at(leg.to));
-    return out;
+    // the net stores straight stretches without points in between: follow the ground at least every NET_POINT_STEP m
+    const dense: PathPt[] = [out[0]!];
+    for (let i = 1; i < out.length; i++) {
+      const a = out[i - 1]!, b = out[i]!;
+      const steps = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / NET_POINT_STEP - 1e-9);
+      for (let k = 1; k < steps; k++) {
+        const x = a.x + ((b.x - a.x) * k) / steps, z = a.z + ((b.z - a.z) * k) / steps;
+        dense.push({ x, y: this.heightAt(x, z, layer), z });
+      }
+      dense.push(b);
+    }
+    return dense;
   }
 
   /** Speed (m/s) of n on an edge. */
@@ -353,7 +373,7 @@ export class NpcDirector {
    */
   private pathFrom(pose: { x: number; y: number; z: number }, layer: NetLayer, legs: Leg[], max: number): { path: PathPt[]; extra: number } {
     const pts = this.routePoints(layer, legs, max);
-    if (!pts.length || Math.hypot(pts[0]!.x - pose.x, pts[0]!.z - pose.z) < 0.3) return { path: pts, extra: 0 };
+    if (!pts.length || Math.hypot(pts[0]!.x - pose.x, pts[0]!.z - pose.z) < 0.05) return { path: pts, extra: 0 };
     const len = (q: PathPt[]) => q.reduce((a, p, i) => (i ? a + Math.hypot(p.x - q[i - 1]!.x, p.z - q[i - 1]!.z) : 0), 0);
     let acc = 0, i = 1;
     while (i < pts.length - 1 && acc < 8) {

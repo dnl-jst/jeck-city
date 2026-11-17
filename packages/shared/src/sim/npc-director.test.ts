@@ -173,6 +173,17 @@ test('a sitter ring with a player nearby makes small talk every 20–40 s, none 
   expect(farMsgs.some((m) => m.t === 'say')).toBe(false);
 });
 
+test('plan paths have a point at least every 4 m (the terrain is followed between the net\'s sparse points)', () => {
+  const heights: [number, number][] = [];
+  const d = new NpcDirector(gridNet(), (x, z) => (heights.push([x, z]), 0), 14);
+  run(d, [{ x: 0, z: 0, heading: 0 }], 0, 300);
+  for (const n of d.all()) {
+    if (n.kind === 'sitter' || n.plan.action !== 'move') continue;
+    const p = n.plan.path;
+    for (let i = 1; i < p.length; i++) expect(Math.hypot(p[i]!.x - p[i - 1]!.x, p[i]!.z - p[i - 1]!.z)).toBeLessThanOrEqual(4.0001);
+  }
+});
+
 test('a plan never ends before its successor exists (planDuration sane)', () => {
   const d = new NpcDirector(gridNet(), flat, 13);
   run(d, [{ x: 0, z: 0, heading: 0 }], 0, 300);

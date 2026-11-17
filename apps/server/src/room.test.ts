@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
+  decodeNpcBatch, decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
   type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
@@ -16,6 +16,7 @@ writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
 const base = { port: 0, maxPlayers: 2, logLevel: 'error' as const, joinPerMin: 1000, reconnectS: 3, clientDir, weather: 'off' as const };
 const cfg = loadConfig({}, base);
 const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(`${cfg.worldDir}/${f}`));
+const haveNpc = haveAssets && existsSync(`${cfg.worldDir}/npc.json`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -48,6 +49,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     // handlers a test does not care about (a test's own onMessage replaces these)
     r.onMessage('s', () => undefined);
     r.onMessage('welcome', () => undefined);
+    r.onMessage('n', () => undefined);
     return r;
   };
   /** Leaves all rooms opened so far and waits until the server has removed them. */
@@ -412,6 +414,21 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(await r.text()).toBe('<h1>nippes</h1>');
     expect((await fetch(`http://127.0.0.1:${srv.port}/missing.js`)).status).toBe(404);
   });
+
+  it.skipIf(!haveNpc)('clients receive npc batches near the spawn', async () => {
+    const a = await join('Anna');
+    const plans = new Map<number, number>();
+    a.onMessage('n', (bytes: Uint8Array) => {
+      const b = decodeNpcBatch(bytes);
+      for (const m of b?.msgs ?? []) if (m.t === 'plan') plans.set(m.plan.id, m.plan.startTick);
+    });
+    await until(() => plans.size >= 20, 15_000);
+    const r = await fetch(`http://127.0.0.1:${srv.port}/healthz`);
+    const h = (await r.json()) as { npcs: number; npcDensity: number };
+    expect(h.npcs).toBeGreaterThanOrEqual(20);
+    expect(h.npcDensity).toBeGreaterThan(0);
+    await leaveAll();
+  }, 30_000);
 
   it('/healthz reports players, tick p95, dropped steps and memory', async () => {
     await join('Anna');

@@ -1,9 +1,9 @@
 /**
  * Load test against a dev server (devTeleport must be allowed):
- *   npm run loadtest -- [--url ws://localhost:2567] [--bots 60] [--minutes 10] [--seed 1]
+ *   npm run loadtest -- [--url ws://localhost:2567] [--bots 40] [--minutes 10] [--seed 1] [--min-npcs 150]
  * Bots: 50 % walk, 40 % drive, 10 % ride (per ten bots), all teleported within 300 m of the spawn. Every 10 s /healthz is polled.
- * At the end a table; the exit code is 1 when a criterion of spec 13.5 (as amended 2026-11-16: 60 players on 2 vCPU,
- * tick p95 within the 16.7 ms tick budget) is missed. The server needs NN_JOIN_PER_MIN
+ * At the end a table; the exit code is 1 when a criterion of spec 13.5 (as amended 2026-11-16: tick p95 within the
+ * 16.7 ms tick budget) or of the NPC spec (2026-11-17: 40 players, at least 150 NPCs, NPC messages < 2 KB/s) is missed. The server needs NN_JOIN_PER_MIN
  * raised (all bots join from one address); it reads the world from the same files as the server (NN_WORLD_DIR).
  */
 import { readFileSync } from 'node:fs';
@@ -20,15 +20,16 @@ const BYTES_SKIP_S = 5;
 /** Seconds after the last join before tick times count. */
 const SETTLE_S = 20;
 /** Spec 13.5 as amended 2026-11-16: the tick p95 must fit the 60 Hz budget (1000/60 ms). */
-const LIMITS = { tickP95Ms: 1000 / 60, droppedPct: 1, kbPerS: 50, rssGrowthPct: 10 };
+const LIMITS = { tickP95Ms: 1000 / 60, droppedPct: 1, kbPerS: 50, rssGrowthPct: 10, npcKbPerS: 2 };
 
-type Health = { players: number; tickP95Ms: number; dropped: number; ticks: number; droppedTotal: number; rssMb: number };
+type Health = { players: number; tickP95Ms: number; dropped: number; ticks: number; droppedTotal: number; rssMb: number; npcs?: number; npcDensity?: number };
 type Sample = { t: number; h: Health; connected: number; modes: string; kbps: number };
 
 const { values: args } = parseArgs({
   options: {
     url: { type: 'string', default: 'ws://localhost:2567' },
-    bots: { type: 'string', default: '60' },
+    bots: { type: 'string', default: '40' },
+    'min-npcs': { type: 'string', default: '150' },
     minutes: { type: 'string', default: '10' },
     seed: { type: 'string', default: '1' },
   },
@@ -37,6 +38,7 @@ const url = args.url!;
 const nBots = Number(args.bots);
 const minutes = Number(args.minutes);
 const seed = Number(args.seed);
+const minNpcs = Number(args['min-npcs']);
 const httpUrl = url.replace(/^ws/, 'http');
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -126,7 +128,9 @@ async function main(): Promise<number> {
   const bytesAt = () => bots.map((b) => b.bot.bytesPerSecond().reduce((a, v) => a + v, 0));
   let lastBytes = bytesAt();
   const end = tStart + minutes * 60_000;
-  console.log('   t s | players | tick p95 ms | dropped | rss MB | bots | modes w/d/x/r | KB/s per bot');
+  const npcBytesAt = () => bots.reduce((a, b) => a + b.bot.npcBytes, 0);
+  const npcBytes0 = npcBytesAt();
+  console.log('   t s | players | tick p95 ms | dropped | rss MB | bots | modes w/d/x/r | KB/s per bot | npcs | density');
   while (performance.now() < end) {
     await sleep(Math.min(POLL_S * 1000, end - performance.now()));
     const h = await health();
@@ -137,7 +141,7 @@ async function main(): Promise<number> {
     const m = [0, 1, 2, 3].map((k) => bots.filter((b) => b.leftCode === null && b.bot.mode === k).length).join('/');
     const s: Sample = { t: (performance.now() - tStart) / 1000, h, connected, modes: m, kbps };
     samples.push(s);
-    console.log(`${fmt(s.t, 0).padStart(6)} | ${String(h.players).padStart(7)} | ${fmt(h.tickP95Ms).padStart(11)} | ${String(h.dropped).padStart(7)} | ${String(h.rssMb).padStart(6)} | ${String(connected).padStart(4)} | ${m.padStart(13)} | ${fmt(kbps, 1)}`);
+    console.log(`${fmt(s.t, 0).padStart(6)} | ${String(h.players).padStart(7)} | ${fmt(h.tickP95Ms).padStart(11)} | ${String(h.dropped).padStart(7)} | ${String(h.rssMb).padStart(6)} | ${String(connected).padStart(4)} | ${m.padStart(13)} | ${fmt(kbps, 1).padStart(12)} | ${String(h.npcs ?? '-').padStart(4)} | ${h.npcDensity ?? '-'}`);
   }
   loop.disable();
 
@@ -161,6 +165,10 @@ async function main(): Promise<number> {
   const rssGrowthPct = at3 && minutes >= 4 ? (100 * (last.rssMb - at3.h.rssMb)) / at3.h.rssMb : null;
   const disconnected = bots.filter((b) => b.leftCode !== null).length;
   const sentPerS = bots.reduce((a, b) => a + b.bot.inputsSent, 0) / bots.length / ((performance.now() - t0) / 1000);
+  const npcCounts = samples.map((s) => s.h.npcs ?? 0);
+  const npcMin = Math.min(...npcCounts), npcMean = npcCounts.reduce((a, v) => a + v, 0) / npcCounts.length;
+  const densities = samples.map((s) => s.h.npcDensity ?? 0);
+  const npcKb = (npcBytesAt() - npcBytes0) / bots.length / (minutes * 60) / 1024;
 
   const rows: [string, string, string, boolean][] = [
     ['tick p95 (p95 of 10 s windows)', `${fmt(p95(tickP95s))} ms (max ${fmt(Math.max(...tickP95s))})`, `< ${fmt(LIMITS.tickP95Ms, 1)} ms`, p95(tickP95s) < LIMITS.tickP95Ms],
@@ -168,6 +176,8 @@ async function main(): Promise<number> {
     ['bandwidth p95 per client', `${fmt(kbP95, 1)} KB/s (worst client p95 ${fmt(Math.max(...perBotP95) / 1024, 1)})`, `< ${LIMITS.kbPerS} KB/s`, kbP95 < LIMITS.kbPerS],
     ['RSS minute 3 → end', rssGrowthPct === null ? `n/a (run ≥ 4 min), end ${last.rssMb} MB` : `${at3!.h.rssMb} → ${last.rssMb} MB (${fmt(rssGrowthPct, 1)} %)`, `< ${LIMITS.rssGrowthPct} %`, rssGrowthPct === null || rssGrowthPct < LIMITS.rssGrowthPct],
     ['bots still connected', `${bots.length - disconnected} of ${bots.length}`, 'all', disconnected === 0],
+    ['NPCs (min / mean over the run)', `${npcMin} / ${fmt(npcMean, 0)} (load brake density min ${fmt(Math.min(...densities), 1)})`, `≥ ${minNpcs}`, npcMin >= minNpcs],
+    ['NPC messages per client (mean)', `${fmt(npcKb, 2)} KB/s`, `< ${LIMITS.npcKbPerS} KB/s`, npcKb < LIMITS.npcKbPerS],
   ];
   console.log('\n| criterion | measured | limit | ok |\n|---|---|---|---|');
   for (const [name, v, lim, ok] of rows) console.log(`| ${name} | ${v} | ${lim} | ${ok ? 'yes' : 'NO'} |`);

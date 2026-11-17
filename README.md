@@ -1,6 +1,8 @@
 # Jeck City
 
 Open-World-Spiel in Köln (Repository-Name noch `nippes-nights`): Alle Besucher sind gleichzeitig in derselben Stadt, zu Fuß, mit dem Rad oder im Auto. Vor dem Laden erklärt ein Intro-Screen das Spiel und warnt vor der Download-Größe (beim Build aus der erzeugten Welt gemessen).
+
+Rund um die Spieler erzeugt der Server NPCs: Passanten, Radfahrer, Autofahrer und Gruppen in Parks. Sie halten sich an Ampeln und rechts vor links und schimpfen auf Kölsch, wenn man ihnen im Weg steht. Das Wegenetz dafür (`npc.json`) erzeugt `npm run pipeline`; `/healthz` meldet `npcs` und `npcDensity` (sinkt automatisch, wenn der Server-Takt zu langsam wird). Design: `docs/superpowers/specs/2026-11-17-npcs-design.md`.
 TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ## Entwickeln
@@ -33,7 +35,7 @@ Fehlt `apps/client/public/world/`, bricht der Build mit einer klaren Meldung ab.
 ### Starten
 
 ```
-docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=60 nippes-nights
+docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=40 nippes-nights
 curl localhost:2567/healthz
 ```
 
@@ -42,14 +44,14 @@ Umgebungsvariablen:
 | Variable | Standard | Bedeutung |
 | --- | --- | --- |
 | `PORT` | 2567 | Port im Container |
-| `MAX_PLAYERS` | 60 | gleichzeitige Spieler; bis 100 möglich, 100 nur auf einem schnelleren Einzelkern |
+| `MAX_PLAYERS` | 40 | gleichzeitige Spieler; mehr ist möglich (bis 100), lässt aber den NPCs weniger Rechenzeit (die Last-Bremse dünnt sie dann aus) |
 | `PUBLIC_URL` | – | nur nötig, wenn die Spiel-Verbindung über eine andere Adresse laufen soll als die Seite (z. B. `spiel.example.org`); ohne Angabe nutzt der Client die Adresse der Seite |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `NN_WEATHER` | `live` | `live`: alle 15 min von Open-Meteo; `off`: kein Abruf, klares Wetter; im Entwicklungsmodus auch ein festes Wetter: `clear`, `cloudy`, `mist`, `fog`, `drizzle`, `rain`, `heavyrain`, `snow` |
 
 Ohne Docker: ein bloßes `npm start` ohne `NODE_ENV=production` startet den Server im Entwicklungsmodus (Teleport, Fliegen, Schreib-Hooks für Tests). In Produktion immer `NODE_ENV=production` setzen; das Docker-Image tut das.
 
-Mindestgröße: 2 dedizierte vCPU mit hohem Einzelkern-Takt und 2 GB RAM für 60 Spieler; mit der großen Welt (≈ 800 MB)
+Mindestgröße: 2 dedizierte vCPU mit hohem Einzelkern-Takt und 2 GB RAM für 40 Spieler samt NPCs; mit der großen Welt (≈ 800 MB)
 braucht der leere Server schon ≈ 1,1 GB, daher besser 4 GB. Die Simulation läuft auf einem Kern; Messwerte und Lasttest:
 `docs/superpowers/notes/2026-11-15-multiplayer-loadtest.md` (`npm run loadtest`).
 
@@ -75,7 +77,7 @@ Voraussetzungen auf dem Server: Docker mit Compose-Plugin, ein DNS-Eintrag (A/AA
    ```
    cd /opt/nippes
    cp .env.example .env
-   nano .env            # DOMAIN=spiel.example.org, IMAGE=ghcr.io/dnl-jst/nippes-nights:latest, MAX_PLAYERS=60
+   nano .env            # DOMAIN=spiel.example.org, IMAGE=ghcr.io/dnl-jst/nippes-nights:latest, MAX_PLAYERS=40
    ```
 3. Ist das Image privat, einmal bei der GitHub Container Registry anmelden (Token mit `read:packages`):
    ```
@@ -106,7 +108,7 @@ Neues Image bauen (`npm run pipeline` nur, wenn sich die Welt geändert hat), da
 ```
 docker build -f apps/server/Dockerfile -t nippes-nights .
 docker stop nippes && docker rm nippes
-docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=60 nippes-nights
+docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=40 nippes-nights
 ```
 
 Laufende Spieler werden dabei getrennt. Ein offener Client zeigt „Neue Version – bitte Seite neu laden.“, sobald er sich mit

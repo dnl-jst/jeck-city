@@ -41,7 +41,7 @@ test('sidewalk lines lie beside the carriageway, not on it', () => {
       expect(onCarriageway(r, { x, z })).toBe(false);
       if (x > 1 && x < 99) expect(Math.abs(z)).toBeCloseTo(4.25, 1);
     }
-    for (let i = 1; i < e.pts.length; i++) expect(Math.hypot(e.pts[i]![0] - e.pts[i - 1]![0], e.pts[i]![1] - e.pts[i - 1]![1])).toBeLessThanOrEqual(4.0001);
+    expect(e.pts.length).toBe(2); // straight: no points in between (the director densifies when it plans)
   }
 });
 
