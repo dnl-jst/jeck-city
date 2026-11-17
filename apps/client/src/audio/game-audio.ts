@@ -67,7 +67,7 @@ export class GameAudio {
 
   constructor(private readonly d: { mixer: AudioMixerLike; radio: RadioLike; tuner: RadioTuner; flash(text: string): void; rand?: () => number; remote?: RemoteAudio }) {
     this.rand = d.rand ?? Math.random;
-    this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'sfx') });
+    this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'cabin') });
     this.tramBell = new TramBell(this.rand);
     this.bike = new BikeSound({ oneShot: (id, o) => d.mixer.oneShot(id, o) });
   }
@@ -130,7 +130,7 @@ export class GameAudio {
 
   crank(): void {
     this.starter?.stop();
-    this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
+    this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine, bus: 'cabin' });
   }
 
   /** The engine has caught: engine voices (once loaded + unlocked) and the radio. */
