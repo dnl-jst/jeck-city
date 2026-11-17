@@ -9,6 +9,7 @@ import {
   MeshStandardMaterial, Object3D, PerspectiveCamera, PlaneGeometry, Points, PointsMaterial, BufferGeometry, Scene, Shape,
   SpotLight, WebGLRenderer, type Material,
 } from 'three';
+import { BeatDetector } from './intro-beat';
 import { introMusicSpectrum } from './intro-music';
 
 const RING_BARS = 64;
@@ -204,10 +205,11 @@ export function startIntroScene(container: HTMLElement): () => void {
   observer.observe(container);
   resize();
 
-  const spectrum = new Uint8Array(128) as Uint8Array<ArrayBuffer>;
+  const spectrum = new Uint8Array(512) as Uint8Array<ArrayBuffer>;
+  const beats = new BeatDetector();
   const levels = new Float32Array(RING_BARS);
   const dummy = new Object3D();
-  let bassAvg = 0.2, lastBeat = 0, flash = 0, last = performance.now(), frame = 0, trickle = 0;
+  let flash = 0, last = performance.now(), frame = 0, trickle = 0;
 
   const tick = (now: number): void => {
     frame = requestAnimationFrame(tick);
@@ -218,15 +220,13 @@ export function startIntroScene(container: HTMLElement): () => void {
     if (!live) {
       // idle: a slow synthetic pulse at ~100 bpm
       const beat = Math.pow(Math.max(0, Math.sin(t * Math.PI * 1.67)), 8);
-      for (let i = 0; i < spectrum.length; i++) spectrum[i] = 255 * (0.12 + 0.18 * beat * Math.exp(-i / 20) + 0.06 * Math.sin(t * 2 + i * 0.4));
+      for (let i = 0; i < spectrum.length; i++) spectrum[i] = 255 * (0.12 + 0.3 * beat * Math.exp(-i / 80) + 0.06 * Math.sin(t * 2 + i * 0.1));
     }
     // bass and beat
     let bass = 0;
-    for (let i = 1; i <= 6; i++) bass += spectrum[i]! / 255;
-    bass /= 6;
-    bassAvg += (bass - bassAvg) * Math.min(1, dt * 2.5);
-    if (bass > bassAvg * 1.08 && bass > 0.2 && now - lastBeat > 220) {
-      lastBeat = now;
+    for (let i = 1; i <= 4; i++) bass += spectrum[i]! / 255;
+    bass /= 4;
+    if (beats.update(spectrum, now)) {
       flash = 1;
       burst(live ? 45 : 16, live ? 0.6 + bass : 0.6);
     }
@@ -235,9 +235,10 @@ export function startIntroScene(container: HTMLElement): () => void {
     // ring: the spectrum mirrored around the circle (low frequencies in front)
     for (let i = 0; i < RING_BARS; i++) {
       const k = i < RING_BARS / 2 ? i : RING_BARS - 1 - i;
-      const bin = 2 + Math.floor((k / (RING_BARS / 2)) * 70);
+      // logarithmic: ≈ 90 Hz in front up to ≈ 7 kHz at the back
+      const bin = Math.round(2 * Math.pow(75, k / (RING_BARS / 2 - 1)));
       const v = spectrum[bin]! / 255;
-      levels[i]! += (v - levels[i]!) * Math.min(1, dt * 14);
+      levels[i]! += (v - levels[i]!) * Math.min(1, dt * 10);
       const a = (i / RING_BARS) * Math.PI * 2 + Math.PI / 2;
       dummy.position.set(CENTRE.x + Math.cos(a) * RING_RADIUS, 0, CENTRE.z + Math.sin(a) * RING_RADIUS);
       dummy.rotation.set(0, -a, 0);
@@ -250,8 +251,8 @@ export function startIntroScene(container: HTMLElement): () => void {
 
     // windows and lights breathe with the mids, flare on the beat
     let mids = 0;
-    for (let i = 10; i < 40; i++) mids += spectrum[i]! / 255;
-    mids /= 30;
+    for (let i = 40; i < 160; i++) mids += spectrum[i]! / 255;
+    mids /= 120;
     // between the beats it keeps snowing confetti, the more the louder
     trickle += dt * (live ? 25 + 90 * mids : 10);
     if (trickle >= 1) {

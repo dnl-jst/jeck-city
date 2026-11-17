@@ -60,8 +60,9 @@ function connectGraph(m: Music): void {
     try {
       const ctx = new AudioContext();
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.78;
+      // ≈ 47 Hz per bin and light smoothing: the kick drum stands out for the beat detection (intro-beat.ts)
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.3;
       const gain = ctx.createGain();
       ctx.createMediaElementSource(m.audio).connect(analyser);
       analyser.connect(gain).connect(ctx.destination);
