@@ -15,6 +15,7 @@ import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from '
 import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
+import { placeScooters } from './escooters.js';
 import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot } from './bikeracks.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
@@ -36,6 +37,7 @@ const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
+const SCOOTER_SEED = 2025611;
 const BIKE_MODELS = 'data/models/bikes';
 const CAR_MODELS = 'data/models/cars';
 /** Frame colour of the cargo bike at the spawn. */
@@ -248,6 +250,10 @@ async function main() {
   if (insideAnyFootprint(SOUND_BIKE, buildings)) throw new Error('sound bike: spot lies inside a building');
   const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) =>
     Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR && Math.hypot(b.x - SOUND_BIKE.x, b.z - SOUND_BIKE.z) >= SPAWN_BIKE_CLEAR);
+  const scooters = placeScooters(f, buildings, SCOOTER_SEED, {
+    lamps, trees, hoops: racks.flatMap((r) => r.hoops), keepClear: [spawn, spawnCar.pos, spawnBike, SOUND_BIKE],
+  }, sidewalks);
+  console.log(`e-scooters: ${scooters.length} (${scooters.filter((s) => s.down).length} lying)`);
   const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
 
@@ -274,7 +280,10 @@ async function main() {
     carModels,
     characterModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
-    bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+    bikes: [
+      ...[{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+      ...scooters.map(({ down, ...b }) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading), ...(down ? { down } : {}) })),
+    ],
     parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,

@@ -4,6 +4,7 @@ import type { ParkOrientation } from './crosssection.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt, pointInPolygon } from './polyline.js';
+import { placeRand } from './placerand.js';
 import { edgeAt, inRamp, nearestOn, onCarriageway } from './roadprofile.js';
 
 const KERB_SPACING = 6; // roads without parking-strip tags: cars along the kerb
@@ -19,18 +20,6 @@ const CROSSING_MARGIN = 1; // car body this far clear of a crossing carriageway
 const MAX_SPOTS = 2600;
 const PARKABLE = new Set(['residential', 'tertiary']);
 const COS15 = Math.cos((15 * Math.PI) / 180);
-
-/** Deterministic PRNG (mulberry32) so a seed always yields the same spots. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 type Spot = { pos: Pt; heading: number };
 /** Where cars stand on one side of a road: centre offset from the axis (signed, right of travel > 0), spacing, angle, occupancy. */
@@ -76,10 +65,10 @@ function parkHeading(dir: Pt, side: 1 | -1, oneway: boolean, angle: number): num
  * boundary (≥ 3 m from it, so also on the collision ground, which covers the boundary bbox + 200 m), outside every
  * building footprint, ≥ 10 m from junction nodes and tram stops, ≥ 3 m from tram tracks, and with the car body
  * ≥ 1 m clear of any crossing (non-parallel) carriageway, and not in a kerb ramp between ways (roadprofile.ts).
- * At most 2600, a deterministic random subset beyond that.
+ * Which candidates are taken (occupancy) and the subset beyond 2600 are drawn per position (placeRand), so cars stay
+ * put on streets the OSM data did not change.
  */
 export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: BuildingMesh[]): Spot[] {
-  const rand = rng(seed);
   const roads = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = [...junctions(roads.map((r) => dedupe(r.points))).values()];
   const blockers = [...junc, ...f.tramStops.map((s) => s.pos)];
@@ -110,12 +99,11 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
     const total = cum[cum.length - 1]!;
     for (const lane of lanes) {
       for (let s = lane.spacing / 2; s < total; s += lane.spacing) {
-        const occupied = rand() < lane.occupancy; // drawn for every candidate so the stream stays stable
-        if (!occupied) continue;
         if (inRamp(r, s - halfLength, s + halfLength)) continue; // the kerb moves there
         const { p, dir } = pointAt(pts, cum, s);
         const off = lane.off(s);
         const pos = { x: p.x - dir.z * off, z: p.z + dir.x * off };
+        if (placeRand(seed, pos) >= lane.occupancy) continue; // keyed by the spot: stable across OSM changes elsewhere
         if (blockers.some((b) => dist(b, pos) < CLEARANCE)) continue;
         if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) continue;
         if (!inPlayArea(pos) || insideAnyFootprint(pos, buildings)) continue;
@@ -125,12 +113,9 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
     }
   }
   if (spots.length <= MAX_SPOTS) return spots;
-  // deterministic random subset, original order kept
-  const keep = spots.map((_, i) => i);
-  for (let i = keep.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [keep[i], keep[j]] = [keep[j]!, keep[i]!];
-  }
+  // deterministic subset keyed by position (the spots with the lowest draw), original order kept
+  const key = spots.map((sp) => placeRand(seed, sp.pos, 1));
+  const keep = spots.map((_, i) => i).sort((a, b) => key[a]! - key[b]! || a - b);
   return keep.slice(0, MAX_SPOTS).sort((a, b) => a - b).map((i) => spots[i]!);
 }
 

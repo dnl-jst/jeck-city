@@ -33,5 +33,10 @@ or inside Blender (MCP): `exec(open(PATH).read(), {'__file__': PATH})`. Each run
 
 Material `paint` is the frame colour; the client recolours it per bike. Material `mirror` (disco ball) shimmers while the ball is on.
 
+`escooter/` is the rental e-scooter (type `escooter`): no `crank`; `pedal_l` / `pedal_r` are empties on the deck where
+the standing rider's feet go (left in front), `seat` is the hip point, `paint` the fleet colour (pipeline
+`FLEET_COLORS`). The pipeline scatters them along the sidewalks (`packages/pipeline/src/escooters.ts`); a few lie on
+their side (manifest `down`), drawn rolled over until someone moves them.
+
 `soundjohn/` reuses `longjohn/build.py` (`build(coll_name, cargo)`) and adds the sound box and the disco ball; there is
 exactly one in the world (pipeline `SOUND_BIKE`, in front of Neusser Str. 381), and riding it plays the radio.

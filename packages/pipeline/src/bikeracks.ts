@@ -1,7 +1,8 @@
 import type { BuildingMesh } from './buildings.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { carContourDistance, rng } from './parking.js';
+import { carContourDistance } from './parking.js';
+import { placeRand } from './placerand.js';
 import { DRIVABLE, distToPolyline, pointInPolygon } from './polyline.js';
 import { edgeAt, nearestOn } from './roadprofile.js';
 
@@ -142,17 +143,17 @@ export function layoutRacks(f: OsmFeatures, buildings: BuildingMesh[]): RackRow[
 }
 
 /**
- * Bikes in the racks, deterministic for a seed: per hoop either a cargo bike (Long John or trike, parallel to the row
+ * Bikes in the racks, deterministic for a seed and drawn per hoop position (placeRand): per hoop either a cargo bike (Long John or trike, parallel to the row
  * 1.6 m behind it, at least 3 hoops from the row's previous one) or up to two bikes in the slots either side of the
  * hoop; ~50 % of the slots are taken, types per spec (dutch 45 %, mtb 20 %, road 15 %, Long John 10 %, trike 10 %).
  * `buildings`: cargo bikes whose spot lies in one are left out.
  */
 export function fillRacks(rows: RackRow[], seed: number, buildings: BuildingMesh[] = []): PlacedBike[] {
-  const rand = rng(seed);
   const out: PlacedBike[] = [];
-  const color = () => COLORS[Math.floor(rand() * COLORS.length)]!;
-  const pick = (): number => {
-    let r = rand() * TYPE_WEIGHTS.reduce((s, [, w]) => s + w, 0);
+  // every draw is keyed by the hoop's position (placeRand), so racks keep their bikes when other racks change
+  const color = (at: Pt, salt: number) => COLORS[Math.floor(placeRand(seed, at, salt) * COLORS.length)]!;
+  const pick = (u: number): number => {
+    let r = u * TYPE_WEIGHTS.reduce((s, [, w]) => s + w, 0);
     for (const [t, w] of TYPE_WEIGHTS) if ((r -= w) < 0) return t;
     return 0;
   };
@@ -161,21 +162,22 @@ export function fillRacks(rows: RackRow[], seed: number, buildings: BuildingMesh
     const ax = fz, az = -fx; // along the row
     let lastCargo = -Infinity;
     row.hoops.forEach((h, k) => {
-      if (k - lastCargo >= CARGO_GAP && rand() < CARGO_CHANCE) {
+      if (k - lastCargo >= CARGO_GAP && placeRand(seed, h, 10) < CARGO_CHANCE) {
         const pos = { x: h.x - fx * CARGO_BEHIND, z: h.z - fz * CARGO_BEHIND };
-        const type = rand() < 0.5 ? 3 : 4;
-        const heading = Math.atan2(ax, az) + (rand() < 0.5 ? 0 : Math.PI);
+        const type = placeRand(seed, h, 11) < 0.5 ? 3 : 4;
+        const heading = Math.atan2(ax, az) + (placeRand(seed, h, 12) < 0.5 ? 0 : Math.PI);
         // the whole cargo bike (±1.3 m along the row, ±0.45 m across) must be outside every building
         const corners = [-1, 1].flatMap((a) => [-1, 1].map((b) => ({ x: pos.x + ax * 1.3 * a - fx * 0.45 * b, z: pos.z + az * 1.3 * a - fz * 0.45 * b })));
         if (![pos, ...corners].some((c) => insideAnyFootprint(c, buildings))) {
-          out.push({ ...pos, heading: Math.atan2(Math.sin(heading), Math.cos(heading)), type, color: color() });
+          out.push({ ...pos, heading: Math.atan2(Math.sin(heading), Math.cos(heading)), type, color: color(h, 13) });
           lastCargo = k;
           return;
         }
       }
-      for (const s of [-1, 1]) {
-        if (rand() >= SLOT_CHANCE) continue;
-        out.push({ x: h.x + ax * SLOT_OFFSET * s, z: h.z + az * SLOT_OFFSET * s, heading: row.heading, type: pick(), color: color() });
+      for (const s of [-1, 1] as const) {
+        const salt = s < 0 ? 20 : 30;
+        if (placeRand(seed, h, salt) >= SLOT_CHANCE) continue;
+        out.push({ x: h.x + ax * SLOT_OFFSET * s, z: h.z + az * SLOT_OFFSET * s, heading: row.heading, type: pick(placeRand(seed, h, salt + 1)), color: color(h, salt + 2) });
       }
     });
   }

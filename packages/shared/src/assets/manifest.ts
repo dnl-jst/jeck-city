@@ -72,10 +72,12 @@ export type WorldManifest = {
    */
   bikeRacks: { x: number; z: number; heading: number; kind: 0 | 1 }[];
   /**
-   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike, 5 soundjohn), color = frame
-   * colour; bikes[0] is the cargo bike at the spawn, the one soundjohn (sound box, radio) stands at Neusser Str. 381. Missing in older manifests → [].
+   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike, 5 soundjohn, 6 escooter),
+   * color = frame (fleet) colour; bikes[0] is the cargo bike at the spawn, the one soundjohn (sound box, radio) stands at
+   * Neusser Str. 381. down: lies on its side (knocked-over e-scooters; shown so until someone moves it). Missing in
+   * older manifests → [].
    */
-  bikes: { x: number; z: number; heading: number; type: number; color: number }[];
+  bikes: { x: number; z: number; heading: number; type: number; color: number; down?: boolean }[];
   /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */
   bikeModels: { type: BikeType; file: string; bytes: number }[];
   /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
@@ -186,7 +188,9 @@ export function parseManifest(json: unknown): WorldManifest {
     bikes: o.bikes === undefined ? [] : arr(o.bikes, 'bikes', (v, p) => {
       const b = nums(v, p, ['x', 'z', 'heading', 'type', 'color']);
       if (!Number.isInteger(b.type) || b.type < 0 || b.type >= BIKE_TYPE_COUNT) fail(`${p}.type`, `must be an integer 0..${BIKE_TYPE_COUNT - 1}`);
-      return b;
+      const down = (v as { down?: unknown }).down;
+      if (down !== undefined && typeof down !== 'boolean') fail(`${p}.down`, 'must be a boolean');
+      return down ? { ...b, down: true } : b;
     }),
     bikeModels: o.bikeModels === undefined ? [] : arr(o.bikeModels, 'bikeModels', (v, p) => {
       const b = obj(v, p);
