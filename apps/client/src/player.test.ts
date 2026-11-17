@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { Bone, Group, type Object3D, Scene, Vector3 } from 'three';
+import { TUNING } from '@nn/shared';
 import { gaitPose, PlayerFigure, proportionsOf } from './player';
 
 const seat = new Vector3(0, 0.98, -0.25);
@@ -60,13 +61,15 @@ describe('riding pose', () => {
 });
 
 describe('fall and get up', () => {
-  test('busy while falling and lying, free again after about a second', () => {
+  test('busy while falling and lying, free again after TUNING.bike.getUpSeconds', () => {
     const f = new PlayerFigure(new Scene());
     f.fall(0);
     const step = (s: number) => { for (let i = 0; i < Math.round(s * 60); i++) f.update(0, 0, 0, { x: 0, y: 0, z: 0 }, 1 / 60); };
     step(0.5);
     expect(f.busy).toBe(true);
-    step(1.2);
+    step(TUNING.bike.getUpSeconds - 0.6);
+    expect(f.busy).toBe(true);
+    step(0.2);
     expect(f.busy).toBe(false);
   });
 

@@ -369,9 +369,9 @@ export class WorldSim {
   }
 
   /** A car hit rider `id` hard: they fall off as in a crash (the bike stops and stays), with the `dismount` event. */
-  knockOffBike(id: PlayerId, ev: SimEvent[]): void {
+  knockOffBike(id: PlayerId, ev: SimEvent[], thrown: { x: number; y: number; z: number }): void {
     const pl = this.list.get(id);
-    if (pl?.ridden) this.crash(id, pl, ev);
+    if (pl?.ridden) this.crash(id, pl, ev, thrown);
   }
 
   /** Where every player is (the car they drive, the bike they ride, else their feet). */
@@ -460,7 +460,11 @@ export class WorldSim {
         const s = pl.ridden!.state();
         ev.push({ t: 'bell', id, x: s.x, z: s.z });
       }
-      if (r.crashed) this.crash(id, pl, ev);
+      if (r.crashed) {
+        // thrown on (over the handlebar) with a share of the speed it hit the obstacle with
+        const h = pl.ridden!.state().heading, v = r.crashSpeed * TUNING.bike.crashThrow;
+        this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v });
+      }
     } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
@@ -602,14 +606,18 @@ export class WorldSim {
     this.leaveBike(id, pl, spot, s, false, ev);
   }
 
-  /** Crashed into something: the rider falls next to the bike, which stays where it is. */
-  private crash(id: PlayerId, pl: Player, ev: SimEvent[]): void {
+  /**
+   * Crashed into something or hit by a car: the rider falls next to the bike, which stays where it is, and is
+   * `thrown` (m/s; slides out while lying, as a knocked-down walker).
+   */
+  private crash(id: PlayerId, pl: Player, ev: SimEvent[], thrown: { x: number; y: number; z: number }): void {
     const r = pl.ridden!, s = r.state();
     r.restore({ ...s, speed: 0 });
     // nowhere free to the side or behind (squeezed against a wall): fall where the bike is, never through the wall
     const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
     this.leaveBike(id, pl, spot, s, true, ev);
     pl.fallTicks = FALL_TICKS;
+    pl.char.knock(thrown, FALL_TICKS);
   }
 
   private leaveBike(id: PlayerId, pl: Player, spot: XZ, s: BikeState, crash: boolean, ev: SimEvent[]): void {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
+  decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
   type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
@@ -336,7 +336,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await leaveAll();
   });
 
-  it('car hits walker → down, up after ~1 s', async () => {
+  it('car hits walker → down, up after KNOCKDOWN_S', async () => {
     const a = await join('Anna'), b = await join('Bert');
     const wb = watch(b);
     const { x, z, h } = besideCar(2);
@@ -355,7 +355,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2);
     const down = wb.modeAt.findIndex((m) => m.mode === 2);
     const downS = (wb.modeAt[down + 1]!.tick - wb.modeAt[down]!.tick) / 60;
-    expect(Math.abs(downS - 1)).toBeLessThanOrEqual(0.1 + 1 / 20); // 1.0 s ± 0.1 s, measured at 20 Hz resolution
+    expect(Math.abs(downS - KNOCKDOWN_S)).toBeLessThanOrEqual(0.1 + 1 / 20); // ± 0.1 s, measured at 20 Hz resolution
     pa.stop();
     await leaveAll();
   }, 30_000);

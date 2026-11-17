@@ -13,7 +13,8 @@ export type BikeInput = { pedal: number; steer: number; sprint: boolean; hop: bo
  */
 export type BikeState = { x: number; y: number; z: number; heading: number; speed: number; steer: number; vy: number; grounded: boolean; crank: number };
 
-export type BikeStepResult = { crashed: boolean; landed: boolean };
+/** crashSpeed: the speed (m/s) the bike hit the obstacle with when it crashed (0 otherwise). */
+export type BikeStepResult = { crashed: boolean; landed: boolean; crashSpeed: number };
 
 const T = TUNING.bike;
 const DT = TUNING.world.dt;
@@ -184,12 +185,13 @@ export class RiddenBike {
 
     // forward movement blocked by the frame cast (not by the controller, which now and then returns a zero move on
     // flat ground for one step): crash when fast and head-on, otherwise lose the blocked speed
-    let crashed = false;
+    let crashed = false, crashSpeed = 0;
     const wantF = s.speed * DT;
     if (Math.abs(wantF) > 1e-6) {
       const got = (dx * fx + dz * fz) / wantF;
       if (frontal > T.crashBlocked && s.speed > T.crashKmh * KMH) {
         crashed = true;
+        crashSpeed = s.speed;
         s.speed = 0;
       } else if (got < 0.999) s.speed *= Math.max(0, got);
     }
@@ -200,7 +202,7 @@ export class RiddenBike {
     if (pedal > 0 && s.speed > 0) s.crank += (s.speed / BIKE_WHEEL_RADIUS / BIKE_GEAR) * DT;
     this.body.setNextKinematicTranslation({ x: s.x, y: s.y + this.centre, z: s.z });
     this.body.setNextKinematicRotation(q);
-    return { crashed, landed: !wasGrounded && s.grounded };
+    return { crashed, landed: !wasGrounded && s.grounded, crashSpeed };
   }
 
   /**

@@ -89,14 +89,18 @@ test('crashing into a tree throws the rider off: no control until up again', asy
   expect(crash).toMatchObject({ t: 'dismount', id: 1, bike: 0, crash: true });
   expect(sim.bikes.poses[0]!.z).toBeLessThan(-10);
   const p = sim.player(1);
-  expect(p.mode).toBe('walk');
+  expect(p.mode).toBe('down');
   expect(p.falling).toBe(true);
-  // lying: walking input and E do nothing
-  const at = p.pos;
-  const ev = run(sim, Math.round(TUNING.bike.getUpSeconds * 60) - 2, { ...N, forward: 1, use: true });
+  // thrown on with the bike's momentum and lying: walking input (sideways here) and E do nothing
+  const from = p.pos;
+  const ev = run(sim, Math.round(TUNING.bike.getUpSeconds * 60) - 2, { ...N, forward: 1, use: true, yaw: Math.PI / 2 });
   expect(ev.filter((e) => e.t === 'mount' || e.t === 'enter')).toEqual([]);
-  expect(Math.hypot(sim.player(1).pos.x - at.x, sim.player(1).pos.z - at.z)).toBeLessThan(0.1);
+  const at = sim.player(1).pos;
+  expect(Math.abs(at.x - from.x)).toBeLessThan(0.1);
+  expect(at.z - from.z).toBeGreaterThan(0.3);
+  expect(at.z - from.z).toBeLessThan(4);
   run(sim, 5);
+  expect(sim.player(1).mode).toBe('walk');
   expect(sim.player(1).falling).toBe(false);
   run(sim, 30, { ...N, forward: 1, yaw: Math.PI });
   expect(Math.hypot(sim.player(1).pos.x - at.x, sim.player(1).pos.z - at.z)).toBeGreaterThan(0.5);

@@ -1,11 +1,12 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
+import { CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../ragdoll';
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
 /** Figure height (m) the label floats above. */
@@ -18,6 +19,10 @@ const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 const ROOF_H = 1.5;
 /** A walker that moved further than this in one frame was teleported: no running animation for it. */
 const JUMP_M = 3;
+/** A knocked-down walker's car: the fastest one within this distance (m) of them. */
+const KNOCK_CAR_M = 6;
+/** Upwards throw of a car's hit (m/s; as the sim's collisions.ts). */
+const KNOCK_UP = 3;
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -74,12 +79,14 @@ export type RemoteOptions = {
   occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
+  /** Physics for falls (crashing off a bike, hit by a car); without it the figure tips over as an animation. */
+  ragdolls?: RagdollWorld;
 };
 
 /** A pooled figure and the character template it shows (undefined: not set yet). */
 type Figure = { fig: PlayerFigure; model: Object3D | null | undefined };
 type Walker = Figure & { label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number };
-type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean };
+type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number };
 type Driven = { view: CarView; label: Label | null; seen: boolean };
 
 /**
@@ -111,9 +118,23 @@ export class RemotePlayers {
   ): void {
     const cp = camera.position;
     for (const w of this.walkers.values()) w.seen = false;
+    const riding = new Set<number>();
+    for (const r of sample.riders?.values() ?? []) riding.add(r.slot);
     for (const s of sample.walkers.values()) {
       if (s.slot === this.opts.me) continue;
       let w = this.walkers.get(s.slot);
+      const was = this.riders.get(s.slot);
+      if (!w && was && !riding.has(s.slot) && s.state === 3 && this.opts.ragdolls) {
+        // crashed off the bike: the rider's own figure goes limp from the riding pose, thrown on as the sim throws it
+        const B = TUNING.bike;
+        const v = { x: was.vx * B.crashThrow, y: B.crashUp, z: was.vz * B.crashThrow };
+        was.fig.ragdoll(this.opts.ragdolls, v, spin(v, CRASH_SPIN), B.getUpSeconds);
+        was.label?.dispose();
+        this.freeRig(was);
+        this.riders.delete(s.slot);
+        w = { fig: was.fig, model: was.model, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: 3 };
+        this.walkers.set(s.slot, w);
+      }
       if (!w) {
         const f = this.takeFigure();
         f.fig.heading = s.yaw;
@@ -122,8 +143,20 @@ export class RemotePlayers {
       }
       w.seen = true;
       this.dress(w, variants.get(s.slot) ?? 0);
-      // fell off a bike: tips over, lies, gets up (the figure times it itself)
-      if (s.state === 3 && w.state !== 3) w.fig.fall(s.yaw);
+      // fell off a bike: tips over, lies, gets up (the figure times it itself); hit by a car: thrown with its push
+      const rd = this.opts.ragdolls;
+      if (s.state !== w.state && (s.state === 2 || s.state === 3) && !w.fig.busy) {
+        if (!rd) {
+          if (s.state === 3) w.fig.fall(s.yaw);
+        } else if (s.state === 3) {
+          const v = { x: w.vx, y: TUNING.bike.crashUp, z: w.vz };
+          w.fig.ragdoll(rd, v, spin(v, CRASH_SPIN), TUNING.bike.getUpSeconds);
+        } else {
+          const car = fastestCarNear(sample.cars, s.x, s.z);
+          const v = car ? { x: car.vx * 0.9, y: Math.max(0, car.vy * 0.9) + KNOCK_UP, z: car.vz * 0.9 } : { x: w.vx, y: KNOCK_UP, z: w.vz };
+          w.fig.ragdoll(rd, v, spin(v, KNOCK_SPIN), KNOCKDOWN_S);
+        }
+      }
       w.state = s.state;
       let vx = 0, vz = 0;
       if (!w.fresh && dt > 1e-4) {
@@ -157,12 +190,14 @@ export class RemotePlayers {
         r.rig = this.takeRig(type);
       }
       if (!r) {
-        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true };
+        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true, vx: 0, vz: 0 };
         this.riders.set(s.slot, r);
       }
       r.seen = true;
       this.dress(r, variants.get(s.slot) ?? 0);
       if (s.pedalling && s.speed > 0) r.crank += s.speed * CRANK_PER_M * dt;
+      r.vx = Math.sin(s.heading) * s.speed;
+      r.vz = Math.cos(s.heading) * s.speed;
       const st: BikeState = { x: s.x, y: s.y, z: s.z, heading: s.heading, speed: s.speed, steer: s.steer, vy: 0, grounded: !s.airborne, crank: r.crank };
       const rig = r.rig;
       if (rig) {
@@ -293,6 +328,16 @@ export class RemotePlayers {
 
     this.parked.setHidden(new Set());
   }
+}
+
+/** The fastest streamed car within KNOCK_CAR_M of (x, z) (the one that knocked a walker down), if any moves. */
+function fastestCarNear(cars: ReadonlyMap<string, SnapshotCar>, x: number, z: number): SnapshotCar | null {
+  let best: SnapshotCar | null = null, top = 1;
+  for (const c of cars.values()) {
+    const sp = Math.hypot(c.vx, c.vz);
+    if (sp > top && Math.hypot(c.x - x, c.z - z) < KNOCK_CAR_M) { best = c; top = sp; }
+  }
+  return best;
 }
 
 /** Wheels of a streamed car: spin with its speed along the heading and steer as sent; suspension at rest. */
