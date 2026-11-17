@@ -9,7 +9,7 @@ import { NoWebGLError } from './errors';
 import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { LoadingArt } from './loading-art';
-import { nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
+import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
@@ -127,7 +127,8 @@ function bootFailed(err: unknown): never {
 // WebGL2 is checked before anything else is set up
 if (!document.createElement('canvas').getContext('webgl2')) bootFailed(new NoWebGLError());
 /** Graphics quality (G cycles it; ?quality=low|medium|high overrides the stored choice). */
-let qualityLevel: QualityLevel = storedQuality(params.get('quality'));
+// phones and tablets start on the lightest level (a coarse primary pointer, as for the touch controls)
+let qualityLevel: QualityLevel = storedQuality(params.get('quality'), window.matchMedia('(pointer: coarse)').matches ? DEFAULT_TOUCH_QUALITY : DEFAULT_QUALITY);
 /** Antialiasing is fixed with the WebGL context: a level switch changes it only on the next page load. */
 const bootAntialias = QUALITY[qualityLevel].antialias;
 let renderer: WebGLRenderer;
@@ -347,7 +348,8 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
     fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
-  const sim = await WorldSim.create({ manifest, collision, terrain }, { sliceMs: 12 });
+  // only the city around the player gets colliders (the whole city takes far too long and too much memory on a phone)
+  const sim = await WorldSim.create({ manifest, collision, terrain }, { sliceMs: 12, streamCity: start ? [start] : [] });
   physicsLoading = false; // only once the world is built
   showStatus();
   return { sim, terrain };

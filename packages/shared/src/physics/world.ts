@@ -5,8 +5,12 @@ import { TUNING } from './tuning';
 
 export type Rapier = typeof RAPIER;
 
-/** One Rapier world with the static city in it. step() advances exactly one fixed step (TUNING.world.dt). */
-export type PhysicsWorld = { rapier: Rapier; world: RAPIER.World; step(): void };
+/**
+ * One Rapier world with the static city in it. step() advances exactly one fixed step (TUNING.world.dt).
+ * city: set when the city's colliders are streamed (see createPhysicsWorld's `stream`); then only the tiles around the
+ * points passed to city.update() exist.
+ */
+export type PhysicsWorld = { rapier: Rapier; world: RAPIER.World; step(): void; city?: CityTiles };
 
 /** The Rapier version this code is written for; must equal the dependency pinned in packages/shared/package.json. */
 export const EXPECTED_RAPIER = '0.21.0';
@@ -84,9 +88,14 @@ export const COLLISION_TILE = 100;
  * With `terrain`, the ground is additionally a fixed heightfield that coincides exactly with heightAt(terrain, …),
  * and the boundary walls follow the terrain.
  * sliceMs: give the event loop a turn whenever building has run this long (the browser: input and rendering stay
- * responsive while ~2.5M triangles become colliders, which otherwise blocks the page for seconds). Same world either way.
+ * responsive while ~4M triangles become colliders, which otherwise blocks the page for seconds). Same world either way.
+ * stream: only build the city tiles near these points now (the client: the whole city takes seconds and over a GB on
+ * a phone, but it only ever simulates its own player); pw.city then adds and drops tiles as the points move. Without
+ * it (the server) the whole city is built.
  */
-export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGrid, opts: { sliceMs?: number } = {}): Promise<PhysicsWorld> {
+export async function createPhysicsWorld(
+  c: CollisionAsset, terrain?: TerrainGrid, opts: { sliceMs?: number; stream?: readonly XZ[] } = {},
+): Promise<PhysicsWorld> {
   await initRapier();
   const slice = timeSlicer(opts.sliceMs);
   const world = new RAPIER.World({ x: 0, y: TUNING.world.gravity, z: 0 });
@@ -97,18 +106,15 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   const steps = tileSteps(c.vertices, c.indices, COLLISION_TILE);
   let r = steps.next();
   for (; !r.done; r = steps.next()) await slice();
-  const tiles = r.value;
-  const scratch = new Int32Array(c.vertices.length / 3).fill(-1);
+  const city = new CityTiles(world, ground, c.vertices, r.value);
   await slice();
-  for (const tile of tiles) {
-    const local = compactMesh(c.vertices, tile, scratch);
-    const mesh = subdivideLargeTriangles(local.vertices, dropZeroAreaTriangles(local.vertices, local.indices), TUNING.world.maxTriangleEdge);
-    // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
-    // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
-    if (mesh.indices.length > 0) {
-      world.createCollider(RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), ground);
+  if (opts.stream) {
+    await city.update(opts.stream, Infinity, slice);
+  } else {
+    for (let i = 0; i < city.count; i++) {
+      city.build(i);
+      await slice();
     }
-    await slice();
   }
   if (terrain) world.createCollider(terrainCollider(terrain), ground);
   await slice();
@@ -127,8 +133,118 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
       world.step();
     },
   };
+  if (opts.stream) pw.city = city;
   beforeStep.set(pw, hooks);
   return pw;
+}
+
+type XZ = { x: number; z: number };
+
+/** Streamed city tiles: always built within CITY_NEED of a focus point, … */
+export const CITY_NEED = 160;
+/** …built within CITY_WANT as time allows, … */
+export const CITY_WANT = 260;
+/** …and dropped beyond CITY_DROP of every focus point. */
+export const CITY_DROP = 400;
+
+/**
+ * The city's collision mesh split into COLLISION_TILE tiles, each one trimesh collider that can be built and removed
+ * on its own. Building a tile always makes the same collider (geometry and flags), so a streamed world has exactly the
+ * server's colliders wherever it has tiles.
+ */
+export class CityTiles {
+  private readonly colliders: (RAPIER.Collider | null)[];
+  private readonly scratch: Int32Array<ArrayBuffer>;
+
+  constructor(
+    private readonly world: RAPIER.World, private readonly body: RAPIER.RigidBody, private readonly vertices: Float32Array,
+    private readonly tiles: readonly Tile[],
+  ) {
+    this.colliders = tiles.map(() => null);
+    this.scratch = new Int32Array(vertices.length / 3).fill(-1);
+  }
+
+  get count(): number {
+    return this.tiles.length;
+  }
+
+  /** Tiles that currently have a collider. */
+  get built(): number {
+    return this.colliders.reduce((n, c) => n + (c ? 1 : 0), 0);
+  }
+
+  /** Makes tile i's collider (no-op if it exists). */
+  build(i: number): void {
+    if (this.colliders[i]) return;
+    const local = compactMesh(this.vertices, this.tiles[i]!.idx, this.scratch);
+    const mesh = subdivideLargeTriangles(local.vertices, dropZeroAreaTriangles(local.vertices, local.indices), TUNING.world.maxTriangleEdge);
+    // 1 cm quantisation leaves ~900 zero-area triangles (coincident or collinear corners); they make contact normals
+    // undefined. dropZeroAreaTriangles removes both kinds; Rapier's flag (coincident corners only) is a cheap safety net.
+    if (mesh.indices.length === 0) return;
+    this.colliders[i] = this.world.createCollider(
+      RAPIER.ColliderDesc.trimesh(mesh.vertices, mesh.indices, RAPIER.TriMeshFlags.DELETE_DEGENERATE_TRIANGLES), this.body,
+    );
+  }
+
+  /** Distance (m, x/z) from tile i's square to the nearest of `points`. */
+  private distance(i: number, points: readonly XZ[]): number {
+    const t = this.tiles[i]!;
+    const x0 = t.tx * COLLISION_TILE, z0 = t.tz * COLLISION_TILE;
+    let d = Infinity;
+    for (const p of points) {
+      const dx = Math.max(x0 - p.x, 0, p.x - (x0 + COLLISION_TILE));
+      const dz = Math.max(z0 - p.z, 0, p.z - (z0 + COLLISION_TILE));
+      d = Math.min(d, Math.hypot(dx, dz));
+    }
+    return d;
+  }
+
+  /**
+   * Drops tiles beyond CITY_DROP of all points, builds every missing one within CITY_NEED and, nearest first, those
+   * within CITY_WANT until budgetMs have passed. Returns how many tiles were built. New colliders take part in the next
+   * step's contacts but are seen by scene queries (rays, character controller) only after it.
+   */
+  update(points: readonly XZ[], budgetMs: number): number;
+  update(points: readonly XZ[], budgetMs: number, slice: () => Promise<void>): Promise<number>;
+  update(points: readonly XZ[], budgetMs: number, slice?: () => Promise<void>): number | Promise<number> {
+    const todo: { i: number; d: number }[] = [];
+    for (let i = 0; i < this.tiles.length; i++) {
+      const d = this.distance(i, points);
+      const c = this.colliders[i];
+      if (c && d > CITY_DROP) {
+        this.world.removeCollider(c, false);
+        this.colliders[i] = null;
+      } else if (!c && d <= CITY_WANT) {
+        todo.push({ i, d });
+      }
+    }
+    todo.sort((a, b) => a.d - b.d);
+    const t0 = performance.now();
+    const run = function* (this: CityTiles): Generator<void, number> {
+      let n = 0;
+      for (const { i, d } of todo) {
+        if (d > CITY_NEED && performance.now() - t0 >= budgetMs) break;
+        this.build(i);
+        n++;
+        yield;
+      }
+      return n;
+    }.bind(this);
+    const g = run();
+    if (!slice) {
+      for (;;) {
+        const r = g.next();
+        if (r.done) return r.value;
+      }
+    }
+    return (async () => {
+      for (;;) {
+        const r = g.next();
+        if (r.done) return r.value;
+        await slice();
+      }
+    })();
+  }
 }
 
 /**
@@ -213,15 +329,18 @@ export function tileTriangles(v: Float32Array, idx: Uint32Array, size: number): 
   const steps = tileSteps(v, idx, size);
   for (;;) {
     const r = steps.next();
-    if (r.done) return r.value;
+    if (r.done) return r.value.map((t) => t.idx);
   }
 }
+
+/** One tile of the city mesh: its grid cell (tx, tz: x/z divided by the tile size, floored) and its triangles' indices. */
+export type Tile = { tx: number; tz: number; idx: Uint32Array };
 
 /** Triangles per pause point of tileSteps. */
 const TILE_BATCH = 65_536;
 
 /** tileTriangles as a generator that pauses (yields) every TILE_BATCH triangles, for time-sliced building. */
-export function* tileSteps(v: Float32Array, idx: Uint32Array, size: number): Generator<void, Uint32Array[]> {
+export function* tileSteps(v: Float32Array, idx: Uint32Array, size: number): Generator<void, Tile[]> {
   const tris = idx.length / 3;
   if (tris === 0) return [];
   const cx = new Int32Array(tris), cz = new Int32Array(tris);
@@ -251,7 +370,11 @@ export function* tileSteps(v: Float32Array, idx: Uint32Array, size: number): Gen
     out[k]!.set(idx.subarray(3 * t, 3 * t + 3), fill[k]!);
     fill[k]! += 3;
   }
-  return out.filter((x): x is Uint32Array => x !== null);
+  const tiles: Tile[] = [];
+  out.forEach((t, k) => {
+    if (t) tiles.push({ tx: x0 + (k % w), tz: z0 + Math.floor(k / w), idx: t });
+  });
+  return tiles;
 }
 
 /**
