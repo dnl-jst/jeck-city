@@ -105,16 +105,22 @@ export function startIntroMusic(root: HTMLElement): void {
   // the game's key handlers on window must not see a Space/Enter on the button
   for (const type of ['keydown', 'keyup'] as const) button.addEventListener(type, (e) => e.stopPropagation());
   root.append(button);
+  // Audible only once the element plays AND its Web Audio context runs. iOS Safari creates a context made on a
+  // touch's pointerdown suspended, while play() may still succeed: the song then "plays" into a silent graph. So the
+  // gesture listeners stay until both are true, and every later gesture resumes the context again.
+  const audible = (): boolean => !audio.paused && (!m.graph || m.graph.ctx.state === 'running');
   const onGesture = (): void => {
     if (music !== m) return;
     connectGraph(m);
-    audio.play().then(() => stopGestures?.(), () => undefined);
+    const check = (): void => { if (audible()) stopGestures?.(); };
+    audio.play().then(check, () => undefined);
+    m.graph?.ctx.resume().then(check, () => undefined);
   };
-  window.addEventListener('pointerdown', onGesture, true);
-  window.addEventListener('keydown', onGesture, true);
+  // Safari only lets a finger start sound on its pointerup/touchend (a touch's pointerdown is no user activation)
+  const GESTURES = ['pointerdown', 'pointerup', 'touchend', 'keydown'] as const;
+  for (const t of GESTURES) window.addEventListener(t, onGesture, true);
   stopGestures = () => {
-    window.removeEventListener('pointerdown', onGesture, true);
-    window.removeEventListener('keydown', onGesture, true);
+    for (const t of GESTURES) window.removeEventListener(t, onGesture, true);
     stopGestures = null;
   };
   // no gesture yet: plays only where autoplay is allowed (without Web Audio until the first click)

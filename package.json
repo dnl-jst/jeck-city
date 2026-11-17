@@ -18,7 +18,8 @@
     "accept": "node scripts/accept.mjs",
     "ride-check": "node scripts/ride-check.mjs",
     "mp-check": "node scripts/mp-check.mjs",
-    "loadtest": "tsx apps/server/src/bots/loadtest.ts"
+    "loadtest": "tsx apps/server/src/bots/loadtest.ts",
+    "touch-check": "node scripts/touch-check.mjs"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
