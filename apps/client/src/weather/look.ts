@@ -47,6 +47,16 @@ export class WeatherBlend {
   private to: WeatherLook = { ...CLEAR_LOOK };
   private t = 1;
   private first = true;
+  // primitives, not the object: the room state mutates its weather in place
+  private offered: { known: boolean; kind: string; updatedAt: number } | null = null;
+
+  /** Calls set() only if known, kind or updatedAt differ from the last offered values (the first offer always sets). */
+  offer(w: Weather): void {
+    const o = this.offered;
+    if (o && o.known === w.known && o.kind === w.kind && o.updatedAt === w.updatedAt) return;
+    this.offered = { known: w.known, kind: w.kind, updatedAt: w.updatedAt };
+    this.set(w);
+  }
 
   set(w: Weather): void {
     const target = weatherLook(w);

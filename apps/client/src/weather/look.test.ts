@@ -54,4 +54,25 @@ describe('WeatherBlend', () => {
     const after = b.update(0);
     expect(after.rain).toBeCloseTo(mid.rain, 9);
   });
+  it('offer reacts to in-place mutation of the same object', () => {
+    const b = new WeatherBlend();
+    const w = { ...p('rain') };
+    b.offer(w);
+    b.update(0.016);
+    w.kind = 'clear'; w.precip = 0; w.updatedAt = 2;
+    b.offer(w);
+    const mid = b.update(4);
+    expect(mid.rain).toBeGreaterThan(0);
+    expect(mid.rain).toBeLessThan(weatherLook(p('rain')).rain);
+  });
+  it('offer of an unchanged weather does not restart a fade', () => {
+    const b = new WeatherBlend();
+    const w = { ...p('rain') };
+    b.offer(w);
+    b.update(0.016);
+    b.offer({ ...p('clear'), updatedAt: 5 });
+    b.update(4);
+    b.offer({ ...p('clear'), updatedAt: 5 });
+    expect(b.update(4.1)).toEqual(weatherLook(p('clear')));
+  });
 });

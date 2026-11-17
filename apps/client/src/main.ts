@@ -227,7 +227,6 @@ let sunAge = 0;
 /** Dev override from `?weather=` (set once the dev permissions are known). */
 let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
-let lastWeather: Weather | null = null;
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -291,10 +290,7 @@ renderer.setAnimationLoop((t: number) => {
     }
     nightFactor = sun.nightFactor;
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
-    if (!lastWeather || lastWeather.updatedAt !== wx.updatedAt || lastWeather.kind !== wx.kind || lastWeather.known !== wx.known) {
-      lastWeather = wx;
-      weatherBlend.set(wx);
-    }
+    weatherBlend.offer(wx);
     look = weatherBlend.update(dt);
     lighting.update(sun, camera.position);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
