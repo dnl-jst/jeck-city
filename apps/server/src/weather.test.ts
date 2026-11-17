@@ -60,21 +60,19 @@ describe('WeatherService', () => {
     svc.stop();
   });
 
-  it('warns once per three failures in a row; success resets', async () => {
+  it('warns on the first failure of a series only; success resets', async () => {
     let ok = false;
     const fetchJson = vi.fn(() => (ok ? Promise.resolve(SAMPLE) : Promise.reject(new Error('x'))));
     const { svc } = make(fetchJson);
     expect(await svc.pollOnce()).toBe(false);
-    expect(await svc.pollOnce()).toBe(false);
-    expect(warns()).toBe(0);
-    expect(await svc.pollOnce()).toBe(false);
     expect(warns()).toBe(1);
+    await svc.pollOnce();
+    await svc.pollOnce();
+    expect(warns()).toBe(1);
+    expect(warn.mock.calls.filter((c) => c[0] === 'debug')).toHaveLength(2);
     ok = true;
     expect(await svc.pollOnce()).toBe(true);
     ok = false;
-    await svc.pollOnce();
-    await svc.pollOnce();
-    expect(warns()).toBe(1);
     await svc.pollOnce();
     expect(warns()).toBe(2);
   });

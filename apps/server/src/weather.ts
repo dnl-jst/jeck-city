@@ -4,8 +4,6 @@ import { log } from './log';
 export const WEATHER_EVERY_MS = 15 * 60_000;
 export const WEATHER_RETRY_MS = 5 * 60_000;
 export const WEATHER_TIMEOUT_MS = 10_000;
-/** Consecutive failures after which one warning is logged. */
-const WARN_AFTER = 3;
 
 /** GETs the Open-Meteo "current" document for Cologne; rejects on HTTP errors or when `signal` aborts. */
 export async function fetchOpenMeteo(signal: AbortSignal): Promise<unknown> {
@@ -57,10 +55,9 @@ export class WeatherService {
       this.onUpdate(weather);
       return true;
     } catch (error) {
-      this.failures++;
-      if (this.failures === WARN_AFTER) {
-        log('warn', 'weather fetch failing', { failures: this.failures, error: error instanceof Error ? error.message : String(error) });
-      }
+      // First failure of a series warns, the rest of the series stays at debug; a success resets the series.
+      const first = this.failures++ === 0;
+      log(first ? 'warn' : 'debug', 'weather fetch failed', { failures: this.failures, error: error instanceof Error ? error.message : String(error) });
       return false;
     } finally {
       clearTimeout(timer);
