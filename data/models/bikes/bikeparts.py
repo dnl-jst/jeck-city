@@ -325,10 +325,11 @@ def export_bike(path, root):
         export_animations=False, export_materials='EXPORT')
 
 
-def check_bike(root, length_range, wheels=('wheel_front', 'wheel_rear')):
-    """The node contract of README.md: required nodes, length, ground contact, facing -Y. Returns a report dict."""
+def check_bike(root, length_range, wheels=('wheel_front', 'wheel_rear'), crank=True):
+    """The node contract of README.md: required nodes, length, ground contact, facing -Y. Returns a report dict.
+    crank=False: no crank (e-scooter; pedal_l/pedal_r are fixed foot points)."""
     names = {o.name for o in [root, *root.children_recursive]}
-    need = {'frame', 'fork', *wheels, 'crank', 'pedal_l', 'pedal_r', 'light_front', 'light_rear', 'seat', 'grip_l', 'grip_r'}
+    need = {'frame', 'fork', *wheels, *(['crank'] if crank else []), 'pedal_l', 'pedal_r', 'light_front', 'light_rear', 'seat', 'grip_l', 'grip_r'}
     missing = sorted(need - names)
     bpy.context.view_layer.update()
     lo = V((1e9, 1e9, 1e9))
@@ -380,10 +381,10 @@ def render(name, out_dir, shots=None):
     return paths
 
 
-def run(name, here, build, length_range, wheels=('wheel_front', 'wheel_rear'), check=True, shots=None):
+def run(name, here, build, length_range, wheels=('wheel_front', 'wheel_rear'), check=True, shots=None, crank=True):
     """build() → check → save <name>.blend, export <name>.glb, render review stills. Returns the report."""
     root = build()
-    rep = check_bike(root, length_range, wheels) if check else {'ok': True}
+    rep = check_bike(root, length_range, wheels, crank) if check else {'ok': True}
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(here, f'{name}.blend'))
     export_bike(os.path.join(here, f'{name}.glb'), root)
     repo = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))

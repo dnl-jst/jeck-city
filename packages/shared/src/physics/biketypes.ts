@@ -1,5 +1,5 @@
 /** Bike types; the index is the `type` number in the manifest. */
-export const BIKE_TYPES = ['dutch', 'road', 'mtb', 'longjohn', 'trike', 'soundjohn'] as const;
+export const BIKE_TYPES = ['dutch', 'road', 'mtb', 'longjohn', 'trike', 'soundjohn', 'escooter'] as const;
 export type BikeType = (typeof BIKE_TYPES)[number];
 
 export type BikeSpec = {
@@ -26,6 +26,8 @@ export type BikeSpec = {
   assistKmh?: number;
   /** Mass of the unridden bike (kg). */
   massParked: number;
+  /** Motor only, no pedals (e-scooter): throttle up to cruiseKmh, no sprint, no crank. */
+  motor?: boolean;
 };
 
 /** Starting values (spec table); tune in the browser. */
@@ -36,5 +38,7 @@ export const BIKE_SPECS: Record<BikeType, BikeSpec> = {
   longjohn: { cruiseKmh: 22, sprintKmh: 28, accel: 3.0, sprintAccel: 3.8, brake: 5.5, wheelbase: 1.95, width: 0.66, steerLowLock: 0.45, steerHighLock: 0.07, maxYaw: 0.8, maxLeanDeg: 30, hopSpeed: 3.0, assistKmh: 25, massParked: 45 },
   /** The one Long John with the sound box (Neusser Str. 381): a bit heavier. */
   soundjohn: { cruiseKmh: 26, sprintKmh: 30, accel: 2.8, sprintAccel: 3.6, brake: 5.5, wheelbase: 1.95, width: 0.66, steerLowLock: 0.45, steerHighLock: 0.07, maxYaw: 0.8, maxLeanDeg: 28, hopSpeed: 2.8, assistKmh: 26, massParked: 60 },
+  /** Rental e-scooter: 20 km/h by law, the motor pulls hard from standstill, small wheels steer quickly. */
+  escooter: { cruiseKmh: 20, sprintKmh: 20, accel: 2.6, sprintAccel: 2.6, brake: 5.5, wheelbase: 0.86, width: 0.55, steerLowLock: 0.6, steerHighLock: 0.1, maxYaw: 1.3, maxLeanDeg: 22, hopSpeed: 2.2, assistKmh: 20, massParked: 22, motor: true },
   trike: { cruiseKmh: 18, sprintKmh: 25, accel: 2.8, sprintAccel: 3.5, brake: 5, wheelbase: 1.6, width: 0.9, steerLowLock: 0.5, steerHighLock: 0.1, maxYaw: 0.8, maxLeanDeg: 0, hopSpeed: 2.6, assistKmh: 22, massParked: 55 },
 };

@@ -25,6 +25,22 @@ export default defineConfig(async (): Promise<UserConfig> => ({
   // what a deployment would transfer.
   preview: { port: 4173 },
   plugins: [{
+    // dev only: POST /__nnlog lines from devices without a console (phones, tablets) into this terminal (src/devlog.ts)
+    name: "nn-devlog",
+    configureServer(server) {
+      server.middlewares.use("/__nnlog", (req, res) => {
+        let body = "";
+        req.on("data", (c: Buffer) => { body += c.toString(); if (body.length > 20000) req.destroy(); });
+        req.on("end", () => {
+          const ua = String(req.headers["user-agent"] ?? "");
+          const dev = /iPad|Macintosh/.test(ua) ? "iPad" : /iPhone/.test(ua) ? "iPhone" : /Android/.test(ua) ? "Android" : "Browser";
+          for (const line of body.split("\n")) if (line) console.log(`[${dev}] ${line}`);
+          res.statusCode = 204;
+          res.end();
+        });
+      });
+    },
+  }, {
     name: "preview-gzip",
     configurePreviewServer(server) {
       server.middlewares.use((req, res, next) => {

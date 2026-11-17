@@ -19,6 +19,7 @@ async function glb(meshes: { name: string; tx: number; tz: number }[]): Promise<
 test('prepareModel splits *_col nodes into world-space collision and drops them from the model', async () => {
   const m = await prepareModel(await glb([{ name: 'church', tx: 100, tz: 50 }, { name: 'church_col', tx: 10, tz: 20 }]));
   expect(Array.from(m.collision)).toEqual([10, 0, 20, 11, 0, 20, 10, 1, 20]);
+  expect(m.bounds).toEqual({ minX: 100, maxX: 101, minZ: 50, maxZ: 50 });
   expect(m.centre).toEqual({ x: 100.5, z: 50 });
   const { MeshoptDecoder } = await import('meshoptimizer');
   const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');
@@ -26,6 +27,17 @@ test('prepareModel splits *_col nodes into world-space collision and drops them 
   const doc = await new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder }).readBinary(m.glb);
   expect(doc.getRoot().listNodes().map((n) => n.getName())).toEqual(['church']);
   expect(doc.getRoot().listMeshes()).toHaveLength(1);
+});
+
+test('prepareModel splits *_cut nodes off as world-space terrain cuts', async () => {
+  const m = await prepareModel(await glb([{ name: 'dom', tx: 0, tz: 0 }, { name: 'dom_cut', tx: 5, tz: 7 }]), 2);
+  expect(Array.from(m.cut)).toEqual([5, 2, 7, 6, 2, 7, 5, 3, 7]);
+  const { MeshoptDecoder } = await import('meshoptimizer');
+  const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');
+  await MeshoptDecoder.ready;
+  const doc = await new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder }).readBinary(m.glb);
+  expect(doc.getRoot().listNodes().map((n) => n.getName())).toEqual(['dom']);
+  expect(Array.from((await prepareModel(await glb([{ name: 'kiosk', tx: 0, tz: 0 }]))).cut)).toEqual([]);
 });
 
 test('prepareModel without *_col nodes collides with the rendered meshes', async () => {

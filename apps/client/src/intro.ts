@@ -57,7 +57,7 @@ const INTRO_CSS = `
   .nn-intro-start-sub { font-size: 13px; opacity: 0.75; }
   @keyframes nn-pulse { 0% { box-shadow: 0 0 0 0 rgba(242,196,107,0.55); } 70% { box-shadow: 0 0 0 26px rgba(242,196,107,0); }
     100% { box-shadow: 0 0 0 0 rgba(242,196,107,0); } }
-  .nn-intro-dom { display: block; width: 74px; height: auto; margin: 0 auto 6px; color: #f2c46b;
+  .nn-intro-dom { display: block; width: auto; height: 120px; margin: 0 auto 6px; color: #f2c46b;
     filter: drop-shadow(0 0 14px rgba(242,196,107,0.35)); }
   .nn-intro-title { margin: 0; text-align: center; font-size: clamp(38px, 9vw, 60px); font-weight: 800; line-height: 1.05;
     letter-spacing: 0.06em; text-transform: uppercase; color: #f2c46b; text-shadow: 0 2px 24px rgba(242,196,107,0.35); }
@@ -79,11 +79,13 @@ const INTRO_CSS = `
   .nn-intro-foot { margin-top: 14px; text-align: center; font-size: 12px; opacity: 0.6; }
 `;
 
-/** Cologne Cathedral's west front: two spires, the nave between them. */
-const DOM_SVG = `<svg class="nn-intro-dom" viewBox="0 0 64 48" aria-hidden="true" fill="currentColor">
-  <path d="M14 0 L17 14 L18 14 L18 22 L20 22 L20 48 L4 48 L4 22 L6 22 L6 14 L11 14 Z"/>
-  <path d="M50 0 L53 14 L58 14 L58 22 L60 22 L60 48 L44 48 L44 22 L46 22 L46 14 L47 14 Z"/>
-  <path d="M20 30 L32 20 L44 30 L44 48 L20 48 Z"/>
+/** Cologne Cathedral's west front in real proportions (units ≈ metres: 61 m wide, 157 m high): two spires close
+ * together over square tower storeys, octagon and openwork spire with finial, the portal gable between them. */
+const DOM_TOWER = 'M0 158 V103 H1.5 V58 L2.75 52 L4 58 V61 H4.5 V49 H5 L10.2 7 L9 5 L11 0 L13 5 L11.8 7 L17 49 H17.5 V61 H18 V58 L19.25 52 L20.5 58 V103 H22 V158 Z M8.5 96 V73 Q11 66 13.5 73 V96 Z M8 142 V116 Q11 109 14 116 V142 Z';
+const DOM_SVG = `<svg class="nn-intro-dom" viewBox="0 0 62 158" aria-hidden="true" fill="currentColor" fill-rule="evenodd">
+  <path d="${DOM_TOWER}"/>
+  <path d="${DOM_TOWER}" transform="translate(40 0)"/>
+  <path d="M21.5 158 V104 L31 92 L40.5 104 V158 Z M27.5 140 V115 Q31 107 34.5 115 V140 Z M28.5 158 V148 Q31 143 33.5 148 V158 Z"/>
 </svg>`;
 
 const POINTS: readonly [icon: string, html: string][] = [

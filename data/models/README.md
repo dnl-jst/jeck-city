@@ -20,6 +20,10 @@ The pipeline (`npm run pipeline`) then drops that building from the chunks and c
   Object transforms are fine (they are baked); scale should be 1.
 - **Collision:** objects whose name ends in `_col` go only into collision.bin (keep them coarse: boxes,
   roof planes). Without any `_col` object the visible meshes are used.
+- **Terrain cuts:** objects whose name ends in `_cut` are not shipped; the pipeline lowers the terrain to 5 cm below
+  them (grid points up to 1 m outside take the height of the nearest edge), for rendering and physics alike. DGM1
+  smooths steps and walls into slopes; give stairs a cut along their inner corners (the line just below every tread)
+  so the ground never shows through. Cuts only lower the terrain, never raise it.
 - **Materials:** Principled BSDF only (base colour, roughness, metallic, emission; image textures allowed).
   Few materials, textures ≤ 1024 px. Materials with an *emission texture* glow at night (the client scales
   their emissive intensity with the night factor) – use that for stained or lit windows.
@@ -50,3 +54,4 @@ cd data/models/<name> && blender -b --factory-startup --python-expr \
 | DENW37AL1000APxJ, …BdpH, …Bdpd | `wilhelmplatz-tribuene/` – Tribüne with WC and kiosk, Wilhelmplatz | LOD2 footprint/heights, street photos, aerial |
 | DENW37AL1000AJzb, …AKKj, …BVEZ, …AKt2 | `neusser-florastrasse/` – the four buildings round the square at U Florastraße, Neusser Str. | LOD2 footprints/heights, street photos |
 | DENW37AL1000eZaq, …eVXe | `erft-haus/` – Erft-Haus, Neusser Str. 27–29 (Agnesviertel), with the passage to the courtyard | LOD2 footprint/heights, street photo |
+| DENW37AL1000qmxq | `koelner-dom/` – Kölner Dom with the Domtreppe to the Bahnhofsvorplatz | plan (Commons, to scale), LOD2 axis/towers, DGM1 (Domplatte, stairs), photos (Commons) |

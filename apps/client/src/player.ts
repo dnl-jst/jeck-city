@@ -79,9 +79,9 @@ type Vec3 = { x: number; y: number; z: number };
  */
 const RAG_PARENT = [-1, 0, 1, 0, 0, 3, 4, 1, 1, 7, 8];
 
-export type Posture = 'upright' | 'sport' | 'race';
+export type Posture = 'upright' | 'sport' | 'race' | 'standing';
 /** Upper-body pitch on the bike (rad, forward): Dutch/cargo upright, MTB sport, road race. */
-const POSTURE_PITCH: Record<Posture, number> = { upright: 0.17, sport: 0.52, race: 0.87 };
+const POSTURE_PITCH: Record<Posture, number> = { upright: 0.17, sport: 0.52, race: 0.87, standing: 0.06 };
 
 /** How much further than its posture a rider may lean to reach the bar (rad). */
 const MAX_EXTRA_PITCH = 0.6;
@@ -493,7 +493,7 @@ export class PlayerFigure {
     for (let i = 0; i < 2; i++) {
       const g = poses[i]!;
       // the feet land nearer the midline than the hips are apart (more so running)
-      this.legs[i]!.rotation.set(-(g.hip * amp + (i === 0 ? 0.55 : 0.3) * air), 0, -(i === 0 ? 1 : -1) * (0.04 + 0.03 * run) * amp);
+      this.legs[i]!.rotation.set(-(g.hip * amp + (i === 0 ? 0.55 : 0.3) * air), 0, -(i === 0 ? 1 : -1) * (0.04 + 0.03 * run) * amp, 'XYZ');
       this.shins[i]!.rotation.set(g.knee * amp + (i === 0 ? 0.6 : 0.3) * air, 0, 0);
       this.feet[i]!.rotation.set(g.ankle * amp + 0.25 * air, 0, 0);
     }
@@ -631,12 +631,19 @@ export class PlayerFigure {
     hand.quaternion.copy(part.invert().multiply(resid));
   }
 
-  /** Two-bone IK in the leg's y/z plane: the ball of the foot onto `pedal` (in the group's parent frame). */
+  /**
+   * Two-bone IK: the ball of the foot onto `pedal` (in the group's parent frame). The knee bends in the leg's y/z plane;
+   * a pedal (or scooter deck spot) beside the hip rolls that plane about the forward axis (Euler order ZYX: pitch
+   * first, then the roll), so feet can stand closer together than the hips.
+   */
   private solveLeg(i: number, pedal: Vector3): void {
     const { thigh, shin } = this.segs(i);
     const hip = this.legs[i]!.position;
     const base = this.group.position;
-    const dy = pedal.y - base.y - hip.y, dz = pedal.z - base.z - hip.z;
+    const dx = pedal.x - base.x - hip.x; // thigh and shin hang straight below the hip (no x offset)
+    const dy0 = pedal.y - base.y - hip.y, dz = pedal.z - base.z - hip.z;
+    const roll = Math.atan2(dx, -dy0);
+    const dy = -Math.hypot(dx, dy0); // the hip → pedal distance down the rolled leg plane
     const L1 = Math.hypot(thigh.y, thigh.z), L2 = Math.hypot(shin.y, shin.z);
     const D = Math.min(L1 + L2 - 1e-4, Math.max(Math.abs(L1 - L2) + 1e-4, Math.hypot(dy, dz)));
     const toward = Math.atan2(dz, -dy); // forward angle of hip → pedal
@@ -646,7 +653,7 @@ export class PlayerFigure {
     const thighAbs = toward + hipBend;
     const shinAbs = thighAbs - (Math.PI - kneeIn);
     const r1 = Math.atan2(thigh.z, -thigh.y) - thighAbs;
-    this.legs[i]!.rotation.set(r1, 0, 0);
+    this.legs[i]!.rotation.set(r1, 0, roll, 'ZYX');
     this.shins[i]!.rotation.set(Math.atan2(shin.z, -shin.y) - shinAbs - r1, 0, 0);
   }
 
@@ -679,7 +686,7 @@ export class PlayerFigure {
     this.upAt = TUNING.bike.getUpSeconds - GET_UP;
     this.group.rotation.set(0, direction, 0);
     this.heading = direction;
-    this.legs.forEach((l) => l.rotation.set(0, 0, 0));
+    this.legs.forEach((l) => l.rotation.set(0, 0, 0, 'XYZ'));
     this.shins.forEach((s) => s.rotation.set(0.3, 0, 0));
     this.feet.forEach((f) => f.rotation.set(0.3, 0, 0));
     this.forearms.forEach((f) => f.quaternion.setFromEuler(new Euler(-0.3, 0, 0)));

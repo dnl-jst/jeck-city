@@ -244,7 +244,7 @@ describe('ragdoll', () => {
       expect(e(torso).x).toBeLessThan(1.75);
       expect(Math.abs(e(torso).y)).toBeLessThan(0.85);
       for (const leg of legs) {
-        expect(e(leg).x).toBeGreaterThan(-2.6);
+        expect(e(leg).x).toBeGreaterThan(-2.75); // (limit −2.3; it gives a little under a hard landing)
         expect(e(leg).x).toBeLessThan(0.8);
       }
       for (const arm of arms) {

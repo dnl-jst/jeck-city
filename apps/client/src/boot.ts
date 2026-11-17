@@ -22,6 +22,7 @@ import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
+import { TouchControls, touchPreferred } from './touch';
 import { Game } from './game';
 import { storeCharacter, storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
@@ -156,10 +157,13 @@ resize();
 
 const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
+// phones and tablets: sticks and buttons on screen (?touch=1 forces them, ?touch=0 hides them)
+const touchOn = touchPreferred(params.get('touch'), window.matchMedia('(pointer: coarse)').matches);
 attachInput(input, canvas, (locked) => {
   hud.setHint(locked ? (game?.modeHint ?? '') : LOOK_HINT);
   game?.map.onLockChange(locked);
-});
+}, touchOn);
+const touch = new TouchControls(document.body, input, touchOn);
 const world = new WorldLoader(scene, '/world/');
 
 // sound: nothing plays before the first user gesture; the recordings load in parallel with the world
@@ -176,6 +180,9 @@ const radioWheel = new RadioWheel(document.body);
 gameAudio.load().catch(console.error);
 // no `once`: a later rejected play()/resume() is retried on the next gesture (unlock is idempotent)
 window.addEventListener('pointerdown', () => gameAudio.unlock());
+// Safari counts a finger's pointerup/touchend as the gesture that may start sound, not its pointerdown
+window.addEventListener('pointerup', () => gameAudio.unlock());
+window.addEventListener('touchend', () => gameAudio.unlock());
 window.addEventListener('keydown', () => gameAudio.unlock());
 document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
 
@@ -260,6 +267,11 @@ renderer.setAnimationLoop((t: number) => {
       const aa = QUALITY[qualityLevel].antialias === bootAntialias ? '' : ' (Kantenglättung ab dem nächsten Laden)';
       hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
     }
+    touch.update({
+      playing: true, mode: game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
+      mapOpen: game.map.open, muted: gameAudio.isMuted, flying: game.flying,
+    });
+    touch.tick(dt);
     game.frame(dt, nightFactor);
     for (const i of game.takeFallenLamps()) {
       props.knockDown(i);
