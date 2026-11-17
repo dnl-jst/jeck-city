@@ -29,6 +29,17 @@ test('prepareModel splits *_col nodes into world-space collision and drops them 
   expect(doc.getRoot().listMeshes()).toHaveLength(1);
 });
 
+test('prepareModel splits *_cut nodes off as world-space terrain cuts', async () => {
+  const m = await prepareModel(await glb([{ name: 'dom', tx: 0, tz: 0 }, { name: 'dom_cut', tx: 5, tz: 7 }]), 2);
+  expect(Array.from(m.cut)).toEqual([5, 2, 7, 6, 2, 7, 5, 3, 7]);
+  const { MeshoptDecoder } = await import('meshoptimizer');
+  const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');
+  await MeshoptDecoder.ready;
+  const doc = await new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder }).readBinary(m.glb);
+  expect(doc.getRoot().listNodes().map((n) => n.getName())).toEqual(['dom']);
+  expect(Array.from((await prepareModel(await glb([{ name: 'kiosk', tx: 0, tz: 0 }]))).cut)).toEqual([]);
+});
+
 test('prepareModel without *_col nodes collides with the rendered meshes', async () => {
   const m = await prepareModel(await glb([{ name: 'kiosk', tx: 0, tz: 0 }]));
   expect(m.collision.length).toBe(9);

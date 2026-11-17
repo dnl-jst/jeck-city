@@ -8,7 +8,8 @@ import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from
 import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
-import { prepareModel, prepareProp } from './models.js';
+import { prepareModel, prepareProp, type PreparedModel } from './models.js';
+import { applyTerrainCuts } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
@@ -88,7 +89,7 @@ async function main() {
     const buf = await readFile(join(RAW_DIR, 'dgm1', t));
     return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
   })));
-  const terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(dgm, TERRAIN_SIGMA), area));
+  let terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(dgm, TERRAIN_SIGMA), area));
   const terrain = decodeTerrain(terrainBin);
   const { datum } = terrain;
   let hMin = Infinity, hMax = -Infinity;
@@ -116,6 +117,27 @@ async function main() {
   const overrides: Overrides = existsSync(OVERRIDES) ? JSON.parse(await readFile(OVERRIDES, 'utf8')) : {};
   if (Object.keys(overrides).length) console.log(`overrides: ${Object.keys(overrides).join(', ')}`);
   const active = buildings.filter((b) => !(b.id in overrides));
+
+  // replacement models, prepared now: their *_cut surfaces lower the terrain before anything is draped on it
+  // (several LOD2 buildings may share one model, a structure split into parts: it is shipped once)
+  const byPath = new Map<string, string[]>();
+  for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
+  const prepared = new Map<string, { m: PreparedModel; parts: BuildingMesh[]; lift: number }>();
+  for (const [path, ids] of byPath) {
+    const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
+    // the model is authored with y = 0 at the LoD2 base; on a slope the lowest base of its buildings
+    const lift = Math.min(...parts.map((p) => p.base));
+    prepared.set(path, { m: await prepareModel(await readFile(path), lift), parts, lift });
+  }
+  const cuts = [...prepared.values()].filter((p) => p.m.cut.length);
+  if (cuts.length) {
+    let n = 0;
+    for (const { m } of cuts) n += applyTerrainCuts(terrain, m.cut);
+    // the client reads the quantized heights from terrain.bin: re-encode and use exactly those from here on
+    terrainBin = encodeTerrain(terrain);
+    terrain.heights.set(decodeTerrain(terrainBin).heights);
+    console.log(`terrain cuts: ${n} grid points lowered under ${cuts.length} model(s)`);
+  }
 
   const placedShops = assignShops(f.shops, f.boundary, active);
   if (args.includes('--list-shops')) return listNeusserShops(f, placedShops, active);
@@ -154,16 +176,10 @@ async function main() {
 
   const models: WorldManifest['models'] = [];
   const modelCollision: Float32Array[] = [];
-  // several LOD2 buildings may share one model (a structure split into parts): ship it once
-  const byPath = new Map<string, string[]>();
-  for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
   for (const [path, ids] of byPath) {
-    const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
+    const { m, parts, lift } = prepared.get(path)!;
     const id = ids[0]!;
     const b = parts[0]!;
-    // the model is authored with y = 0 at the LoD2 base; on a slope the lowest base of its buildings
-    const lift = Math.min(...parts.map((p) => p.base));
-    const m = await prepareModel(await readFile(path), lift);
     const off = Math.min(...parts.map((p) => Math.hypot(m.centre.x - p.centroid.x, m.centre.z - p.centroid.z)));
     // a model far from its building was exported in the wrong frame (local origin, Z up, …); a large model that
     // reaches out (the Dom with the Domtreppe and the Kreuzblume) passes as long as its building lies inside it

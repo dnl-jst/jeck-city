@@ -4,12 +4,16 @@ import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
 
 /** Nodes whose name ends in this suffix are collision-only: they go to collision.bin, not into the rendered model. */
 export const COLLISION_SUFFIX = '_col';
+/** Nodes named *_cut only shape the terrain: it is lowered to just below them (see applyTerrainCuts). */
+export const CUT_SUFFIX = '_cut';
 
 export type PreparedModel = {
   /** The model without collision nodes, EXT_meshopt_compression. */
   glb: Uint8Array;
   /** Collision triangles in world space, 9 floats per triangle. */
   collision: Float32Array;
+  /** Terrain cut triangles (*_cut nodes) in world space, 9 floats per triangle; empty without any. */
+  cut: Float32Array;
   /** Bounding-box centre (x, z) of the rendered geometry, world space. */
   centre: { x: number; z: number };
   /** Bounding box (x, z) of the rendered geometry, world space. */
@@ -66,7 +70,8 @@ function disposeWithMesh(node: Node): void {
 
 /**
  * Reads a building replacement model (glTF binary in world space, Y up, metres, see data/models/README.md),
- * splits off its `*_col` nodes as collision (all meshes if there are none) and re-encodes it.
+ * splits off its `*_col` nodes as collision (all meshes if there are none) and its `*_cut` nodes as terrain cuts, and
+ * re-encodes it.
  * `lift` raises the whole model (scene root nodes and collision) by that many metres in y.
  */
 export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedModel> {
@@ -81,8 +86,12 @@ export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedM
     }
   }
   const nodes = meshNodes(doc);
-  const col = nodes.filter((n) => n.getName().endsWith(COLLISION_SUFFIX));
-  const visual = nodes.filter((n) => !col.includes(n));
+  const cutNodes = nodes.filter((n) => n.getName().endsWith(CUT_SUFFIX));
+  const cut = Float32Array.from(cutNodes.flatMap(worldTriangles));
+  for (const n of cutNodes) disposeWithMesh(n);
+  const rest = nodes.filter((n) => !cutNodes.includes(n));
+  const col = rest.filter((n) => n.getName().endsWith(COLLISION_SUFFIX));
+  const visual = rest.filter((n) => !col.includes(n));
   if (visual.length === 0) throw new Error('model has no rendered meshes');
   const collision = Float32Array.from((col.length ? col : visual).flatMap(worldTriangles));
   for (const n of col) disposeWithMesh(n);
@@ -96,7 +105,7 @@ export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedM
     }
   }
   doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
-  return { glb: await nio.writeBinary(doc), collision, centre: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 }, bounds: { minX, maxX, minZ, maxZ } };
+  return { glb: await nio.writeBinary(doc), collision, cut, centre: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 }, bounds: { minX, maxX, minZ, maxZ } };
 }
 
 /**

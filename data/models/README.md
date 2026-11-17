@@ -20,6 +20,10 @@ The pipeline (`npm run pipeline`) then drops that building from the chunks and c
   Object transforms are fine (they are baked); scale should be 1.
 - **Collision:** objects whose name ends in `_col` go only into collision.bin (keep them coarse: boxes,
   roof planes). Without any `_col` object the visible meshes are used.
+- **Terrain cuts:** objects whose name ends in `_cut` are not shipped; the pipeline lowers the terrain to 5 cm below
+  them (grid points up to 1 m outside take the height of the nearest edge), for rendering and physics alike. DGM1
+  smooths steps and walls into slopes; give stairs a cut along their inner corners (the line just below every tread)
+  so the ground never shows through. Cuts only lower the terrain, never raise it.
 - **Materials:** Principled BSDF only (base colour, roughness, metallic, emission; image textures allowed).
   Few materials, textures ≤ 1024 px. Materials with an *emission texture* glow at night (the client scales
   their emissive intensity with the night factor) – use that for stained or lit windows.
