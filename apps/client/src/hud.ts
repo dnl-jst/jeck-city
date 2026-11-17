@@ -4,7 +4,7 @@ import { FetchError, NoWebGLError } from './errors';
 /** User-facing (German) text for a boot failure. */
 export function bootErrorMessage(e: unknown): string {
   if (e instanceof NoWebGLError) return 'Dein Browser kann leider kein 3D (WebGL). Probier es mit einem aktuellen Chrome, Firefox oder Safari.';
-  if (e instanceof FetchError) return 'Nippes konnte nicht geladen werden. Bitte lade die Seite neu.';
+  if (e instanceof FetchError) return 'Jeck City konnte nicht geladen werden. Bitte lade die Seite neu.';
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
@@ -107,7 +107,7 @@ export class Hud {
 
   constructor(root: HTMLElement) {
     this.loading = el('div', 'nn-loading', root);
-    el('div', 'nn-loading-label', this.loading).textContent = 'Nippes lädt …';
+    el('div', 'nn-loading-label', this.loading).textContent = 'Jeck City lädt …';
     this.bar = el('div', 'nn-loading-fill', el('div', 'nn-loading-track', this.loading));
     this.status = el('div', 'nn-loading-status', this.loading);
     this.dl = el('div', 'nn-dl', this.loading);

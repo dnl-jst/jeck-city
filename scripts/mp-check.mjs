@@ -62,6 +62,7 @@ async function join(browser, name) {
   url.searchParams.set('time', '14:00');
   url.searchParams.set('date', '2026-06-15');
   await page.goto(url.href);
+  await page.locator('.nn-intro-go').click();
   await page.locator('.nn-lobby-input').fill(name);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 180_000 });

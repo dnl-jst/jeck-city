@@ -6,8 +6,8 @@ import {
 import { ServerClock } from './clock';
 
 export const CONNECT_TEXTS = {
-  unreachable: 'Nippes ist gerade nicht erreichbar – versuch es später nochmal.',
-  full: 'Nippes ist gerade voll – versuch es gleich nochmal.',
+  unreachable: 'Jeck City ist gerade nicht erreichbar – versuch es später nochmal.',
+  full: 'Jeck City ist gerade voll – versuch es gleich nochmal.',
   version: 'Neue Version – bitte Seite neu laden.',
   rate: 'Zu viele Versuche – warte kurz.',
 } as const;
