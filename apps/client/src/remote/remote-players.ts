@@ -1,6 +1,6 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, fromCarLocal, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
@@ -19,10 +19,10 @@ const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 const ROOF_H = 1.5;
 /** A walker that moved further than this in one frame was teleported: no running animation for it. */
 const JUMP_M = 3;
+/** Moving slower than this (m/s) on the local player's car roof: standing still. */
+const ROOF_STILL = 0.8;
 /** A knocked-down walker's car: the fastest one within this distance (m) of them. */
 const KNOCK_CAR_M = 6;
-/** Feet at least this far above a car's body origin are on its roof (m). */
-const ON_ROOF_Y = 0.3;
 /** Upwards throw of a car's hit (m/s; as the sim's collisions.ts). */
 const KNOCK_UP = 3;
 
@@ -81,13 +81,21 @@ export type RemoteOptions = {
   occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
+  /** The car the local player drives and its pose as drawn (someone on its roof is drawn on it), or null. */
+  localCar?: () => { id: number; pose: CarPose } | null;
+  /** Where another player (slot) stands on the local player's car, in its frame (Session.onOwnRoof). */
+  onOwnRoof?: (slot: number) => { x: number; y: number; z: number } | null;
   /** Physics for falls (crashing off a bike, hit by a car); without it the figure tips over as an animation. */
   ragdolls?: RagdollWorld;
 };
 
 /** A pooled figure and the character template it shows (undefined: not set yet). */
 type Figure = { fig: PlayerFigure; model: Object3D | null | undefined };
-type Walker = Figure & { label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number };
+type Walker = Figure & {
+  label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number;
+  /** Where it stood on the local player's car last frame (car frame), or null. */
+  roof: { x: number; y: number; z: number } | null;
+};
 type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number; x: number; y: number; z: number };
 type Driven = { view: CarView; label: Label | null; seen: boolean };
 
@@ -137,13 +145,13 @@ export class RemotePlayers {
         was.label?.dispose();
         this.freeRig(was);
         this.riders.delete(s.slot);
-        w = { fig: was.fig, model: was.model, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: 3 };
+        w = { fig: was.fig, model: was.model, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: 3, roof: null };
         this.walkers.set(s.slot, w);
       }
       if (!w) {
         const f = this.takeFigure();
         f.fig.heading = s.yaw;
-        w = { ...f, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: -1 };
+        w = { ...f, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: -1, roof: null };
         this.walkers.set(s.slot, w);
       }
       w.seen = true;
@@ -163,14 +171,31 @@ export class RemotePlayers {
         }
       }
       w.state = s.state;
+      // on the roof of the car the local player drives: drawn on that car as it is drawn here (predicted, a little
+      // ahead of the streamed pose the walker's position goes with), moving as it moves on the roof
+      let at: { x: number; y: number; z: number } = s;
+      const local = this.opts.localCar?.();
+      const onIt = local ? this.opts.onOwnRoof?.(s.slot) ?? null : null;
+      if (local && onIt) at = fromCarLocal(onIt, local.pose);
       let vx = 0, vz = 0;
       if (!w.fresh && dt > 1e-4) {
-        const dx = s.x - w.px, dz = s.z - w.pz;
-        if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
-        // riding on a car's roof: only the walking on it animates
-        const under = carUnder(sample.cars, s.x, s.y, s.z);
-        if (under) { vx -= under.vx; vz -= under.vz; }
+        if (onIt && w.roof) {
+          // its walking on the roof (in the car's frame), turned into the world by the car's heading
+          const lx = (onIt.x - w.roof.x) / dt, lz = (onIt.z - w.roof.z) / dt, q = local!.pose;
+          const h = Math.atan2(2 * (q.qx * q.qz + q.qw * q.qy), 1 - 2 * (q.qx * q.qx + q.qy * q.qy));
+          vx = lx * Math.cos(h) + lz * Math.sin(h);
+          vz = -lx * Math.sin(h) + lz * Math.cos(h);
+          // the offset comes in 20 Hz steps of a moving car: what is left below a slow walk is noise, it stands
+          if (Math.hypot(vx, vz) < ROOF_STILL) vx = vz = 0;
+        } else {
+          const dx = s.x - w.px, dz = s.z - w.pz;
+          if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
+          // riding on a streamed car's roof: only the walking on it animates
+          const under = carUnder(sample.cars, s);
+          if (under) { vx -= under.vx; vz -= under.vz; }
+        }
       }
+      w.roof = onIt;
       w.fresh = false;
       // smoothed: the interpolated stream moves in 20 Hz-shaped steps
       const k = Math.min(1, dt * 12);
@@ -178,8 +203,8 @@ export class RemotePlayers {
       w.vz += (vz - w.vz) * k;
       w.px = s.x; w.pz = s.z;
       w.fig.setDown(s.state === 2 ? 1 : 0);
-      w.fig.update(s.x, s.y, s.z, { x: w.vx, y: 0, z: w.vz }, dt);
-      w.label = this.label(w.label, names.get(s.slot), s.x, s.y + FIGURE_H + LABEL_GAP, s.z, cp);
+      w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt);
+      w.label = this.label(w.label, names.get(s.slot), at.x, at.y + FIGURE_H + LABEL_GAP, at.z, cp);
     }
     for (const [slot, w] of this.walkers) {
       if (w.seen) continue;
@@ -348,15 +373,9 @@ export class RemotePlayers {
   }
 }
 
-/** A streamed car whose roof the feet at (x, y, z) are on (within its footprint, above its body), if any. */
-function carUnder(cars: ReadonlyMap<string, SnapshotCar>, x: number, y: number, z: number): SnapshotCar | null {
-  for (const c of cars.values()) {
-    if (y < c.y + ON_ROOF_Y) continue;
-    // into the car's frame: forward = local +z (heading from the quaternion), half length/width generous
-    const h = Math.atan2(2 * (c.qx * c.qz + c.qw * c.qy), 1 - 2 * (c.qx * c.qx + c.qy * c.qy));
-    const dx = x - c.x, dz = z - c.z, along = dx * Math.sin(h) + dz * Math.cos(h), across = dx * Math.cos(h) - dz * Math.sin(h);
-    if (Math.abs(along) < 2.6 && Math.abs(across) < 1.1) return c;
-  }
+/** A streamed car whose roof the feet at p are on, if any. */
+function carUnder(cars: ReadonlyMap<string, SnapshotCar>, p: Vec3): SnapshotCar | null {
+  for (const c of cars.values()) if (onRoof(c, p)) return c;
   return null;
 }
 

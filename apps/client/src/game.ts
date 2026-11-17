@@ -90,6 +90,8 @@ export class Game {
   private down = false;
   /** Knocked down at the last rendered frame (the ragdoll starts on the change). */
   private wasDown = false;
+  /** The own car's pose as drawn this frame (while driving). */
+  private drawnPose: CarPose | null = null;
   /** Tumbling figures (own and other players') fall in a physics world of their own. */
   readonly ragdolls: RagdollWorld;
   /** Seconds in the air on foot (for landing sounds). */
@@ -131,6 +133,8 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
       ragdolls: this.ragdolls,
+      localCar: () => (this.mode === 'drive' && this.carId !== null && this.drawnPose ? { id: this.carId, pose: this.drawnPose } : null),
+      onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -526,6 +530,7 @@ export class Game {
         pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
       }
       this.driven.setPose(pose);
+      this.drawnPose = pose;
       this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);

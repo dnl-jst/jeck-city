@@ -32,6 +32,11 @@ export interface Session {
   renderOffset(): RenderOffset;
   /** Online only: other players (on foot, driving, riding), cars and names as of this frame. */
   remote?(): { walkers: ReadonlyMap<string, SnapshotWalker>; cars: ReadonlyMap<string, SnapshotCar>; riders: ReadonlyMap<string, SnapshotRider> };
+  /**
+   * While the local player drives: where another player (slot) stands on the own car's roof, in the car's frame (from
+   * the newest snapshot, where both are of one server tick); null if they are not on it.
+   */
+  onOwnRoof?(slot: number): { x: number; y: number; z: number } | null;
   roster?(): { names: ReadonlyMap<number, string>; variants: ReadonlyMap<number, number>; cars: ReadonlyMap<number, RemoteCarInfo> };
   /** Online only: the city's weather, or null until the server has real data. */
   weather?(): Weather | null;
