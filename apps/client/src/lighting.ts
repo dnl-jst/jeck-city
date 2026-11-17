@@ -79,6 +79,14 @@ export function weatherMood(mood: Mood, overcast: number, night: number): Mood {
   return m;
 }
 
+/** Cloud cover at which the clouds hide the sun glow, moon and stars completely. */
+const CLOUD_HIDES = 0.9;
+
+/** How much of the sun glow, moon and stars shows through the clouds (1 clear .. 0 at CLOUD_HIDES), regardless of night. */
+export function skyClearness(overcast: number): number {
+  return Math.min(1, Math.max(0, 1 - overcast / CLOUD_HIDES));
+}
+
 /** Fog distances (m) pulled in to the visibility (m); far never below MIN_FOG_FAR, near always before far. */
 export function weatherFog(near: number, far: number, visibility: number): { near: number; far: number } {
   const f = Math.min(far, Math.max(MIN_FOG_FAR, visibility));
@@ -117,6 +125,7 @@ uniform vec3 sunDir;
 uniform vec3 sunCol;
 uniform vec3 moonDir;
 uniform float night;
+uniform float clearSky; // 1 clear .. 0 overcast: hides sun glow, moon and stars
 varying vec3 vDir;
 float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 void main() {
@@ -125,14 +134,14 @@ void main() {
   vec3 col = mix(horizon, zenith, pow(up, 0.55));
   col = mix(col, horizon * 0.5, smoothstep(0.0, -0.15, d.y)); // below the horizon (hidden by houses)
   float s = max(dot(d, sunDir), 0.0);
-  col += sunCol * (pow(s, 8.0) * 0.35 + pow(s, 64.0) * 0.6) * smoothstep(-0.12, 0.05, sunDir.y);
-  col += sunCol * 12.0 * smoothstep(0.9997, 0.99985, s) * step(-0.02, sunDir.y); // disc
+  col += clearSky * sunCol * (pow(s, 8.0) * 0.35 + pow(s, 64.0) * 0.6) * smoothstep(-0.12, 0.05, sunDir.y);
+  col += clearSky * sunCol * 12.0 * smoothstep(0.9997, 0.99985, s) * step(-0.02, sunDir.y); // disc
   // night: moon disc with a faint halo, stars
   float m = max(dot(d, moonDir), 0.0);
-  col += night * (vec3(0.9, 0.93, 1.0) * 3.0 * smoothstep(0.99955, 0.9997, m) + vec3(0.12, 0.16, 0.28) * pow(m, 40.0));
+  col += clearSky * night * (vec3(0.9, 0.93, 1.0) * 3.0 * smoothstep(0.99955, 0.9997, m) + vec3(0.12, 0.16, 0.28) * pow(m, 40.0));
   vec3 cell = floor(d * 280.0);
   float star = step(0.9975, h3(cell)) * smoothstep(0.35, 0.0, length(fract(d * 280.0) - 0.5));
-  col += night * night * star * smoothstep(0.02, 0.25, d.y) * (0.5 + h3(cell + 7.0)) * 0.9;
+  col += clearSky * night * night * star * smoothstep(0.02, 0.25, d.y) * (0.5 + h3(cell + 7.0)) * 0.9;
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -187,6 +196,7 @@ export class Lighting {
         uniforms: {
           zenith: { value: new Color() }, horizon: { value: new Color() }, sunDir: { value: new Vector3() },
           sunCol: { value: new Color() }, moonDir: { value: this.moon.position.clone() }, night: { value: 0 },
+          clearSky: { value: 1 },
         },
       }),
     );
@@ -250,6 +260,8 @@ export class Lighting {
     u.sunDir!.value.copy(dir);
     u.sunCol!.value.copy(mood.sun);
     u.night!.value = night;
+    const clear = skyClearness(look.overcast);
+    u.clearSky!.value = clear;
     this.fog.color.copy(mood.horizon);
     const near = (150 - 90 * night) * this.viewScale;
     const far = (FULL_VIEW - 200 * night) * this.viewScale;
@@ -278,7 +290,7 @@ export class Lighting {
     this.sun.position.copy(t).addScaledVector(dir, 400);
     this.sun.target.updateMatrixWorld();
 
-    this.moon.intensity = 0.35 * night;
+    this.moon.intensity = 0.35 * night * clear;
 
     // lamps: emissive lanterns, halos and real lights at the nearest ones
     this.lampGlass.emissiveIntensity = 6 * night;

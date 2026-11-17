@@ -1,6 +1,6 @@
 import { Color } from 'three';
 import { describe, expect, it } from 'vitest';
-import { bodyDirection, moodAt, nearestLamps, weatherFog, weatherMood } from './lighting';
+import { bodyDirection, moodAt, nearestLamps, skyClearness, weatherFog, weatherMood } from './lighting';
 
 describe('nearestLamps', () => {
   it('returns the n nearest lamp indices, nearest first', () => {
@@ -95,5 +95,17 @@ describe('weatherFog', () => {
       expect(f.far).toBeGreaterThanOrEqual(60);
       expect(f.near).toBeLessThan(f.far);
     }
+  });
+});
+
+describe('skyClearness', () => {
+  it('shows sun glow, moon and stars fully when clear and hides them under heavy cloud', () => {
+    expect(skyClearness(0)).toBe(1);
+    expect(skyClearness(0.9)).toBe(0);
+    expect(skyClearness(1)).toBe(0);
+  });
+  it('fades monotonically with cloud cover', () => {
+    const v = [0, 0.2, 0.4, 0.6, 0.8].map(skyClearness);
+    for (let i = 1; i < v.length; i++) expect(v[i]).toBeLessThan(v[i - 1]!);
   });
 });
