@@ -22,6 +22,10 @@ export type OsmFeatures = {
   squares: { name: string; outline: Pt[] }[];
   /** amenity=bicycle_parking: kind from bicycle_parking=* (stands/rack/untagged → stands, wall_loops/bollard → wall), capacity (default 6). */
   bikeParking: BikeParking[];
+  /** amenity=bench (NPC seat rings). */
+  benches: Pt[];
+  /** highway=crossing nodes and signalled crossings (crossing=traffic_signals): where NPC walkers cross a road. */
+  crossings: Pt[];
 };
 
 export type BikeParking = { pos: Pt; outline?: Pt[]; kind: 'stands' | 'wall' | 'other'; capacity: number };
@@ -116,7 +120,7 @@ function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Ro
 
 export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
-  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [], benches: [], crossings: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
@@ -141,6 +145,8 @@ export function parseOsm(json: unknown): OsmFeatures {
       } else if (GREEN(t)) f.greens.push(...joinRings(outers));
     } else if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
       const pos = wgs84ToLocal(el.lat, el.lon);
+      if (t.highway === 'crossing' || (t.crossing !== undefined && t.crossing !== 'no')) f.crossings.push(pos);
+      if (t.amenity === 'bench') f.benches.push(pos);
       if (t.natural === 'tree') f.trees.push(pos);
       else if (t.highway === 'street_lamp') f.lamps.push(pos);
       else if (isStopTags(t)) stops.push({ pos, name: t.name!, prio: t.public_transport === 'platform' ? 0 : 1 });

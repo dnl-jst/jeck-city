@@ -2,6 +2,13 @@ import { expect, test } from 'vitest';
 import { loadFixture } from './fixture.js';
 import { parseOsm } from './osm.js';
 
+test('benches and crossings are read from nodes', () => {
+  const node = (id: number, tags: Record<string, string>) => ({ type: 'node', id, lat: 50.96, lon: 6.95 + id * 1e-5, tags });
+  const f = parseOsm({ elements: [node(1, { amenity: 'bench' }), node(2, { highway: 'crossing' }), node(3, { highway: 'traffic_signals', crossing: 'traffic_signals' }), node(4, { amenity: 'cafe' })] });
+  expect(f.benches).toHaveLength(1);
+  expect(f.crossings).toHaveLength(2); // a signalled crossing node counts too
+});
+
 test('fixture feature counts', () => {
   const f = loadFixture();
   expect(f.roads.filter((r) => r.kind === 'residential')).toHaveLength(2);
