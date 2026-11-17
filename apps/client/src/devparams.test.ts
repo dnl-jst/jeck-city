@@ -32,11 +32,11 @@ describe('withDateParam', () => {
 
 describe('devAllowed', () => {
   const on = { devMode: true }, off = { devMode: false };
-  const all = { cam: true, fly: true, writeHooks: true }, none = { cam: false, fly: false, writeHooks: false };
+  const all = { cam: true, fly: true, writeHooks: true, weather: true }, none = { cam: false, fly: false, writeHooks: false, weather: false };
   it('offline keeps today: cam always, fly and write hooks with debug', () => {
-    expect(devAllowed('offline', null, false)).toEqual({ cam: true, fly: false, writeHooks: false });
+    expect(devAllowed('offline', null, false)).toEqual({ cam: true, fly: false, writeHooks: false, weather: true });
     expect(devAllowed('offline', null, true)).toEqual(all);
-    expect(devAllowed('offline', null, false, true)).toEqual({ cam: true, fly: false, writeHooks: true });
+    expect(devAllowed('offline', null, false, true)).toEqual({ cam: true, fly: false, writeHooks: true, weather: true });
   });
   it('online everything needs devMode, debug does not matter', () => {
     expect(devAllowed('online', on, false)).toEqual(all);
@@ -45,5 +45,13 @@ describe('devAllowed', () => {
     expect(devAllowed('online', off, true)).toEqual(none);
     expect(devAllowed('online', null, true)).toEqual(none);
     expect(devAllowed('online', off, false, true)).toEqual(none);
+  });
+});
+
+describe('devAllowed weather', () => {
+  it('follows devMode online and is always on offline', () => {
+    expect(devAllowed('online', { devMode: false }, false).weather).toBe(false);
+    expect(devAllowed('online', { devMode: true }, false).weather).toBe(true);
+    expect(devAllowed('offline', null, false).weather).toBe(true);
   });
 });
