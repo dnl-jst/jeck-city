@@ -10,7 +10,7 @@ export function validate(raw: string): string | null {
 
 const LOBBY_CSS = `
   .nn-lobby { position: fixed; z-index: 10; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(8,10,22,0.82); backdrop-filter: blur(4px); color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; }
+    background: rgba(8,10,22,0.62); backdrop-filter: blur(4px); color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; }
   .nn-lobby.nn-hidden { display: none; }
   .nn-lobby-box { width: min(340px, 86vw); text-align: center; }
   .nn-lobby-title { font-size: 22px; letter-spacing: 0.08em; margin-bottom: 16px; color: #f2c46b; }
