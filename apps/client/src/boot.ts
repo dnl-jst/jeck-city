@@ -1,11 +1,12 @@
 import {
-  ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
+  ACESFilmicToneMapping, Mesh, PCFShadowMap, type Object3D, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
   CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseNpcNet, parseSignals, parseTimeOverride, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
   type MapData, type NpcNet, type SignalJunction, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
+import { TrafficSignals } from './signals';
 import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { LoadingArt } from './loading-art';
@@ -413,6 +414,17 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     console.error(err);
     return undefined;
   });
+  // traffic lights: without their models the phases still run (NPCs obey them), the lights are just unseen
+  const signalModels = await world.loadSignalModels(m).catch((err: unknown) => {
+    console.error(err);
+    return new Map<'car' | 'ped' | 'car+ped', Object3D>();
+  });
+  const signals = signalModels.size
+    ? new TrafficSignals(scene, signalJunctions, signalModels, (x, z) => {
+      const g = heightAt(terrain, x, z);
+      return surfaceY(sim.pw, x, z, g + 3) ?? g;
+    })
+    : undefined;
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
@@ -436,7 +448,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     sim.addPlayer(OFFLINE_ME, start);
     session = new OfflineSession(sim, OFFLINE_ME, npcNet ? { net: npcNet, terrain } : undefined);
   }
-  game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
+  game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character, signals });
   // debug: the NPCs shown (kind, x, z, action, alpha), for screenshots and tests
   (window as unknown as { __nnNpcs?: () => unknown }).__nnNpcs = () => session.npcs().map((d) => [d.kind, Math.round(d.pose.x), Math.round(d.pose.z), d.action, Math.round(d.alpha * 10) / 10]);
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level

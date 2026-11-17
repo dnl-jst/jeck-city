@@ -19,6 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { NpcView } from './npc/npc-view';
+import type { TrafficSignals } from './signals';
 
 /** Audio ids of NPC cars start here (players' cars use their index in manifest.parked). */
 const NPC_AUDIO_ID = 1_000_000;
@@ -39,6 +40,8 @@ export type GameContext = {
   /** Player character models (WorldLoader.characterModels) and the stored choice's template, if it loaded. */
   characters?: CharacterModels;
   character?: Object3D | null;
+  /** The traffic lights (switched every frame with the shown tick). */
+  signals?: TrafficSignals;
 };
 
 
@@ -529,6 +532,7 @@ export class Game {
     }
     const npcs = this.session.npcs();
     this.npcView.update(npcs, this.ctx.camera, night, dt);
+    this.ctx.signals?.update(this.session.shownTick(), this.ctx.camera.position.x, this.ctx.camera.position.z, night);
     // NPC cars sound like other players' cars: engine running, the horn while they honk
     const npcCars: RemoteCarIn[] = [];
     for (const d of npcs) {

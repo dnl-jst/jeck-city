@@ -6,12 +6,13 @@ test('signalJunctionsOf keeps the signalled junctions and gives each pole the gr
   const j: JunctionInfo = {
     ...junction(77), approaches: [{ edge: 5, group: 1, stopS: 10, rank: 2 }], peds: [{ walkEdge: 9, group: 0 }],
     poles: [{ x: 1, z: 2, heading: 0.5, kind: 'car+ped', approach: 0, ped: 0 }, { x: 3, z: 4, heading: 1, kind: 'ped', ped: 0 }],
+    stopLines: [{ x0: 1, z0: 1, x1: 2, z1: 1 }],
   };
   const out = signalJunctionsOf([j, { ...junction(), signal: null }]);
   expect(out).toEqual([{ x: 0, z: 0, signal: j.signal, poles: [
     { x: 1, z: 2, heading: 0.5, kind: 'car+ped', group: 1, ped: 0 },
     { x: 3, z: 4, heading: 1, kind: 'ped', group: -1, ped: 0 },
-  ] }]);
+  ], stopLines: [{ x0: 1, z0: 1, x1: 2, z1: 1 }] }]);
   expect(parseSignals(JSON.parse(JSON.stringify(out)))).toEqual(out);
   expect(() => parseSignals([{ x: 0 }])).toThrow();
 });

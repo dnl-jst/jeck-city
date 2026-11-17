@@ -78,7 +78,7 @@ export function pedSignalAt(j: HasSignal, group: 0 | 1, tick: number): 'red' | '
  * car head shows (-1: none) and that of its pedestrian head (-1: none).
  */
 export type SignalPole = { x: number; z: number; heading: number; kind: Pole['kind']; group: -1 | 0 | 1; ped: -1 | 0 | 1 };
-export type SignalJunction = { x: number; z: number; signal: NonNullable<JunctionInfo['signal']>; poles: SignalPole[] };
+export type SignalJunction = { x: number; z: number; signal: NonNullable<JunctionInfo['signal']>; poles: SignalPole[]; stopLines: JunctionInfo['stopLines'] };
 
 /** The signalled junctions with their poles' groups resolved. */
 export function signalJunctionsOf(junctions: readonly JunctionInfo[]): SignalJunction[] {
@@ -89,6 +89,7 @@ export function signalJunctionsOf(junctions: readonly JunctionInfo[]): SignalJun
       group: (p.approach !== undefined ? j.approaches[p.approach]?.group ?? -1 : -1) as -1 | 0 | 1,
       ped: (p.ped !== undefined ? j.peds[p.ped]?.group ?? -1 : -1) as -1 | 0 | 1,
     })),
+    stopLines: j.stopLines,
   }));
 }
 
@@ -98,7 +99,8 @@ export function parseSignals(json: unknown): SignalJunction[] {
   if (!Array.isArray(json)) throw new Error('signals.json: not an array');
   (json as SignalJunction[]).forEach((j, i) => {
     const ok = j && num(j.x) && num(j.z) && j.signal && num(j.signal.offsetTicks) && typeof j.signal.midblock === 'boolean' && Array.isArray(j.poles)
-      && j.poles.every((p) => num(p.x) && num(p.z) && num(p.heading) && [-1, 0, 1].includes(p.group) && [-1, 0, 1].includes(p.ped));
+      && j.poles.every((p) => num(p.x) && num(p.z) && num(p.heading) && [-1, 0, 1].includes(p.group) && [-1, 0, 1].includes(p.ped))
+      && Array.isArray(j.stopLines) && j.stopLines.every((l) => num(l.x0) && num(l.z0) && num(l.x1) && num(l.z1));
     if (!ok) throw new Error(`signals.json: junction ${i}`);
   });
   return json as SignalJunction[];

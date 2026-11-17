@@ -189,6 +189,12 @@ export class WorldLoader {
     return { bikes: new Map(bikes), racks: new Map(racks) };
   }
 
+  /** Traffic light models of the manifest (signal_*.glb) by pole kind, parsed once; templates to instance. */
+  async loadSignalModels(m: WorldManifest): Promise<Map<'car' | 'ped' | 'car+ped', Object3D>> {
+    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    return new Map(await Promise.all(m.signalModels.map(async (s) => [s.kind, await parse(s.file)] as const)));
+  }
+
   /** Car models of the manifest (car_<type>.glb + car_<type>_lod.glb), parsed once; templates to clone or instance. */
   async loadCarModels(m: WorldManifest): Promise<Map<CarType, { full: Object3D; lod: Object3D }>> {
     const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;

@@ -18,6 +18,8 @@ const CAMS = {
   spawn: null,
   // the signalled junction south of the spawn, from above
   junction: '128,18,-60,200,-35',
+  // the signalled junction just south of the spawn, looking south over it
+  signals: '131,3.5,10,0,-6',
 };
 mkdirSync('shots', { recursive: true });
 const browser = await chromium.launch({ args: browserArgs });
