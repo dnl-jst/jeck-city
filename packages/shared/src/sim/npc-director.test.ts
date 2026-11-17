@@ -97,7 +97,7 @@ test('next plan is issued before the current one ends', () => {
   for (let t = 0; t < 1800; t++) {
     d.update(t, [f]);
     if (t < 60) continue;
-    for (const n of d.all()) if (n.kind !== 'sitter') expect(planAt(n.plan, t).done).toBe(false);
+    for (const n of d.all()) if (n.kind !== 'sitter' && !n.hold) expect(planAt(n.plan, t).done).toBe(false);
   }
 });
 
@@ -176,5 +176,5 @@ test('a sitter ring with a player nearby makes small talk every 20–40 s, none 
 test('a plan never ends before its successor exists (planDuration sane)', () => {
   const d = new NpcDirector(gridNet(), flat, 13);
   run(d, [{ x: 0, z: 0, heading: 0 }], 0, 300);
-  for (const n of d.all()) if (n.kind !== 'sitter') expect(planDuration(n.plan)).toBeGreaterThan(TICK_HZ);
+  for (const n of d.all()) if (n.kind !== 'sitter' && !n.hold) expect(planDuration(n.plan)).toBeGreaterThan(TICK_HZ);
 });

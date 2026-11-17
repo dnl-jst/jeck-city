@@ -172,6 +172,7 @@ function dedupeSnap(pts: Pt[]): Pt[] {
 
 /** Points at most NET_STEP apart (the original vertices kept). */
 export function densify(pts: Pt[], step = NET_STEP): Pt[] {
+  if (!pts.length) return [];
   const out = [pts[0]!];
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1]!, b = pts[i]!;

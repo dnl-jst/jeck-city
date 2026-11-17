@@ -84,6 +84,12 @@ test('footways join the sidewalks they end at', () => {
   expect(ix.nearestEdge(50, 40)!.d).toBeLessThan(0.01);
 });
 
+test('a junction arm shorter than its cut-back yields no sidewalk piece and no crash', () => {
+  const o = { x: 0, z: 0 }, p = { x: 3, z: 0 };
+  const g = walk([road([{ x: -80, z: 0 }, o]), road([o, p]), road([o, { x: 0, z: 80 }]), road([p, { x: 3, z: -80 }]), road([p, { x: 80, z: 0 }])]);
+  for (const e of g.edges) for (const [x, z] of e.pts) expect(Number.isFinite(x) && Number.isFinite(z)).toBe(true);
+});
+
 // ---- lanes, cycle paths, seats ----
 
 const oneway = (pts: Pt[]): Road => {
