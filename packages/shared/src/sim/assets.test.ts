@@ -24,7 +24,7 @@ test.skipIf(!haveRealAssets)(
   async () => {
     const read: string[] = [];
     const a = await loadWorldAssets(async (f) => (read.push(f), readWorldFile(f)));
-    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', ...(a.manifest.npc ? ['npc.json'] : []), 'terrain.bin']);
+    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', ...(a.manifest.npc ? ['npc.json'] : []), ...(a.manifest.signals ? ['signals.json'] : []), 'terrain.bin']);
     if (a.manifest.npc) expect(a.npc!.walk.edges.length).toBeGreaterThan(0);
     expect(a.manifest.parked.length).toBeGreaterThan(0);
     expect(a.collision.indices.length).toBeGreaterThan(0);

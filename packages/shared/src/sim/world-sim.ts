@@ -144,7 +144,7 @@ export class WorldSim {
   static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; sliceMs?: number } = {}): Promise<WorldSim> {
     const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs });
     const slice = timeSlicer(opts.sliceMs);
-    const poles = (a.npc?.junctions ?? []).flatMap((j) => j.poles.map((p) => [p.x, p.z] as const));
+    const poles = (a.signals ?? []).flatMap((j) => j.poles.map((p) => [p.x, p.z] as const));
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain, poles);
     await slice();
     const cars = new CarPool(pw, a.manifest.parked, a.terrain);

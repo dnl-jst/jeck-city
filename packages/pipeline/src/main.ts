@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type NpcNet, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, signalJunctionsOf, type NpcNet, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { buildNpcNet } from './npcnet.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
@@ -263,11 +263,14 @@ async function main() {
   console.log(`npc network built in ${((Date.now() - npcT0) / 1000).toFixed(1)} s`);
   const npcJson = JSON.stringify(npcNet);
   await writeFile(join(OUT_DIR, 'npc.json'), npcJson);
+  const signalsJson = JSON.stringify(signalJunctionsOf(npcNet.junctions));
+  await writeFile(join(OUT_DIR, 'signals.json'), signalsJson);
   const signalled = npcNet.junctions.filter((j) => j.signal);
   console.log(`npc: walk ${npcNet.walk.edges.length} edges, drive ${npcNet.drive.edges.length}, cycle ${npcNet.cycle.edges.length}, seats ${npcNet.seats.length} rings (${npcNet.seats.filter((s) => s.bench).length} benches), ${npcNet.junctions.length} junctions (${signalled.filter((j) => !j.signal!.midblock).length} with traffic lights, ${signalled.filter((j) => j.signal!.midblock).length} midblock signals, ${signalled.reduce((n, j) => n + j.poles.length, 0)} poles), ${mb(npcJson.length)}`);
 
   const manifest: WorldManifest = {
     npc: { file: 'npc.json', bytes: Buffer.byteLength(npcJson) },
+    signals: { file: 'signals.json', bytes: Buffer.byteLength(signalsJson) },
     version: 2,
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
     chunkSize: CHUNK_SIZE,

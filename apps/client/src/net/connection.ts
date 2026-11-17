@@ -1,7 +1,7 @@
 import { Client, type Room } from '@colyseus/sdk';
 import {
-  decodeSnapshot, encodeInputs, NAME_ERRORS, PROTOCOL_VERSION, RECONNECT_S, RETRY_CONNECT_S,
-  type InputPacket, type Snapshot, type StationId, type Weather,
+  decodeNpcBatch, decodeSnapshot, encodeInputs, NAME_ERRORS, PROTOCOL_VERSION, RECONNECT_S, RETRY_CONNECT_S,
+  type InputPacket, type NpcBatch, type Snapshot, type StationId, type Weather,
 } from '@nn/shared';
 import { ServerClock } from './clock';
 
@@ -99,6 +99,9 @@ export class Connection {
   private pending: Snapshot[] = [];
   private readonly statusListeners = new Set<(s: NetStatus) => void>();
   private readonly welcomeListeners = new Set<(w: Welcome) => void>();
+  private readonly npcListeners = new Set<(b: NpcBatch) => void>();
+  /** NPC batches that came before anyone listened (delivered to the first listener). */
+  private pendingNpc: NpcBatch[] = [];
   private resolveWelcome!: (w: Welcome) => void;
   private readonly firstWelcome = new Promise<Welcome>((r) => { this.resolveWelcome = r; });
   private deadline = 0;
@@ -111,6 +114,16 @@ export class Connection {
       this.clock.onSnapshot(w.tick, this.now());
       this.resolveWelcome(w);
       for (const cb of this.welcomeListeners) cb(w);
+    });
+    room.onMessage('n', (bytes: Uint8Array) => {
+      const b = decodeNpcBatch(bytes);
+      if (!b) return;
+      if (!this.npcListeners.size) {
+        this.pendingNpc.push(b);
+        if (this.pendingNpc.length > MAX_PENDING_SNAPSHOTS * 4) this.pendingNpc.shift();
+        return;
+      }
+      for (const cb of this.npcListeners) cb(b);
     });
     room.onMessage('s', (bytes: Uint8Array) => {
       const snap = decodeSnapshot(bytes);
@@ -146,6 +159,13 @@ export class Connection {
   /** The slow state mirror (Colyseus schema, decoded by the SDK). */
   get state(): NetState {
     return this.room.state as unknown as NetState;
+  }
+
+  /** NPC batches; the first listener also gets those that arrived before it. */
+  onNpc(cb: (b: NpcBatch) => void): () => void {
+    this.npcListeners.add(cb);
+    for (const b of this.pendingNpc.splice(0)) cb(b);
+    return () => this.npcListeners.delete(cb);
   }
 
   /** Resolves once the first welcome has arrived. */

@@ -2,8 +2,8 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
-  type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
+  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseNpcNet, parseSignals, parseTimeOverride, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
+  type MapData, type NpcNet, type SignalJunction, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { fadeOutIntroMusic } from './intro-music';
@@ -327,15 +327,25 @@ const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseMani
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
+/** The NPC network (offline only) and the signalled junctions, from loadSim. */
+let npcNet: NpcNet | null = null;
+let signalJunctions: SignalJunction[] = [];
+
 async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
   // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
-  const [collision, terrain] = await Promise.all([
+  const [collision, terrain, signals, npc] = await Promise.all([
     fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => decodeCollision(await r.arrayBuffer())),
     fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
+    // traffic lights: drawn, and their poles are colliders here as on the server
+    manifest.signals ? fetchOk('/world/signals.json', { cache: 'no-cache' }).then(async (r) => parseSignals(await r.json())) : null,
+    // the whole NPC network only offline (online the server's plans carry their paths)
+    offline && manifest.npc ? fetchOk('/world/npc.json', { cache: 'no-cache' }).then(async (r) => parseNpcNet(await r.json())) : null,
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
-  const sim = await WorldSim.create({ manifest, collision, terrain }, { sliceMs: 12 });
+  const sim = await WorldSim.create({ manifest, collision, terrain, signals, npc }, { sliceMs: 12 });
+  npcNet = npc;
+  signalJunctions = signals ?? [];
   physicsLoading = false; // only once the world is built
   showStatus();
   return { sim, terrain };
@@ -424,7 +434,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     session = onlineSession = new OnlineSession(sim, conn);
   } else {
     sim.addPlayer(OFFLINE_ME, start);
-    session = new OfflineSession(sim, OFFLINE_ME);
+    session = new OfflineSession(sim, OFFLINE_ME, npcNet ? { net: npcNet, terrain } : undefined);
   }
   game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level

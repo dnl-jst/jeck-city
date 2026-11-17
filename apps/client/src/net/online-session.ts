@@ -1,3 +1,4 @@
+import type { NpcBatch } from '@nn/shared';
 import {
   CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, predictionMatches, STATION_IDS, TICK_HZ, TUNING,
   type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PlayerSnapshot, type PropPose, type SimEvent,
@@ -5,6 +6,7 @@ import {
   type Weather, type WorldSim,
 } from '@nn/shared';
 import type { RenderOffset, Session } from '../session';
+import { ClientNpcFeed, type NpcDraw } from '../npc/npc-feed';
 import type { ServerClock } from './clock';
 import type { NetState, Welcome } from './connection';
 import { bikeOps, CatchUp, poseOps, riderOps, SnapshotBuffer } from './interp';
@@ -22,7 +24,15 @@ export interface NetLink {
   sendVariant?(v: number): void;
   onSnapshot(cb: (s: Snapshot) => void): () => void;
   onWelcome(cb: (w: Welcome) => void): () => void;
+  /** NPC batches ('n'); absent in tests without NPCs. */
+  onNpc?(cb: (b: NpcBatch) => void): () => void;
 }
+
+/**
+ * The server tick after the step that applies input `seq`, from the newest snapshot (its tick and the input it last
+ * acknowledged): the server applies one input per tick, so seq − ackSeq ticks after the snapshot's.
+ */
+export const predictedServerTick = (snapshotTick: number, ackSeq: number, seq: number): number => snapshotTick + (seq - ackSeq);
 
 /** For the debug overlay: round trip, age of the newest snapshot, size of the last correction (m), players in the room. */
 export type NetStats = { rttMs: number; snapshotAgeMs: number; predErrorM: number; players: number };
@@ -135,10 +145,18 @@ export class OnlineSession implements Session {
   private readonly now: () => number;
   private readonly unsubscribe: (() => void)[];
 
+  /** The NPCs from the server; also the source of their bodies in the prediction world. */
+  readonly npcFeed = new ClientNpcFeed();
+  /** The newest reconciled snapshot's tick and acknowledged input (NPC ticks are predicted from it), or null. */
+  private tickRef: { serverTick: number; ackSeq: number } | null = null;
+
   constructor(readonly sim: WorldSim, private readonly link: NetLink, opts: { now?: () => number } = {}) {
     this.me = link.welcome.slot;
     this.now = opts.now ?? (() => performance.now());
+    sim.attachNpcs(this.npcFeed);
+    sim.npcClock = 'external';
     this.unsubscribe = [
+      ...(link.onNpc ? [link.onNpc((b) => this.npcFeed.push(b, this.now(), this.npcShowTick()))] : []),
       link.onSnapshot((s) => {
         this.inbox.push(s);
         if (this.inbox.length > INBOX) this.inbox.shift();
@@ -154,6 +172,8 @@ export class OnlineSession implements Session {
         this.walkerDraw.clear();
         this.carDraw.clear();
         this.riderDraw.clear();
+        this.npcFeed.clear();
+        this.tickRef = null;
         link.clock.reset();
         link.clock.onSnapshot(w.tick, this.now());
       }),
@@ -162,6 +182,27 @@ export class OnlineSession implements Session {
 
   get alpha(): number {
     return this.stepper.alpha;
+  }
+
+  /** The server tick after the step of input seq (before the first snapshot: the clock's estimate). */
+  private npcTickFor(seq: number): number {
+    const r = this.tickRef;
+    return r ? predictedServerTick(r.serverTick, r.ackSeq, seq) : Math.round(this.link.clock.estimate(this.now())) + (seq - this.seq);
+  }
+
+  /** The tick NPCs are shown at: where the own entity is drawn (between the last two steps). */
+  private npcShowTick(): number {
+    return this.npcTickFor(this.seq) - 1 + this.stepper.alpha;
+  }
+
+  /** The server tick the world is shown at (traffic lights). */
+  shownTick(): number {
+    return this.npcShowTick();
+  }
+
+  /** The NPCs as shown this frame. */
+  npcs(): NpcDraw[] {
+    return this.npcFeed.draws(this.npcShowTick(), this.now());
   }
 
   renderOffset(): RenderOffset {
@@ -249,6 +290,7 @@ export class OnlineSession implements Session {
       const i: PlayerInput = { ...input, use: this.use, jump: this.jump, bell: this.bell };
       this.use = this.jump = this.bell = false;
       const seq = ++this.seq;
+      this.sim.npcTick = this.npcTickFor(seq) - 1;
       for (const e of this.sim.step(new Map([[this.me, i]]))) {
         // knocks and impacts come from the server's snapshots (the prediction would sound them a second time)
         if (e.t !== 'knock' && e.t !== 'impact') ev.push(e);
@@ -343,13 +385,15 @@ export class OnlineSession implements Session {
     this.reconciles[hard ? 'hard' : 'replayed']++;
 
     const before = this.ownPose();
+    this.tickRef = { serverTick: s.serverTick, ackSeq: ack };
     if (drop) {
       this.pending = [];
       this.enterSeq = null;
       this.mountSeq = null;
       this.sim.replay(this.me, server, []);
     } else {
-      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()));
+      const seqs = this.pending.map((p) => p.seq);
+      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()), (k) => this.npcTickFor(seqs[k]!) - 1);
     }
     const after = this.ownPose();
     this.onCorrection?.();

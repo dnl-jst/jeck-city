@@ -1,8 +1,9 @@
 import type { RemoteCarInfo } from './remote/remote-players';
 import {
-  FixedStepper, TUNING, type PlayerId, type PlayerInput, type SimEvent, type SnapshotCar, type SnapshotRider, type SnapshotWalker, type StationId,
-  type Weather, type WorldSim,
+  FixedStepper, heightAt, NpcDirector, surfaceY, TUNING, type NpcNet, type PlayerId, type PlayerInput, type SimEvent, type SnapshotCar,
+  type SnapshotRider, type SnapshotWalker, type StationId, type TerrainGrid, type Weather, type WorldSim,
 } from '@nn/shared';
+import { ClientNpcFeed, type NpcDraw } from './npc/npc-feed';
 
 /**
  * Where the game's world comes from: a WorldSim the client steps (offline) or, later, one that follows a server.
@@ -37,7 +38,14 @@ export interface Session {
   weather?(): Weather | null;
   /** Online only: the own character variant (index into CHARACTER_VARIANTS) changed. */
   setVariant?(v: number): void;
+  /** The NPCs as shown this frame (none without an NPC network). */
+  npcs(): NpcDraw[];
+  /** The (server) tick the world is shown at this frame, fractional: traffic lights switch by it. */
+  shownTick(): number;
 }
+
+/** Seed of the offline NPC director (the server uses its own). */
+const OFFLINE_NPC_SEED = 1766132;
 
 /** Position offset and rotation offset (quaternion, applied before the pose's own rotation). */
 export type RenderOffset = { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
@@ -54,7 +62,34 @@ export class OfflineSession implements Session {
   private jump = false;
   private bell = false;
 
-  constructor(readonly sim: WorldSim, readonly me: PlayerId) {}
+  private readonly director: NpcDirector | null = null;
+  private readonly npcFeed = new ClientNpcFeed();
+
+  /** npc: the NPC network and terrain for a local NPC director (as the server runs it). */
+  constructor(readonly sim: WorldSim, readonly me: PlayerId, npc?: { net: NpcNet; terrain: TerrainGrid }) {
+    if (!npc) return;
+    const heights = new Map<number, number>();
+    const groundAt = (x: number, z: number): number => {
+      const k = Math.round(x) * 100003 + Math.round(z);
+      let y = heights.get(k);
+      if (y === undefined) {
+        const g = heightAt(npc.terrain, x, z);
+        y = surfaceY(sim.pw, x, z, g + 3) ?? g;
+        heights.set(k, y);
+      }
+      return y;
+    };
+    this.director = new NpcDirector(npc.net, groundAt, OFFLINE_NPC_SEED);
+    sim.attachNpcs(this.director);
+  }
+
+  npcs(): NpcDraw[] {
+    return this.npcFeed.draws(this.shownTick(), performance.now());
+  }
+
+  shownTick(): number {
+    return this.sim.tick - 1 + this.stepper.alpha;
+  }
 
   get alpha(): number {
     return this.stepper.alpha;
@@ -73,7 +108,16 @@ export class OfflineSession implements Session {
     this.stepper.advance(dt, () => {
       const i: PlayerInput = { ...input, use: this.use, jump: this.jump, bell: this.bell };
       this.use = this.jump = this.bell = false;
+      if (this.director) {
+        const p = this.sim.player(this.me);
+        this.director.setPlayers([{ id: this.me, x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, mode: p.mode === 'drive' ? 'drive' : p.mode === 'ride' ? 'ride' : 'walk' }]);
+      }
       for (const e of this.sim.step(new Map([[this.me, i]]))) ev.push(e);
+      if (this.director) {
+        const p = this.sim.player(this.me);
+        const msgs = this.director.update(this.sim.tick, [{ x: p.pos.x, z: p.pos.z, heading: p.yaw }]);
+        this.npcFeed.push({ tick: this.sim.tick, msgs }, performance.now(), this.shownTick());
+      }
       this.steps++;
       this.onStep?.();
     });

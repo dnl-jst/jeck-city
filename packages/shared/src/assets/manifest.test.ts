@@ -21,6 +21,7 @@ const valid = (): WorldManifest => ({
     characterModels: [{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }],
   carModels: [],
   npc: { file: 'npc.json', bytes: 77 },
+  signals: { file: 'signals.json', bytes: 12 },
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,

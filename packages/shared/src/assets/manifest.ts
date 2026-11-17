@@ -87,6 +87,8 @@ export type WorldManifest = {
   characterModels: { variant: CharacterVariant; file: string; bytes: number }[];
   /** The NPC network (npc/netgraph.ts NpcNet). Missing in older manifests → no NPCs. */
   npc?: { file: 'npc.json'; bytes: number };
+  /** Signalled junctions for the client (npc/signals.ts SignalJunction[]): traffic lights and their poles' colliders. */
+  signals?: { file: 'signals.json'; bytes: number };
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -146,8 +148,15 @@ export function parseManifest(json: unknown): WorldManifest {
     if (n.file !== 'npc.json') fail('npc.file', "must be 'npc.json'");
     npc = { file: 'npc.json', bytes: num(n.bytes, 'npc.bytes') };
   }
+  let signals: WorldManifest['signals'];
+  if (o.signals !== undefined) {
+    const n = obj(o.signals, 'signals');
+    if (n.file !== 'signals.json') fail('signals.file', "must be 'signals.json'");
+    signals = { file: 'signals.json', bytes: num(n.bytes, 'signals.bytes') };
+  }
   return {
     ...(npc ? { npc } : {}),
+    ...(signals ? { signals } : {}),
     version: 2,
     origin: nums(o.origin, 'origin', ['e', 'n']),
     chunkSize: CHUNK_SIZE,
