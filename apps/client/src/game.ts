@@ -469,7 +469,7 @@ export class Game {
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt);
+      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded);
       if (!this.flying) this.follow.update(p, 0, dt);
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
