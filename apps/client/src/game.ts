@@ -86,6 +86,8 @@ export class Game {
   /** On foot after the last step: velocity and ground contact (figure animation, footsteps). */
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private grounded = true;
+  /** The way the body faces after the last step (the sim's; others see the same). */
+  private facing = 0;
   /** Knocked down after the last step (the figure lies, input is ignored). */
   private down = false;
   /** Knocked down at the last rendered frame (the ragdoll starts on the change). */
@@ -306,6 +308,7 @@ export class Game {
       this.prevPos = changed ? p.pos : this.currPos;
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -347,6 +350,7 @@ export class Game {
       this.prevPos = { x: this.prevPos.x + p.pos.x - was.x, y: this.prevPos.y + p.pos.y - was.y, z: this.prevPos.z + p.pos.z - was.z };
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -498,7 +502,7 @@ export class Game {
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded);
+      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
       if (!this.flying) this.follow.update(p, 0, dt);
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;

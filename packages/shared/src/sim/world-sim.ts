@@ -57,7 +57,9 @@ export type PlayerSnapshot = {
   mode: 'walk' | 'drive' | 'down' | 'ride';
   pos: Vec3;
   vel: Vec3;
+  /** The camera's yaw (the input's), and the way the body faces (turns towards where it walks; what others see). */
   yaw: number;
+  facing: number;
   carId: number | null;
   char: CharacterState;
   car: VehicleState | null;
@@ -332,7 +334,7 @@ export class WorldSim {
       const v = this.cars.vehicle(pl.car)!;
       const car = v.saveState();
       return {
-        mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw,
+        mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw, facing: pl.facing,
         carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
       };
     }
@@ -340,11 +342,11 @@ export class WorldSim {
       const b = pl.ridden!.state();
       return {
         mode: 'ride', pos: { x: b.x, y: b.y, z: b.z }, vel: { x: Math.sin(b.heading) * b.speed, y: b.vy, z: Math.cos(b.heading) * b.speed },
-        yaw: pl.yaw, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
+        yaw: pl.yaw, facing: pl.facing, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
       };
     }
     return {
-      mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw,
+      mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw, facing: pl.facing,
       carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0, fallTicks: pl.fallTicks, pedalling: false,
     };
   }
@@ -642,6 +644,7 @@ export class WorldSim {
 
   /** The facing follows the walking direction (as the rendered figure turns). */
   private turnFacing(pl: Player): void {
+    if (pl.char.isDown()) return; // thrown or lying: turns again once up and walking
     const v = pl.char.velocity();
     if (Math.hypot(v.x, v.z) <= FACE_MIN_SPEED) return;
     const d = Math.atan2(v.x, v.z) - pl.facing;

@@ -203,7 +203,7 @@ export class RemotePlayers {
       w.vz += (vz - w.vz) * k;
       w.px = s.x; w.pz = s.z;
       w.fig.setDown(s.state === 2 ? 1 : 0);
-      w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt);
+      w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt, false, s.yaw);
       w.label = this.label(w.label, names.get(s.slot), at.x, at.y + FIGURE_H + LABEL_GAP, at.z, cp);
     }
     for (const [slot, w] of this.walkers) {

@@ -453,7 +453,7 @@ export class PlayerFigure {
    * from the character controller) the legs tuck and the arms lift. Not from v.y: climbing stairs or a steep ramp
    * moves up fast while the feet are on the ground. During a fall (fall()) it tips over, lies, and gets up again.
    */
-  update(x: number, y: number, z: number, v: { x: number; y: number; z: number }, dt: number, airborne = false): void {
+  update(x: number, y: number, z: number, v: { x: number; y: number; z: number }, dt: number, airborne = false, facing?: number): void {
     if (this.rag) {
       this.tickRagdoll(x, y, z, dt);
       this.model?.apply();
@@ -474,7 +474,9 @@ export class PlayerFigure {
     }
     const speed = Math.hypot(v.x, v.z);
     this.air += ((airborne ? 1 : 0) - this.air) * Math.min(1, dt * 8);
-    if (speed > 0.2) this.heading += angleDelta(this.heading, Math.atan2(v.x, v.z)) * Math.min(1, dt * 12);
+    // the sim's facing when given (the same on every client), else towards where it walks
+    if (facing !== undefined) this.heading += angleDelta(this.heading, facing) * Math.min(1, dt * 12);
+    else if (speed > 0.2) this.heading += angleDelta(this.heading, Math.atan2(v.x, v.z)) * Math.min(1, dt * 12);
     const k = Math.min(1, dt * 6);
     // amp: 0 standing … 1 walking; run: 0 walking … 1 running (both smoothed, so gaits blend)
     this.swingAmp += (Math.min(1, speed / 1.2) - this.swingAmp) * k;

@@ -76,6 +76,7 @@ export type EngineState = 0 | 1 | 2; // off / starting / running
 export type WalkerState = 0 | 1 | 2 | 3;
 
 /** Walker position range on the wire: x/z int24 cm (±83 km), y int16 cm (±327 m); values are clamped. */
+/** yaw: the way the walker's body faces (the sim's facing, not their camera). */
 export type SnapshotWalker = { slot: number; x: number; y: number; z: number; yaw: number; speed: number; state: WalkerState };
 /** horn: the driver holds the horn. */
 export type SnapshotCar = {
