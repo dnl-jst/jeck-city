@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
-import { CAR_GROUPS, CHARACTER_GROUPS, onAfterStep, type PhysicsWorld } from './world';
+import { BIKE_GROUPS, CAR_GROUPS, CHARACTER_GROUPS, onAfterStep, type PhysicsWorld } from './world';
 
 /** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z; jump takes off if standing on ground. */
 export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number; jump?: boolean };
@@ -24,12 +24,14 @@ const KNOCK_BOUNCE = 0.3, KNOCK_BOUNCE_GROUND = 0.15;
 /** The thrown ball's query groups: member of bit 0 (so cars, which ignore people, still count), never bikes or people. */
 const KNOCK_QUERY_GROUPS = 0x0001_ffe7;
 /**
- * A person over a car (standing on it, or jumping up from it: the roof within CARRY_BELOW under the feet) is carried
+ * A person over a car or a bike (standing on it, or jumping up from it: within CARRY_BELOW under the feet) is carried
  * with it: after every step they are moved and turned exactly as the car moved and turned in that step (as if fixed
  * to it), their own walking on top. Not quite physics (no inertia when it brakes), but nobody slides off a car that
  * drives away.
  */
 const CARRY_BELOW = 1.6;
+/** What carries: cars and bikes (membership bits). */
+const CARRIERS = new Set([CAR_GROUPS >>> 16, BIKE_GROUPS >>> 16]);
 /** The thrown ball moves across this far (m) above where it is, clear of the ground under it. */
 const THROWN_LIFT = 0.04;
 /** Ground: a contact normal at least this steep upwards. */
@@ -117,20 +119,32 @@ export class Character {
       this.grounded = false;
     }
     this.vy += T.gravity * DT;
-    this.carrier = this.carUnder();
+    const p0 = this.body.translation();
+    const carrier = (this.carrier = this.carUnder());
+    const cb = carrier?.body.handle;
 
+    // over a car or bike, the controller leaves it out (it moves under the feet; colliding with it would push the
+    // person around): the feet are kept on its top below instead
     this.kcc.computeColliderMovement(
       this.collider,
       { x: vx * DT + this.pushX, y: this.vy * DT, z: vz * DT + this.pushZ },
-      this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS,
+      this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined,
+      carrier ? (c) => c.parent()?.handle !== cb : undefined,
     );
     this.pushX = this.pushZ = 0;
-    const m = this.kcc.computedMovement();
+    const m = { ...this.kcc.computedMovement() };
+    let onTop = false;
+    if (carrier) {
+      const top = this.topOf(carrier.body, p0.x + m.x, p0.z + m.z, p0.y - CENTRE + m.y);
+      if (top !== null && p0.y - CENTRE + m.y <= top + T.skin) {
+        m.y = top + T.skin - (p0.y - CENTRE);
+        onTop = true;
+      }
+    }
     // grounded = standing (not while still rising from a take-off)
-    this.grounded = this.kcc.computedGrounded() && this.vy <= 0;
+    this.grounded = (this.kcc.computedGrounded() || onTop) && this.vy <= 0;
     if (this.grounded) this.vy = 0;
-    const p = this.body.translation();
-    this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
+    this.body.setNextKinematicTranslation({ x: p0.x + m.x, y: p0.y + m.y, z: p0.z + m.z });
     // own movement (what the figure animates and turns to; a car carrying it comes on top after the step)
     this.vel = { x: m.x / DT, y: m.y / DT, z: m.z / DT };
   }
@@ -141,9 +155,18 @@ export class Character {
     const p = this.body.translation(), feet = p.y - CENTRE;
     const hit = world.castRay(new R.Ray({ x: p.x, y: feet + 0.1, z: p.z }, { x: 0, y: -1, z: 0 }), CARRY_BELOW + 0.1, true,
       R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body,
-      (c) => c.collisionGroups() >>> 16 === CAR_GROUPS >>> 16);
+      (c) => CARRIERS.has(c.collisionGroups() >>> 16));
     const b = hit?.collider.parent();
     return b && !b.isFixed() ? { body: b, t: b.translation(), q: b.rotation() } : null;
+  }
+
+  /** Height of the top of `body` (a car, a bike) under (x, z), looking down from a little above `feet`, or null. */
+  private topOf(body: RAPIER.RigidBody, x: number, z: number, feet: number): number | null {
+    const { rapier: R, world } = this.pw;
+    const from = feet + 0.5;
+    const hit = world.castRay(new R.Ray({ x, y: from, z }, { x: 0, y: -1, z: 0 }), CARRY_BELOW + 0.5, true,
+      R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body, (c) => c.parent()?.handle === body.handle);
+    return hit ? from - hit.timeOfImpact : null;
   }
 
   /** After a step: moved (and the step's own movement with it) as the carrying car moved, turned about its origin. */

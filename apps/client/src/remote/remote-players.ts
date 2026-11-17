@@ -1,6 +1,6 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, fromCarLocal, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, BIKE_ROOF, fromCarLocal, headingPose, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
@@ -81,7 +81,7 @@ export type RemoteOptions = {
   occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
-  /** The car the local player drives and its pose as drawn (someone on its roof is drawn on it), or null. */
+  /** The car the local player drives or the bike they ride, and its pose as drawn (someone on it is drawn on it), or null. */
   localCar?: () => { id: number; pose: CarPose } | null;
   /** Where another player (slot) stands on the local player's car, in its frame (Session.onOwnRoof). */
   onOwnRoof?: (slot: number) => { x: number; y: number; z: number } | null;
@@ -190,9 +190,9 @@ export class RemotePlayers {
         } else {
           const dx = s.x - w.px, dz = s.z - w.pz;
           if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
-          // riding on a streamed car's roof: only the walking on it animates
-          const under = carUnder(sample.cars, s);
-          if (under) { vx -= under.vx; vz -= under.vz; }
+          // riding on a streamed car's roof or a bike: only the walking on it animates
+          const under = carrierVelocity(sample, s);
+          if (under) { vx -= under.x; vz -= under.z; }
         }
       }
       w.roof = onIt;
@@ -373,9 +373,12 @@ export class RemotePlayers {
   }
 }
 
-/** A streamed car whose roof the feet at p are on, if any. */
-function carUnder(cars: ReadonlyMap<string, SnapshotCar>, p: Vec3): SnapshotCar | null {
-  for (const c of cars.values()) if (onRoof(c, p)) return c;
+/** The velocity of the streamed car or ridden bike whose top the feet at p are on, if any. */
+function carrierVelocity(sample: RemoteSampleIn, p: Vec3): { x: number; z: number } | null {
+  for (const c of sample.cars.values()) if (onRoof(c, p)) return { x: c.vx, z: c.vz };
+  for (const r of sample.riders?.values() ?? []) {
+    if (onRoof(headingPose(r), p, BIKE_ROOF)) return { x: Math.sin(r.heading) * r.speed, z: Math.cos(r.heading) * r.speed };
+  }
   return null;
 }
 

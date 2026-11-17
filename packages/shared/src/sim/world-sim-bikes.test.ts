@@ -249,3 +249,25 @@ test('standing on a car that drives off (and turns): rides along on the roof, no
   expect(p.pos.y).toBeGreaterThan(roof - 0.3);
   expect(Math.hypot(p.vel.x, p.vel.z)).toBeLessThan(1); // standing (relative to the car): no running animation
 }, 30_000);
+
+test('a passenger standing on a cargo bike rides along; the bike does not crash into them', async () => {
+  const sim = await WorldSim.create(withBikes([{ x: 0, z: -60, heading: 0, type: 3, color: 0 }]));
+  sim.addPlayer(1, { x: 1, z: -60 });
+  sim.addPlayer(2, { x: -1.5, z: -60 });
+  for (let t = 0; t < 10; t++) sim.step(new Map([[1, N], [2, N]]));
+  sim.step(new Map([[1, USE], [2, N]]));
+  expect(sim.player(1).mode).toBe('ride');
+  const b0 = sim.bikes.poses[0]!;
+  sim.onFoot().find((p) => p.id === 2)!.char.teleport({ x: b0.x, y: b0.y + 1, z: b0.z });
+  for (let t = 0; t < 30; t++) sim.step(new Map([[1, N], [2, N]]));
+  const on = sim.player(2).pos.y;
+  expect(on).toBeGreaterThan(0.7);
+  const ev: SimEvent[] = [];
+  for (let t = 0; t < 240; t++) ev.push(...sim.step(new Map([[1, { ...N, forward: 1, right: t > 150 ? 0.4 : 0 }], [2, N]])));
+  expect(ev.filter((e) => e.t === 'dismount')).toEqual([]);
+  const b = sim.riddenBike(1)!.state(), p = sim.player(2);
+  expect(Math.hypot(b.x - b0.x, b.z - b0.z)).toBeGreaterThan(8);
+  expect(Math.hypot(p.pos.x - b.x, p.pos.z - b.z)).toBeLessThan(0.8);
+  expect(p.pos.y).toBeGreaterThan(on - 0.2);
+  expect(Math.hypot(p.vel.x, p.vel.z)).toBeLessThan(0.5);
+}, 30_000);

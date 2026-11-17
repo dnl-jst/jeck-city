@@ -1,6 +1,6 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
-  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
+  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
@@ -90,7 +90,7 @@ export class Game {
   private down = false;
   /** Knocked down at the last rendered frame (the ragdoll starts on the change). */
   private wasDown = false;
-  /** The own car's pose as drawn this frame (while driving). */
+  /** The own car's or bike's pose as drawn this frame (while driving or riding; others on it are drawn on it). */
   private drawnPose: CarPose | null = null;
   /** Tumbling figures (own and other players') fall in a physics world of their own. */
   readonly ragdolls: RagdollWorld;
@@ -133,7 +133,7 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
       ragdolls: this.ragdolls,
-      localCar: () => (this.mode === 'drive' && this.carId !== null && this.drawnPose ? { id: this.carId, pose: this.drawnPose } : null),
+      localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? -1, pose: this.drawnPose } : null),
       onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
@@ -509,6 +509,7 @@ export class Game {
       const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
       // server correction still fading out (online)
       s.x += off.x; s.y += off.y; s.z += off.z;
+      this.drawnPose = headingPose(s);
       const rig = this.rig;
       if (rig) {
         const ridden = this.session.sim.riddenBike(this.session.me);

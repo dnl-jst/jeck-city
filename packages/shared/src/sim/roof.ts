@@ -2,17 +2,26 @@ import type { CarPose } from './rules';
 
 type Vec3 = { x: number; y: number; z: number };
 
-/** Half length and half width (m) of the roof area that counts as on a car (generous: the biggest model's body). */
-const ROOF_HALF_LENGTH = 2.6, ROOF_HALF_WIDTH = 1.1;
+/** Half length and half width (m) of the top that counts as on a vehicle. */
+export type RoofSize = { halfLength: number; halfWidth: number };
+/** A car's roof (generous: the biggest model's body). */
+export const CAR_ROOF: RoofSize = { halfLength: 2.6, halfWidth: 1.1 };
+/** A bike's top (a cargo bike's box, generous). */
+export const BIKE_ROOF: RoofSize = { halfLength: 1.4, halfWidth: 0.5 };
 /** Feet at least this far above a car's body origin are on its roof, at most ROOF_ABOVE_MAX (m). */
 const ROOF_ABOVE_MIN = 0.3, ROOF_ABOVE_MAX = 1.6;
 
-/** Whether feet at p stand on (or are just above) the roof of the car posed at c. */
-export function onRoof(c: CarPose, p: Vec3): boolean {
+/** Whether feet at p stand on (or are just above) the top of the vehicle posed at c (a car's roof by default). */
+export function onRoof(c: CarPose, p: Vec3, size: RoofSize = CAR_ROOF): boolean {
   const dy = p.y - c.y;
   if (dy < ROOF_ABOVE_MIN || dy > ROOF_ABOVE_MAX) return false;
   const [x, , z] = rotate(conj(c), [p.x - c.x, p.y - c.y, p.z - c.z]);
-  return Math.abs(z) < ROOF_HALF_LENGTH && Math.abs(x) < ROOF_HALF_WIDTH;
+  return Math.abs(z) < size.halfLength && Math.abs(x) < size.halfWidth;
+}
+
+/** A bike's pose (ground under it, heading) as a pose with a rotation (about y only), for onRoof and reanchor. */
+export function headingPose(p: { x: number; y: number; z: number; heading: number }): CarPose {
+  return { x: p.x, y: p.y, z: p.z, qx: 0, qy: Math.sin(p.heading / 2), qz: 0, qw: Math.cos(p.heading / 2) };
 }
 
 /** p in the frame of a car posed at c (its offset from the car, turned back). */
