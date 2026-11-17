@@ -232,6 +232,15 @@ export class TouchControls {
     canvas?.addEventListener('pointerup', (e) => this.pointerUp(e));
     canvas?.addEventListener('pointercancel', (e) => this.pointerUp(e));
     this.root.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Safari reads system gestures (a downward drag leaves fullscreen on the iPad, edge swipes, scrolling) from the
+    // raw touch events, which touch-action alone does not stop: while the controls are up, the game's touches are
+    // never the browser's. Form fields (the name dialog) keep theirs.
+    const own = (e: TouchEvent): void => {
+      if (!this.shown || !e.cancelable) return;
+      if ((e.target as Element | null)?.closest?.('input, textarea, select')) return;
+      e.preventDefault();
+    };
+    for (const t of ['touchstart', 'touchmove'] as const) document.addEventListener(t, own, { passive: false });
     // a touchscreen laptop: the first touch brings the overlay up
     window.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'touch' && !document.body.classList.contains('nn-touch')) this.enable();
@@ -301,9 +310,14 @@ export class TouchControls {
   private moveDown(e: PointerEvent): void {
     if (this.move) return;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    // the stick jumps to where the thumb lands
-    this.move = { id: e.pointerId, cx: e.clientX, cy: e.clientY, dx: 0, dy: 0 };
-    place(this.moveStick, e.clientX, e.clientY);
+    // the stick jumps to where the thumb lands, but never so close to an edge that full travel runs off the screen
+    // (a drag into the bottom edge is the iPad's swipe that leaves fullscreen)
+    const safe = getComputedStyle(this.safe), m = STICK_RADIUS + 14;
+    const cx = Math.max(e.clientX, (parseFloat(safe.paddingLeft) || 0) + m);
+    const cy = Math.min(e.clientY, window.innerHeight - (parseFloat(safe.paddingBottom) || 0) - m);
+    this.move = { id: e.pointerId, cx, cy, dx: e.clientX - cx, dy: e.clientY - cy };
+    place(this.moveStick, cx, cy);
+    this.knob(this.moveStick, this.move.dx, this.move.dy);
     this.moveStick.classList.add('nn-active');
   }
 
