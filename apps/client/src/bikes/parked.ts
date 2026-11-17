@@ -10,7 +10,16 @@ export type BikeSource = {
   /** Who rides each bike (null: parked); ridden bikes are drawn by their rider's rig, not here. */
   readonly rider: readonly (number | null)[];
   activeIds(): number[];
+  /** Shown lying on its side (a knocked-over e-scooter); optional for sources without any. */
+  lying?(id: number): boolean;
 };
+
+/**
+ * A lying e-scooter rolls onto its left side (rider's left, +x in the model) about its forward axis, resting on the
+ * left bar end and the deck edge (77° roll), lifted so both touch the ground.
+ */
+const LIE_ROLL = -Math.PI / 2 + 0.23;
+const LIE_LIFT = 0.07;
 
 /** Parked bikes are drawn within this distance of the camera (m)… */
 export const BIKE_RENDER_RADIUS = 120;
@@ -57,6 +66,8 @@ export class BikeView {
   private readonly p = new Vector3();
   private readonly one = new Vector3(1, 1, 1);
   private readonly up = new Vector3(0, 1, 0);
+  private readonly fwd = new Vector3(0, 0, 1);
+  private readonly qr = new Quaternion();
 
   constructor(
     scene: Scene, models: ReadonlyMap<BikeType, Object3D>, racks: ReadonlyMap<0 | 1, Object3D>, private readonly src: BikeSource,
@@ -147,7 +158,10 @@ export class BikeView {
     const e = this.byType.get(this.src.types[i]!);
     if (k < 0 || !e) return;
     const s = this.src.poses[i]!;
-    const base = new Matrix4().compose(this.p.set(s.x, s.y, s.z), this.q.setFromAxisAngle(this.up, s.heading), this.one);
+    const lying = this.src.lying?.(i) === true;
+    this.q.setFromAxisAngle(this.up, s.heading);
+    if (lying) this.q.multiply(this.qr.setFromAxisAngle(this.fwd, LIE_ROLL));
+    const base = new Matrix4().compose(this.p.set(s.x, s.y + (lying ? LIE_LIFT : 0), s.z), this.q, this.one);
     e.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(base).multiply(e.parts[j]!.local)));
   }
 }

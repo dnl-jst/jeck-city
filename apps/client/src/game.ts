@@ -5,7 +5,7 @@ import {
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { DRIVE_HINT, RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
@@ -214,7 +214,10 @@ export class Game {
   /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
   get modeHint(): string {
     if (this.mode === 'drive') return DRIVE_HINT;
-    if (this.mode === 'ride') return this.bikeType() === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT;
+    if (this.mode === 'ride') {
+      const t = this.bikeType();
+      return t === 'soundjohn' ? SOUND_RIDE_HINT : t === 'escooter' ? SCOOTER_RIDE_HINT : RIDE_HINT;
+    }
     return '';
   }
 
@@ -489,7 +492,8 @@ export class Game {
           [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);
       }
       if (!this.flying) this.follow.update(s, s.heading, dt);
-      audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
+      // a scooter has no freewheel: never ticks
+      audio?.ride({ speed: Math.abs(s.speed), pedalling: (this.ctl.forward > 0 && s.speed > 0.3) || BIKE_SPECS[this.rig?.type ?? 'dutch'].motor === true, grounded: s.grounded }, dt);
     } else if (this.currPose && this.carId !== null) {
       const { sim } = this.session;
       const prev = this.prevPose ?? this.currPose;

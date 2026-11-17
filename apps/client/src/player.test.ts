@@ -21,6 +21,15 @@ describe('riding pose', () => {
     }
   });
 
+  test('standing on a scooter deck: feet close to the centre line, one behind the other (legs roll inwards)', () => {
+    const f = new PlayerFigure(new Scene());
+    const hips = new Vector3(0, 1.01, -0.09);
+    const feet: [Vector3, Vector3] = [new Vector3(0.03, 0.175, 0.07), new Vector3(-0.035, 0.175, -0.21)];
+    f.ride(hips, grips, feet, 'standing');
+    expect(f.foot(0).distanceTo(feet[0])).toBeLessThan(0.05);
+    expect(f.foot(1).distanceTo(feet[1])).toBeLessThan(0.05);
+  });
+
   test('race posture leans forward more than upright', () => {
     const f = new PlayerFigure(new Scene());
     f.ride(seat, grips, pedals(0), 'upright');

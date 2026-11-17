@@ -16,6 +16,8 @@ export const DRIVE_HINT = 'W Gas · S bremsen/rückwärts · A/D lenken · Leert
 /** Bottom hint while riding a bike. */
 export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
 /** Bottom hint on the sound Long John (radio through its box). */
+/** On the e-scooter: a throttle, no pedals, no sprint. */
+export const SCOOTER_RIDE_HINT = 'W Gas · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
 export const SOUND_RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · R Radio · L Disco · E absteigen';
 
 export const HUD_CSS = `
