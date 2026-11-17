@@ -19,9 +19,12 @@ export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste h
 export const SOUND_RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · R Radio · L Disco · E absteigen';
 
 export const HUD_CSS = `
-  .nn-loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);
+  .nn-loading { position: fixed; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);
+    padding: 16px 20px; border-radius: 12px; background: rgba(8,6,22,0.72); backdrop-filter: blur(6px); box-shadow: 0 8px 40px rgba(0,0,0,0.5);
     color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; letter-spacing: 0.05em; text-align: center; transition: opacity 0.6s; }
   .nn-loading.nn-hidden { opacity: 0; pointer-events: none; }
+  /* the name dialog shows the download itself; the box behind it would only show through */
+  body:has(.nn-lobby:not(.nn-hidden)) .nn-loading { visibility: hidden; }
   .nn-loading-track { margin-top: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); overflow: hidden; }
   .nn-loading-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.15s; }
   .nn-loading-status { margin-top: 8px; font-size: 12px; opacity: 0.8; }
