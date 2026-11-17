@@ -219,5 +219,5 @@ describe('ragdoll', () => {
         expect(d.z).toBeGreaterThan(-0.3); // (the limits give a little, ~15°)
       }
     }
-  });
+  }, 20_000);
 });

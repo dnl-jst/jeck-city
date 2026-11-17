@@ -106,13 +106,36 @@ test('crashing into a tree throws the rider off: no control until up again', asy
   const at = sim.player(1).pos;
   expect(top).toBeGreaterThan(0.6); // in the air from the saddle
   expect(past).toBeLessThan(-10 - 0.3); // the trunk at z = −10 stops it
-  expect(Math.hypot(at.x - bike.x, at.z - bike.z)).toBeLessThan(3);
+  expect(Math.hypot(at.x - bike.x, at.z - bike.z)).toBeLessThan(4.5); // (bounced back off the trunk)
   expect(at.y).toBeLessThan(0.1); // lying on the ground by now
   run(sim, 5);
   expect(sim.player(1).mode).toBe('walk');
   expect(sim.player(1).falling).toBe(false);
   run(sim, 30, { ...N, forward: 1, yaw: Math.PI });
   expect(Math.hypot(sim.player(1).pos.x - at.x, sim.player(1).pos.z - at.z)).toBeGreaterThan(0.5);
+}, 30_000);
+
+test('head-on into the side of a car: thrown over the handlebar onto or over it, not stuck against its side', async () => {
+  // the bike at (0, −60) facing +z, car 0 across its path 14 m ahead
+  const a = withBikes([{ x: 0, z: -60, heading: 0, type: 1, color: 0 }]);
+  a.manifest.parked[0] = { x: 0, z: -46, heading: Math.PI / 2, color: 0xff0000 };
+  const sim = await WorldSim.create(a);
+  sim.addPlayer(1, { x: 1, z: -60 });
+  run(sim, 10);
+  sim.step(new Map([[1, USE]]));
+  expect(sim.player(1).mode).toBe('ride');
+  let crash: SimEvent | undefined;
+  for (let t = 0; t < 600 && !crash; t++) crash = sim.step(new Map([[1, { ...N, forward: 1, run: true }]])).find((e) => e.t === 'dismount');
+  expect(crash).toMatchObject({ crash: true });
+  let top = 0;
+  for (let t = 0; t < Math.round(TUNING.bike.getUpSeconds * 60) - 2; t++) {
+    sim.step(new Map([[1, N]]));
+    top = Math.max(top, sim.player(1).pos.y);
+  }
+  const at = sim.player(1).pos, car = sim.cars.poses[0]!;
+  expect(top).toBeGreaterThan(1.3); // up over the roof line
+  // lying on the car or beyond its far side (the car is ~1.8 m wide, across z)
+  expect(at.y > 1 || at.z > car.z + 0.9).toBe(true);
 }, 30_000);
 
 /** The fixture with one bike at (0, −60) facing +z and car 0 `gap` m behind it on the same line, facing it. */

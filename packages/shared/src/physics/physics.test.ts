@@ -14,7 +14,8 @@ const DT = 1 / 60;
 const KMH = 3.6;
 
 /** Mini scene: ground ±300 m at y = 0, a wall at x = 10 (10..10.5, 4 m high),
- *  a 0.12 m kerb slab from z = 5 to z = 40 (x −100..9), boundary square ±250. */
+ *  a 0.12 m kerb slab from z = 5 to z = 40 (x −100..9), a 1.4 m block (x 196..200, z 196..199),
+ *  boundary square ±250. */
 function miniScene(): CollisionAsset {
   const v: number[] = [];
   const idx: number[] = [];
@@ -34,6 +35,7 @@ function miniScene(): CollisionAsset {
   quad([-300, 0, -300], [-300, 0, 300], [300, 0, 300], [300, 0, -300]);
   box(10, 0, -300, 10.5, 4, 300);
   box(-100, 0, 5, 9, 0.12, 40);
+  box(196, 0, 196, 200, 1.4, 199);
   return {
     vertices: new Float32Array(v),
     indices: new Uint32Array(idx),
@@ -323,7 +325,7 @@ describe('character', () => {
     expect(c.position().x).toBeGreaterThan(9);
   });
 
-  test('jump: rises about 0.75 m, lands again, no second jump in the air', async () => {
+  test('jump: rises about 1 m, lands again, no second jump in the air', async () => {
     const pw = await createPhysicsWorld(miniScene());
     const c = new Character(pw, { x: 0, y: 0, z: -20 });
     runChar(pw, c, idle, 0.5);
@@ -335,9 +337,33 @@ describe('character', () => {
       pw.step();
       top = Math.max(top, c.position().y);
     }
-    expect(top).toBeGreaterThan(0.6);
-    expect(top).toBeLessThan(0.95);
+    expect(top).toBeGreaterThan(0.9);
+    expect(top).toBeLessThan(1.2);
     expect(c.position().y).toBeCloseTo(0, 1); // landed after 1.5 s
+  });
+
+  test('jumping while running at a 1.4 m block climbs onto it; at a 4 m wall it is a plain jump', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const c = new Character(pw, { x: 198, y: 0, z: 192 });
+    runChar(pw, c, idle, 0.3);
+    const run = { forward: 1, right: 0, run: true, yaw: 0 };
+    // run at the block (face at z = 196), jump about 1 m before it, keep running
+    while (c.position().z < 194.8) runChar(pw, c, run, 1 / 60);
+    c.applyInput({ ...run, jump: true });
+    pw.step();
+    runChar(pw, c, run, 0.8);
+    expect(c.position().y).toBeCloseTo(1.4, 1);
+    expect(c.position().z).toBeGreaterThan(196);
+
+    const w = new Character(pw, { x: 8, y: 0, z: -20 });
+    runChar(pw, w, idle, 0.3);
+    const towards = { forward: 1, right: 0, run: true, yaw: Math.PI / 2 };
+    while (w.position().x < 9.2) runChar(pw, w, towards, 1 / 60);
+    w.applyInput({ ...towards, jump: true });
+    pw.step();
+    let top = 0;
+    for (let i = 0; i < 60; i++) { w.applyInput(towards); pw.step(); top = Math.max(top, w.position().y); }
+    expect(top).toBeLessThan(1.2);
   });
 
   test('setEnabled(false) removes it from collision queries', async () => {
@@ -526,7 +552,7 @@ test('same inputs give bit-identical results in two worlds', async () => {
 });
 
 test('tuning holds the brief values', () => {
-  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20, jumpSpeed: 5.5 });
+  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20, jumpSpeed: 6.5 });
   expect(TUNING.vehicle).toMatchObject({ mass: 1200, maxForwardKmh: 60, maxReverseKmh: 20 });
 });
 

@@ -23,8 +23,19 @@ const KNOCK_FRICTION = 7;
 const KNOCK_BOUNCE = 0.3, KNOCK_BOUNCE_GROUND = 0.15;
 /** The thrown ball's query groups: member of bit 0 (so cars, which ignore people, still count), never bikes or people. */
 const KNOCK_QUERY_GROUPS = 0x0001_ffe7;
+/** The thrown ball moves across this far (m) above where it is, clear of the ground under it. */
+const THROWN_LIFT = 0.04;
 /** Ground: a contact normal at least this steep upwards. */
 const GROUND_NY = 0.6;
+/** A thrown body falls under real gravity (as the client's ragdoll does), not the character's snappier one. */
+const G_THROWN = TUNING.world.gravity;
+/**
+ * Throwing a crashed rider over an obstacle: the body pivots over the handlebar, so the throw starts VAULT_LIFT (m)
+ * higher (chest height); the obstacle's top at most VAULT_MAX_RISE above that; the most upward speed (m/s).
+ */
+const VAULT_LIFT = 0.45, VAULT_MAX_RISE = 0.9, VAULT_MAX_VY = 6;
+/** Share of the forward speed a body keeps going over (the handlebar and the obstacle's edge take the rest). */
+export const VAULT_KEEP = 0.7;
 
 const T = TUNING.character;
 /** Every step is exactly one fixed world step, so client prediction and server stay in lockstep. */
@@ -89,7 +100,9 @@ export class Character {
     const vx = (f * s - r * c) * speed;
     const vz = (f * c + r * s) * speed;
     if (i.jump && this.grounded) {
-      this.vy = T.jumpSpeed;
+      // moving at something climbable: high enough to get on top of it; otherwise a plain jump
+      const sp = Math.hypot(vx, vz);
+      this.vy = Math.max(T.jumpSpeed, sp > 0.5 ? this.climbSpeed(vx / sp, vz / sp) : 0);
       this.grounded = false;
     }
     this.vy += T.gravity * DT;
@@ -117,41 +130,85 @@ export class Character {
     const { rapier: R, world } = this.pw;
     const rad = T.radius;
     const ball = new R.Ball(rad);
+    const rot = { x: 0, y: 0, z: 0, w: 1 };
+    const flags = R.QueryFilterFlags.EXCLUDE_SENSORS;
+    const cast = (from: Vec3, d: Vec3) => world.castShape(from, rot, d, ball, 0, 1, false, flags, KNOCK_QUERY_GROUPS, this.collider, this.body);
     const p = this.body.translation();
-    let cx = p.x, cy = p.y - CENTRE + rad, cz = p.z;
-    let vx = this.kvx, vy = this.vy + T.gravity * DT, vz = this.kvz;
-    let grounded = false;
-    let left = DT;
-    for (let k = 0; k < 4 && left > 1e-6; k++) {
-      const hit = world.castShape({ x: cx, y: cy, z: cz }, { x: 0, y: 0, z: 0, w: 1 }, { x: vx, y: vy, z: vz }, ball, T.skin, left, false,
-        R.QueryFilterFlags.EXCLUDE_SENSORS, KNOCK_QUERY_GROUPS, this.collider, this.body);
-      const t = hit ? Math.min(left, hit.time_of_impact) : left;
-      cx += vx * t; cy += vy * t; cz += vz * t;
-      left -= t;
+    let vx = this.kvx, vy = this.vy + G_THROWN * DT, vz = this.kvz;
+    // across, a little above the ground (so the ground it lies on is not in the way): walls, trees and cars
+    const c = { x: p.x, y: p.y - CENTRE + rad + THROWN_LIFT, z: p.z };
+    let left = 1;
+    for (let k = 0; k < 3 && left > 1e-4 && (vx !== 0 || vz !== 0); k++) {
+      const hit = cast(c, { x: vx * DT * left, y: 0, z: vz * DT * left });
+      const t = hit ? hit.time_of_impact : 1;
+      c.x += vx * DT * left * t;
+      c.z += vz * DT * left * t;
+      left *= 1 - t;
       if (!hit) break;
-      // the surface's normal towards the ball: normal1, in world space as the ball is not turned (normal2 is in the hit
-      // collider's own frame)
-      const n = hit.normal1, vn = vx * n.x + vy * n.y + vz * n.z;
-      const ground = n.y > GROUND_NY;
-      if (ground) grounded = true;
+      // the surface's normal towards the ball: normal1, in world space as the ball is not turned (normal2 is in the
+      // hit collider's own frame); only its horizontal part matters here
+      const n = hit.normal1, h = Math.hypot(n.x, n.z);
+      if (h < 1e-3) break;
+      const nx = n.x / h, nz = n.z / h, vn = vx * nx + vz * nz;
       if (vn < 0) {
-        const e = 1 + (ground ? KNOCK_BOUNCE_GROUND : KNOCK_BOUNCE);
-        vx -= e * vn * n.x; vy -= e * vn * n.y; vz -= e * vn * n.z;
+        // a slope it can go up (no bounce), else a wall (bounce)
+        const e = n.y > GROUND_NY ? 1 : 1 + KNOCK_BOUNCE;
+        vx -= e * vn * nx;
+        vz -= e * vn * nz;
       }
-      if (ground && Math.abs(vy) < 1) vy = 0; // resting on it, not hopping
     }
+    // up and down: lands (bouncing a little when fast), or slides on what it lies on
+    let grounded = false;
+    const dy = vy * DT - THROWN_LIFT;
+    const vh = cast(c, { x: 0, y: dy, z: 0 });
+    if (vh) {
+      c.y += dy * vh.time_of_impact;
+      if (dy < 0) {
+        grounded = vh.normal1.y > GROUND_NY;
+        vy = vy < -3 ? -vy * KNOCK_BOUNCE_GROUND : 0;
+      } else vy = 0; // under something
+    } else c.y += dy;
     if (grounded) {
       const sp = Math.hypot(vx, vz), k = sp > 0 ? Math.max(0, sp - KNOCK_FRICTION * DT) / sp : 0;
       vx *= k;
       vz *= k;
     }
-    this.kvx = vx; this.kvz = vz; this.vy = grounded && vy <= 0 ? 0 : vy;
-    this.grounded = grounded;
-    const feet = { x: cx, y: cy - rad, z: cz };
+    this.kvx = vx; this.kvz = vz; this.vy = vy;
+    this.grounded = grounded && vy <= 0;
+    const feet = { x: c.x, y: c.y - rad, z: c.z };
     this.body.setNextKinematicTranslation({ x: feet.x, y: feet.y + CENTRE, z: feet.z });
     this.vel = { x: (feet.x - p.x) / DT, y: (feet.y + CENTRE - p.y) / DT, z: (feet.z - p.z) / DT };
     this.pushX = this.pushZ = 0;
     this.downTicks--;
+  }
+
+  /**
+   * Take-off speed (m/s) to get on top of what is ahead in direction (dx, dz) (unit), or 0 if nothing there is
+   * climbable: an obstacle within climbReach whose top lies between a step and climbMax above the feet.
+   */
+  private climbSpeed(dx: number, dz: number): number {
+    const { rapier: R, world } = this.pw;
+    const p = this.body.translation(), feet = p.y - CENTRE;
+    const flags = R.QueryFilterFlags.EXCLUDE_SENSORS;
+    const hit = world.castShape({ x: p.x, y: feet + 0.6, z: p.z }, { x: 0, y: 0, z: 0, w: 1 }, { x: dx, y: 0, z: dz }, new R.Ball(0.2), 0,
+      T.radius + T.climbReach, false, flags, undefined, this.collider, this.body);
+    if (!hit) return 0;
+    // its top, a little beyond the face
+    const ahead = hit.time_of_impact + 0.2 + 0.25, from = feet + T.climbMax + 0.3;
+    const top = world.castRay(new R.Ray({ x: p.x + dx * ahead, y: from, z: p.z + dz * ahead }, { x: 0, y: -1, z: 0 }), T.climbMax + 0.3, true,
+      flags, undefined, this.collider, this.body);
+    if (!top) return 0;
+    const h = from - top.timeOfImpact - feet;
+    if (h < T.stepMaxHeight + 0.15 || h > T.climbMax) return 0;
+    return Math.sqrt(2 * -T.gravity * (h + T.climbClear));
+  }
+
+  /** A thrown body's start moved and its throw adjusted to go over what is ahead, if low enough: see vaultThrow. */
+  throwOver(dx: number, dz: number, speed: number, minUp: number): { speed: number; up: number } {
+    const p = this.body.translation();
+    const t = vaultThrow(this.pw, { x: p.x, y: p.y - CENTRE, z: p.z }, dx, dz, speed, minUp, this.collider, this.body);
+    if (t.lift > 0) this.teleport({ x: p.x, y: p.y - CENTRE + t.lift, z: p.z });
+    return t;
   }
 
   /** Knocked down for `ticks` steps: input is ignored, the person is thrown with velocity v as a ball (see KNOCK_BOUNCE). */
@@ -230,4 +287,32 @@ export class Character {
     this.pw.world.removeCharacterController(this.kcc);
     this.pw.world.removeRigidBody(this.body);
   }
+}
+
+/**
+ * A body thrown from `feet` (the bottom of its ball) along (dx, dz) (unit) at `speed`, about to hit something low
+ * enough to go over (a car, a post, a bench): it pivots over the handlebar, so it starts `lift` (VAULT_LIFT) higher
+ * and flies at VAULT_KEEP × speed, rising fast enough to clear the obstacle's top as it reaches it. Nothing ahead
+ * within 3 m, or too high to go over (a wall): (speed, minUp), lift 0. `skip`: the thrown person's own collider/body.
+ */
+export function vaultThrow(
+  pw: PhysicsWorld, feet: Vec3, dx: number, dz: number, speed: number, minUp: number, skipCollider?: RAPIER.Collider, skipBody?: RAPIER.RigidBody,
+): { speed: number; up: number; lift: number } {
+  const { rapier: R, world } = pw;
+  const rad = T.radius;
+  const c = { x: feet.x, y: feet.y + rad + VAULT_LIFT, z: feet.z };
+  const flags = R.QueryFilterFlags.EXCLUDE_SENSORS;
+  const plain = { speed, up: minUp, lift: 0 };
+  if (speed < 0.5) return plain;
+  const hit = world.castShape(c, { x: 0, y: 0, z: 0, w: 1 }, { x: dx, y: 0, z: dz }, new R.Ball(rad), 0, 3, false, flags, KNOCK_QUERY_GROUPS,
+    skipCollider, skipBody);
+  if (!hit) return plain;
+  const d = hit.time_of_impact, ahead = d + rad + 0.2, from = c.y + VAULT_MAX_RISE + 1;
+  const top = world.castRay(new R.Ray({ x: c.x + dx * ahead, y: from, z: c.z + dz * ahead }, { x: 0, y: -1, z: 0 }), VAULT_MAX_RISE + 3, true,
+    flags, KNOCK_QUERY_GROUPS, skipCollider, skipBody);
+  if (!top) return plain;
+  const need = from - top.timeOfImpact + rad + 0.05 - c.y; // the ball's centre above its top
+  if (need > VAULT_MAX_RISE) return plain;
+  const v = speed * VAULT_KEEP, t = (d + 0.3) / v;
+  return { speed: v, up: Math.max(minUp, Math.min(VAULT_MAX_VY, (need - 0.5 * G_THROWN * t * t) / t)), lift: VAULT_LIFT };
 }

@@ -52,7 +52,7 @@ export class RagdollWorld {
   /** Cars copied (by source collider handle) as kinematic bodies. */
   private readonly cars = new Map<number, { body: RAPIER.RigidBody; used: number }>();
 
-  constructor(private readonly src: PhysicsWorld) {
+  constructor(readonly src: PhysicsWorld) {
     const R = (this.R = src.rapier);
     this.world = new R.World({ x: 0, y: TUNING.world.gravity, z: 0 });
     this.world.timestep = STEP;

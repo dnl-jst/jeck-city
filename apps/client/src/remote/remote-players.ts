@@ -1,6 +1,6 @@
 import type { Camera, Object3D, Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
@@ -86,7 +86,7 @@ export type RemoteOptions = {
 /** A pooled figure and the character template it shows (undefined: not set yet). */
 type Figure = { fig: PlayerFigure; model: Object3D | null | undefined };
 type Walker = Figure & { label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number };
-type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number };
+type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number; x: number; y: number; z: number };
 type Driven = { view: CarView; label: Label | null; seen: boolean };
 
 /**
@@ -130,7 +130,7 @@ export class RemotePlayers {
         const car = fastestCarNear(sample.cars, s.x, s.z);
         const v = car
           ? { x: car.vx * 0.9 + was.vx * 0.5, y: Math.max(0, car.vy * 0.9) + KNOCK_UP, z: car.vz * 0.9 + was.vz * 0.5 }
-          : { x: was.vx, y: TUNING.bike.crashUp, z: was.vz };
+          : this.crashThrow(was);
         was.fig.ragdoll(this.opts.ragdolls, v, spin(v, car ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
         was.label?.dispose();
         this.freeRig(was);
@@ -193,12 +193,13 @@ export class RemotePlayers {
         r.rig = this.takeRig(type);
       }
       if (!r) {
-        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true, vx: 0, vz: 0 };
+        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true, vx: 0, vz: 0, x: s.x, y: s.y, z: s.z };
         this.riders.set(s.slot, r);
       }
       r.seen = true;
       this.dress(r, variants.get(s.slot) ?? 0);
       if (s.pedalling && s.speed > 0) r.crank += s.speed * CRANK_PER_M * dt;
+      r.x = s.x; r.y = s.y; r.z = s.z;
       r.vx = Math.sin(s.heading) * s.speed;
       r.vz = Math.cos(s.heading) * s.speed;
       const st: BikeState = { x: s.x, y: s.y, z: s.z, heading: s.heading, speed: s.speed, steer: s.steer, vy: 0, grounded: !s.airborne, crank: r.crank };
@@ -253,6 +254,15 @@ export class RemotePlayers {
       this.driven.delete(id);
     }
     this.parked.setHidden(this.hiding);
+  }
+
+  /** A rider crashing into something: thrown on with the bike's speed, over it if it is low enough (as the sim). */
+  private crashThrow(r: Rider): Vec3 {
+    const B = TUNING.bike, sp = Math.hypot(r.vx, r.vz), rd = this.opts.ragdolls;
+    if (!rd || sp < 0.5) return { x: r.vx, y: B.crashUp, z: r.vz };
+    const dx = r.vx / sp, dz = r.vz / sp;
+    const t = vaultThrow(rd.src, { x: r.x, y: r.y + B.riderHips - TUNING.character.radius, z: r.z }, dx, dz, sp, B.crashUp);
+    return { x: dx * t.speed, y: t.up, z: dz * t.speed };
   }
 
   /** A figure from the pool (or a new one), visible in the scene. */

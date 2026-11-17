@@ -89,8 +89,6 @@ const PROXIMITY_EVERY = 30;
 const RESET_CHECK_EVERY = 60;
 /** Feet above the surface when placed (spawn, getting out). */
 const DROP = 0.02;
-/** A rider's hips above the bike's ground (m): a crash throws them from there. */
-const RIDER_HIPS = 1.0;
 /** A spawn spot closer than this (m) to another player's feet is taken. */
 const SPAWN_PERSON_GAP = 1;
 const KMH = 1 / 3.6;
@@ -465,7 +463,7 @@ export class WorldSim {
       if (r.crashed) {
         // thrown on over the handlebar with the speed the bike hit the obstacle with
         const h = pl.ridden!.state().heading, v = r.crashSpeed;
-        this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v });
+        this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v }, true);
       }
     } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
@@ -612,16 +610,21 @@ export class WorldSim {
    * Crashed into something or hit by a car: the rider falls next to the bike, which stays where it is, and is
    * `thrown` (m/s; slides out while lying, as a knocked-down walker).
    */
-  private crash(id: PlayerId, pl: Player, ev: SimEvent[], thrown: { x: number; y: number; z: number }): void {
+  private crash(id: PlayerId, pl: Player, ev: SimEvent[], thrown: { x: number; y: number; z: number }, over = false): void {
     const r = pl.ridden!, s = r.state();
     r.restore({ ...s, speed: 0 });
     // nowhere free to the side or behind (squeezed against a wall): fall where the bike is, never through the wall
     const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
     this.leaveBike(id, pl, spot, s, true, ev);
     pl.fallTicks = FALL_TICKS;
-    // thrown from the saddle (the hips at about RIDER_HIPS above the bike's ground), not from beside the bike
-    pl.char.teleport({ x: s.x, y: s.y + RIDER_HIPS - TUNING.character.radius, z: s.z });
-    pl.char.knock(thrown, FALL_TICKS);
+    // thrown from the saddle (the hips at about riderHips above the bike's ground), not from beside the bike
+    pl.char.teleport({ x: s.x, y: s.y + TUNING.bike.riderHips - TUNING.character.radius, z: s.z });
+    // head-on into something low enough (a car, a post): over the handlebar onto or over it
+    const sp = Math.hypot(thrown.x, thrown.z);
+    if (over && sp > 0) {
+      const dx = thrown.x / sp, dz = thrown.z / sp, t = pl.char.throwOver(dx, dz, sp, thrown.y);
+      pl.char.knock({ x: dx * t.speed, y: t.up, z: dz * t.speed }, FALL_TICKS);
+    } else pl.char.knock(thrown, FALL_TICKS);
   }
 
   private leaveBike(id: PlayerId, pl: Player, spot: XZ, s: BikeState, crash: boolean, ev: SimEvent[]): void {
