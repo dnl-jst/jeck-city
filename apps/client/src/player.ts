@@ -13,11 +13,41 @@ const GET_UP = 0.5;
 /** Knocked down by a car: seconds to fall over backwards and to get up again (setDown). */
 export const DOWN_IN_S = 0.25, DOWN_OUT_S = 0.3;
 
-/** Ragdoll: seconds to get up from wherever it lies; after this long it is pulled towards the sim's position. */
-const RISE_S = 0.7;
-const PULL_AFTER_S = 0.5;
+/** Ragdoll: pulled towards the sim's position after this long, once its pelvis is slower than PULL_SLOW (m/s). */
+const PULL_AFTER_S = 0.6, PULL_SLOW = 1.5;
 /** Pull towards the sim's position (1/s², 1/s) once the ragdoll strays further than PULL_FREE_M. */
 const PULL_K = 10, PULL_C = 4, PULL_FREE_M = 0.25;
+
+/**
+ * A get-up keyframe in the frame of the spot the figure will stand on (feet at the origin, facing +z): hip joint
+ * height and forward offset (m, for 0.92 m hips; scaled to the model), pelvis pitch (+ forward), torso and head pitch,
+ * hip flexion and knee bend per leg, arm raise (forward) per arm, arms out to the side, elbow bend.
+ */
+type Key = { t: number; hy: number; hz: number; p: number; torso: number; head: number; hip: [number, number]; knee: [number, number]; arm: [number, number]; out: number; elbow: number };
+/** Squatting on both feet, arms forward for balance; then standing. */
+const SQUAT: Omit<Key, 't'> = { hy: 0.56, hz: -0.28, p: 0.6, torso: 0.15, head: -0.35, hip: [1.95, 1.8], knee: [1.75, 1.6], arm: [0.7, 0.5], out: 0.12, elbow: 0.6 };
+const STAND: Omit<Key, 't'> = { hy: 0.92, hz: 0, p: 0, torso: 0, head: 0, hip: [0, 0], knee: [0, 0], arm: [0, 0], out: 0.05, elbow: 0.15 };
+/** Face down (head towards +z): hands under the shoulders, push up, onto hands and knees, squat, stand. */
+const GET_UP_PRONE: Key[] = [
+  { t: 0, hy: 0.17, hz: 0.45, p: 1.25, torso: 0, head: -0.5, hip: [-0.2, -0.2], knee: [0.15, 0.1], arm: [0.25, 0.25], out: 0.5, elbow: 1.6 },
+  { t: 0.35, hy: 0.38, hz: 0.3, p: 1.25, torso: 0.1, head: -0.55, hip: [0.7, 0.5], knee: [1.1, 0.9], arm: [1.25, 1.25], out: 0.2, elbow: 0.25 },
+  { t: 0.7, hy: 0.5, hz: 0, p: 1.4, torso: 0.05, head: -0.6, hip: [1.5, 1.45], knee: [1.55, 1.55], arm: [1.45, 1.45], out: 0.1, elbow: 0.05 },
+  { t: 1.15, ...SQUAT },
+  { t: 1.65, ...STAND },
+];
+/** Face up (head towards −z): sit up leaning on the hands, knees drawn up, rock forward into a squat, stand. */
+const GET_UP_SUPINE: Key[] = [
+  { t: 0, hy: 0.13, hz: -0.55, p: -1.5, torso: 0, head: 0.35, hip: [0.1, 0.15], knee: [0.2, 0.3], arm: [0.2, 0.2], out: 0.3, elbow: 0.3 },
+  { t: 0.5, hy: 0.14, hz: -0.5, p: -0.35, torso: 0.4, head: 0.1, hip: [2.1, 1.7], knee: [2.2, 1.6], arm: [-0.55, -0.45], out: 0.25, elbow: 0.1 },
+  { t: 1.1, ...SQUAT },
+  { t: 1.6, ...STAND },
+];
+/** Seconds to blend from the ragdoll's last pose into the first get-up keyframe. */
+const RISE_BLEND = 0.3;
+/** Least height (m) of every joint above the ground while getting up. */
+const RISE_CLEAR = 0.03;
+/** The longest get-up (blend and keyframes): the ragdoll lies until this long before the sim lets the player go. */
+export const RISE_S = RISE_BLEND + Math.max(GET_UP_PRONE.at(-1)!.t, GET_UP_SUPINE.at(-1)!.t);
 /**
  * Joint motors (acceleration-based stiffness, damping) towards the standing rest pose: a little muscle tone, so the
  * body neither folds like cloth nor stays stiff. Knees are hinges with limits.
@@ -241,7 +271,7 @@ export class PlayerFigure {
   /** Ragdoll (ragdoll()): its parts (body per skeleton group), seconds since it started, when it gets up. */
   private rag: { world: RagdollWorld; parts: { node: Object3D; body: RAPIER.RigidBody }[]; t: number; upAt: number } | null = null;
   /** Getting up from the ragdoll: from its last pose to standing at the sim's position, over RISE_S. */
-  private rise: { t: number; pos: Vector3; q: Quaternion; locals: Quaternion[]; heading: number } | null = null;
+  private rise: { t: number; pos: Vector3; q: Quaternion; locals: Quaternion[]; heading: number; keys: Key[]; from: Vector3 } | null = null;
 
   constructor(private readonly scene: Scene) {
     for (let i = 0; i < 2; i++) {
@@ -773,7 +803,8 @@ export class PlayerFigure {
     const c = pelvis.worldCom();
     rag.world.cover(c.x, c.z);
     // lying: drawn towards where the sim has the player (it gets up there), never yanked
-    if (rag.t > PULL_AFTER_S) {
+    const lv = pelvis.linvel();
+    if (rag.t > PULL_AFTER_S && Math.hypot(lv.x, lv.y, lv.z) < PULL_SLOW) {
       const dx = x - c.x, dz = z - c.z, d = Math.hypot(dx, dz);
       if (d > PULL_FREE_M) {
         const v = pelvis.linvel(), f = (d - PULL_FREE_M) / d;
@@ -786,15 +817,22 @@ export class PlayerFigure {
     if (rag.t >= rag.upAt || y - c.y > 20) this.startRise();
   }
 
-  /** From the ragdoll's last pose: the bodies go, the figure turns upright the shortest way (that sets its facing). */
+  /**
+   * From the ragdoll's last pose: the bodies go and the figure gets up the way a person does from how it lies — face
+   * down over hands and knees, face up by sitting up — facing along its body (head first face down, feet first face up).
+   */
   private startRise(): void {
     const q = this.body.quaternion.clone();
-    const up = new Vector3(0, 1, 0).applyQuaternion(q);
-    const upright = new Quaternion().setFromUnitVectors(up, new Vector3(0, 1, 0)).multiply(q);
-    const f = new Vector3(0, 0, 1).applyQuaternion(upright);
-    const heading = Math.atan2(f.x, f.z);
+    const prone = new Vector3(0, 0, 1).applyQuaternion(q).y < 0; // the chest faces the ground
+    const head = new Vector3(0, 1, 0).applyQuaternion(q);
+    const heading = prone ? Math.atan2(head.x, head.z) : Math.atan2(-head.x, -head.z);
+    const keys = prone ? GET_UP_PRONE : GET_UP_SUPINE;
+    // where the first keyframe's hips are is where the ragdoll's hips lie: that places the standing spot
+    const hips = this.body.position.clone().add(new Vector3(0, this.p.hip.y, 0).applyQuaternion(q));
+    const sc = this.p.hip.y / 0.92;
+    const from = hips.sub(new Vector3(0, 0, keys[0]!.hz * sc).applyAxisAngle(new Vector3(0, 1, 0), heading));
     const locals = this.riseNodes().map((n) => n.quaternion.clone());
-    this.rise = { t: 0, pos: this.body.position.clone(), q, locals, heading };
+    this.rise = { t: 0, pos: this.body.position.clone(), q, locals, heading, keys, from };
     this.endRagdoll();
   }
 
@@ -802,19 +840,64 @@ export class PlayerFigure {
     return [this.torso, this.headNode, ...this.legs, ...this.shins, ...this.arms, ...this.forearms, ...this.feet];
   }
 
+  /** Poses the skeleton as keyframe k, standing spot `at` (feet), facing `heading` (group at the origin). */
+  private poseKey(k: Omit<Key, 't'>, at: Vector3, heading: number): void {
+    const sc = this.p.hip.y / 0.92;
+    const yaw = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), heading);
+    this.body.quaternion.copy(yaw).multiply(new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), k.p));
+    const hips = new Vector3(0, k.hy * sc, k.hz * sc).applyQuaternion(yaw).add(at);
+    this.body.position.copy(hips).sub(new Vector3(0, this.p.hip.y, 0).applyQuaternion(this.body.quaternion));
+    this.torso.rotation.set(k.torso, 0, 0);
+    this.headNode.rotation.set(k.head, 0, 0);
+    for (let i = 0; i < 2; i++) {
+      const s = i === 0 ? 1 : -1;
+      this.legs[i]!.rotation.set(-k.hip[i]!, 0, 0);
+      this.shins[i]!.rotation.set(k.knee[i]!, 0, 0);
+      // the feet stay flat on the ground (from the shin's forward tilt), within what an ankle bends
+      const shinTilt = k.hip[i]! - k.p - k.knee[i]!;
+      this.feet[i]!.rotation.set(Math.max(-0.7, Math.min(0.7, shinTilt)), 0, 0);
+      this.arms[i]!.rotation.set(-k.arm[i]!, 0, s * k.out);
+      this.forearms[i]!.rotation.set(-k.elbow, 0, 0);
+    }
+  }
+
   private tickRise(x: number, y: number, z: number, dt: number): void {
     const r = this.rise!;
     r.t += dt;
-    const k = smooth(Math.min(1, r.t / RISE_S));
-    this.body.position.lerpVectors(r.pos, new Vector3(x, y, z), k);
-    this.body.quaternion.slerpQuaternions(r.q, new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), r.heading), k);
-    this.riseNodes().forEach((n, i) => n.quaternion.slerpQuaternions(r.locals[i]!, new Quaternion(), k));
-    if (r.t < RISE_S) return;
+    const keys = r.keys, end = RISE_BLEND + keys.at(-1)!.t;
+    // the standing spot moves from below the lying body to where the sim has the player
+    const at = r.from.clone().lerp(new Vector3(x, 0, z), smooth(Math.min(1, r.t / end))).setY(y);
+    const kt = Math.max(0, r.t - RISE_BLEND);
+    let j = 0;
+    while (j < keys.length - 2 && keys[j + 1]!.t <= kt) j++;
+    const a = keys[j]!, b = keys[j + 1]!;
+    const u = smooth(Math.min(1, Math.max(0, (kt - a.t) / (b.t - a.t))));
+    const m = (x0: number, x1: number) => mix(x0, x1, u);
+    this.poseKey({
+      hy: m(a.hy, b.hy), hz: m(a.hz, b.hz), p: m(a.p, b.p), torso: m(a.torso, b.torso), head: m(a.head, b.head),
+      hip: [m(a.hip[0], b.hip[0]), m(a.hip[1], b.hip[1])], knee: [m(a.knee[0], b.knee[0]), m(a.knee[1], b.knee[1])],
+      arm: [m(a.arm[0], b.arm[0]), m(a.arm[1], b.arm[1])], out: m(a.out, b.out), elbow: m(a.elbow, b.elbow),
+    }, at, r.heading);
+    if (r.t < RISE_BLEND) {
+      // out of the ragdoll's pose into the first keyframe
+      const w = smooth(r.t / RISE_BLEND);
+      this.body.position.lerpVectors(r.pos, this.body.position.clone(), w);
+      this.body.quaternion.slerpQuaternions(r.q, this.body.quaternion.clone(), w);
+      this.riseNodes().forEach((n, i) => n.quaternion.slerpQuaternions(r.locals[i]!, n.quaternion.clone(), w));
+    }
+    // no joint below the ground (the blend and the keyframes are not exact for every build): lift the whole body
+    this.group.updateMatrixWorld(true);
+    let low = Infinity;
+    const p = new Vector3();
+    for (const n of [this.headNode, ...this.riseNodes(), ...this.hands]) low = Math.min(low, n.getWorldPosition(p).y);
+    if (low < y + RISE_CLEAR) this.body.position.y += y + RISE_CLEAR - low;
+    if (r.t < end) return;
     // standing: back to the normal frame (group at the feet, turned to the heading)
     this.rise = null;
     this.heading = r.heading;
     this.body.position.set(0, 0, 0);
     this.body.quaternion.identity();
+    this.riseNodes().forEach((n) => n.quaternion.identity());
     this.group.position.set(x, y, z);
     this.group.rotation.set(0, r.heading, 0, 'YXZ');
   }

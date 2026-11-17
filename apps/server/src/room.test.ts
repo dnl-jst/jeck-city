@@ -352,7 +352,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await until(() => wb.events.some((e) => e.t === 'knock'), 8000);
     pa.input = { ...NEUTRAL_INPUT(0), brake: true }; // stop before running him over again
     expect(wb.events).toContainEqual({ t: 'knock', slot: slotOf(b) });
-    await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2);
+    await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2, (KNOCKDOWN_S + 3) * 1000);
     const down = wb.modeAt.findIndex((m) => m.mode === 2);
     const downS = (wb.modeAt[down + 1]!.tick - wb.modeAt[down]!.tick) / 60;
     expect(Math.abs(downS - KNOCKDOWN_S)).toBeLessThanOrEqual(0.1 + 1 / 20); // ± 0.1 s, measured at 20 Hz resolution

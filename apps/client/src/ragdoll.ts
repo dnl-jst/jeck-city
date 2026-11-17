@@ -7,6 +7,8 @@ type Vec3 = { x: number; y: number; z: number };
 /** Ragdoll spin (rad/s per m/s of throw, at most SPIN_MAX): over the handlebar head first; hit by a car, legs swept away. */
 export const CRASH_SPIN = 0.5, KNOCK_SPIN = -0.3;
 const SPIN_MAX = 6;
+/** Thrown over the handlebar: the body keeps the bike's velocity and gets this much upwards (m/s). */
+export const CRASH_RAG_UP = 2.2;
 /** Spin for a throw at v: `perMs` × horizontal speed, capped either way. */
 export function ragSpin(v: Vec3, perMs: number): number {
   return Math.max(-SPIN_MAX, Math.min(SPIN_MAX, perMs * Math.hypot(v.x, v.z)));
@@ -20,18 +22,23 @@ const CELL = 12;
 const MARGIN = 1;
 /** Copied surroundings unused this long (s) are dropped again. */
 const KEEP_S = 20;
-/** Membership bit 5 (ragdoll parts); filter: the city (bit 0) and street furniture (bit 1), never each other. */
-const PART_GROUPS = 0x0020_0003;
-/** Membership bits of the source world's colliders that are not copied: people (3), bikes (4). */
+/** Membership bit 5 (ragdoll parts); filter: the city (bit 0), street furniture (bit 1) and cars (bit 2), never each other. */
+const PART_GROUPS = 0x0020_0007;
+/** Copied cars: bit 2, colliding with ragdoll parts only. */
+const CAR_COPY_GROUPS = 0x0004_0020;
+/** Membership bits of the source world's colliders: cars (2; followed as moving bodies), people (3), bikes (4). */
+const CAR_MEMBER = 0x0004;
 const SKIP_MEMBERS = 0x0008 | 0x0010;
-/** A dynamic body (car, fallen lamp) moving faster than this (m/s) is not copied: it would be a stale obstacle. */
+/** A dynamic body other than a car (a fallen lamp) moving faster than this (m/s) is not copied: it would be a stale obstacle. */
 const MOVING = 0.5;
 
 /**
  * A Rapier world of its own for ragdolls, so the tumbling bodies never touch the predicted (server-replayed) sim world.
  * It holds only what lies around a ragdoll: cover(x, z) copies the static city of the cells there out of the sim's
- * world (trimesh tiles and the terrain heightfield cropped into one mesh per cell; street furniture and resting cars
- * as their own shapes), and drops cells nobody used for KEEP_S. Stepped at a fixed 60 Hz from frame time.
+ * world (trimesh tiles and the terrain heightfield cropped into one mesh per cell; street furniture as its own shapes),
+ * and drops cells nobody used for KEEP_S. Cars there (parked, driven, streamed) become kinematic bodies that follow
+ * their source every step, so a car really strikes a ragdoll and a thrown body lands on a bonnet. Stepped at a fixed
+ * 60 Hz from frame time.
  */
 export class RagdollWorld {
   readonly R: PhysicsWorld['rapier'];
@@ -44,6 +51,8 @@ export class RagdollWorld {
   private readonly cells = new Map<string, { collider: RAPIER.Collider | null; used: number }>();
   /** Non-mesh colliders copied (by source collider handle), with their source to follow it if it moves. */
   private readonly shapes = new Map<number, { copy: RAPIER.Collider; used: number }>();
+  /** Cars copied (by source collider handle) as kinematic bodies. */
+  private readonly cars = new Map<number, { body: RAPIER.RigidBody; used: number }>();
 
   constructor(private readonly src: PhysicsWorld) {
     const R = (this.R = src.rapier);
@@ -63,14 +72,34 @@ export class RagdollWorld {
     this.time += dt;
     if (this.users > 0) {
       this.acc += Math.min(dt, 0.25);
-      let n = 0;
-      while (this.acc >= STEP && n < MAX_STEPS) {
-        this.world.step();
-        this.acc -= STEP;
-        n++;
+      const n = Math.min(MAX_STEPS, Math.floor(this.acc / STEP));
+      this.acc = n === MAX_STEPS ? 0 : this.acc - n * STEP;
+      // the cars move from where they are to their source's pose over this frame's steps
+      const moves: { body: RAPIER.RigidBody; t0: Vector3; t1: Vector3; q0: Quaternion; q1: Quaternion }[] = [];
+      for (const [h, car] of this.cars) {
+        const c = this.src.world.getCollider(h);
+        if (!c) {
+          this.world.removeRigidBody(car.body);
+          this.cars.delete(h);
+          continue;
+        }
+        const a = car.body.translation(), b = c.translation(), qa = car.body.rotation(), qb = c.rotation();
+        moves.push({ body: car.body, t0: new Vector3(a.x, a.y, a.z), t1: new Vector3(b.x, b.y, b.z), q0: new Quaternion(qa.x, qa.y, qa.z, qa.w), q1: new Quaternion(qb.x, qb.y, qb.z, qb.w) });
       }
-      if (n === MAX_STEPS) this.acc = 0;
-    } else this.acc = 0;
+      const t = new Vector3(), q = new Quaternion();
+      for (let k = 1; k <= n; k++) {
+        for (const m of moves) {
+          m.body.setNextKinematicTranslation(t.lerpVectors(m.t0, m.t1, k / n));
+          m.body.setNextKinematicRotation(q.slerpQuaternions(m.q0, m.q1, k / n));
+        }
+        this.world.step();
+      }
+    } else {
+      // idle: the copied cars are dropped, so none jumps from a stale pose into the next ragdoll
+      this.acc = 0;
+      for (const car of this.cars.values()) this.world.removeRigidBody(car.body);
+      this.cars.clear();
+    }
     this.evict();
   }
 
@@ -79,13 +108,13 @@ export class RagdollWorld {
     const R = this.R;
     return this.world.createRigidBody(
       R.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z).setRotation({ x: rot.x, y: rot.y, z: rot.z, w: rot.w })
-        .setLinvel(vel.x, vel.y, vel.z).setLinearDamping(0.05).setAngularDamping(0.6).setCcdEnabled(true),
+        .setLinvel(vel.x, vel.y, vel.z).setLinearDamping(0.05).setAngularDamping(1.0).setCcdEnabled(true),
     );
   }
 
   /** A part's collider: only collides with the surroundings, never with other parts. */
   addCollider(desc: RAPIER.ColliderDesc, body: RAPIER.RigidBody): RAPIER.Collider {
-    return this.world.createCollider(desc.setCollisionGroups(PART_GROUPS).setFriction(0.8).setRestitution(0.05).setDensity(985), body);
+    return this.world.createCollider(desc.setCollisionGroups(PART_GROUPS).setFriction(1.0).setRestitution(0.05).setDensity(985), body);
   }
 
   /** Counts a ragdoll in (true) or out. */
@@ -103,6 +132,10 @@ export class RagdollWorld {
       // (the city keeps Rapier's default groups: member of every bit)
       const member = c.collisionGroups() >>> 16;
       if (c.isSensor() || (member !== 0xffff && member & SKIP_MEMBERS)) return true;
+      if (member !== 0xffff && member & CAR_MEMBER) {
+        this.copyCar(c);
+        return true;
+      }
       const b = c.parent();
       if (b && b.isKinematic()) return true;
       const type = c.shapeType();
@@ -121,7 +154,20 @@ export class RagdollWorld {
     this.cells.set(key, { collider, used: this.time });
   }
 
-  /** A copy of a non-mesh collider (furniture, a resting car): made once, then kept where its source is. */
+  /** A car's chassis as a kinematic body (made once at the source's pose; step() moves it along). */
+  private copyCar(c: RAPIER.Collider): void {
+    let car = this.cars.get(c.handle);
+    if (!car) {
+      const R = this.R, t = c.translation();
+      const body = this.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(t.x, t.y, t.z).setRotation(c.rotation()));
+      this.world.createCollider(new R.ColliderDesc(c.shape).setFriction(0.6).setCollisionGroups(CAR_COPY_GROUPS), body);
+      car = { body, used: this.time };
+      this.cars.set(c.handle, car);
+    }
+    car.used = this.time;
+  }
+
+  /** A copy of a non-mesh collider (furniture): made once, then kept where its source is. */
   private copyShape(c: RAPIER.Collider): void {
     const b = c.parent();
     const moving = b?.isDynamic() && Math.hypot(b.linvel().x, b.linvel().y, b.linvel().z) > MOVING;
@@ -151,6 +197,11 @@ export class RagdollWorld {
       if (this.time - s.used < KEEP_S) continue;
       this.world.removeCollider(s.copy, false);
       this.shapes.delete(h);
+    }
+    for (const [h, car] of this.cars) {
+      if (this.time - car.used < KEEP_S) continue;
+      this.world.removeRigidBody(car.body);
+      this.cars.delete(h);
     }
   }
 

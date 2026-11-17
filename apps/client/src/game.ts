@@ -19,7 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
-import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
+import { CRASH_RAG_UP, CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -352,6 +352,8 @@ export class Game {
   private handle(events: SimEvent[]): void {
     const { hud, audio } = this.ctx;
     const me = this.session.me;
+    // a car knocked the own player off the bike: the dismount comes with a knock in the same batch
+    const hitByCar = events.some((e) => e.t === 'knock' && e.id === me);
     for (const e of events) {
       if (e.t === 'lamp') this.fallen.push(e.i);
       else if (e.t === 'bell') { if (e.id !== me) audio?.bellAt(e.x, e.z); }
@@ -363,7 +365,7 @@ export class Game {
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
       else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
-      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash);
+      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash, hitByCar);
       else if (e.t === 'dismountDenied' && e.id === me) hud.flash('Hier kannst du nicht absteigen');
       else if (e.t === 'ignition' && e.car === this.carId) {
         if (e.e === 'doorClose') audio?.doorClosed();
@@ -434,8 +436,10 @@ export class Game {
     this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
-  /** Off the bike (heading: the bike's): stepped off, or crashed and fell. */
-  private leftBike(heading: number, crash: boolean): void {
+  /** Off the bike (heading: the bike's): stepped off, or crashed (into something, or hit by a car) and fell. */
+  private leftBike(heading: number, crash: boolean, hitByCar = false): void {
+    // the bike's last velocity before it stopped: the rider's body keeps it
+    const b = this.currBike, bv = b ? { x: Math.sin(b.heading) * b.speed, z: Math.cos(b.heading) * b.speed } : { x: 0, z: 0 };
     this.currBike = this.prevBike = null;
     if (this.rig) {
       this.rig.detachLights();
@@ -451,9 +455,10 @@ export class Game {
     this.ctx.hud.setHint('');
     this.ctx.audio?.dismountBike();
     if (crash) {
-      // thrown on as the sim throws the player (WorldSim.crash): the ragdoll starts from the riding pose
-      const v = this.knockVelocity();
-      this.figure.ragdoll(this.ragdolls, v, ragSpin(v, CRASH_SPIN), TUNING.bike.getUpSeconds);
+      // from the riding pose: flies on over the handlebar with the bike's speed, or with the car's push and some of its own
+      const k = this.knockVelocity();
+      const v = hitByCar ? { x: k.x + bv.x * 0.5, y: k.y, z: k.z + bv.z * 0.5 } : { x: bv.x, y: CRASH_RAG_UP, z: bv.z };
+      this.figure.ragdoll(this.ragdolls, v, ragSpin(v, hitByCar ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
       this.ctx.audio?.crashBike();
     }
   }

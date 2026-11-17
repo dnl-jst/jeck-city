@@ -6,7 +6,7 @@ import {
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
-import { CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../ragdoll';
+import { CRASH_RAG_UP, CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../ragdoll';
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
 /** Figure height (m) the label floats above. */
@@ -125,10 +125,13 @@ export class RemotePlayers {
       let w = this.walkers.get(s.slot);
       const was = this.riders.get(s.slot);
       if (!w && was && !riding.has(s.slot) && s.state === 3 && this.opts.ragdolls) {
-        // crashed off the bike: the rider's own figure goes limp from the riding pose, thrown on as the sim throws it
-        const B = TUNING.bike;
-        const v = { x: was.vx * B.crashThrow, y: B.crashUp, z: was.vz * B.crashThrow };
-        was.fig.ragdoll(this.opts.ragdolls, v, spin(v, CRASH_SPIN), B.getUpSeconds);
+        // crashed off the bike: the rider's own figure goes limp from the riding pose and flies on with the bike's
+        // speed, or (a fast car right there) with the car's push and some of its own
+        const car = fastestCarNear(sample.cars, s.x, s.z);
+        const v = car
+          ? { x: car.vx * 0.9 + was.vx * 0.5, y: Math.max(0, car.vy * 0.9) + KNOCK_UP, z: car.vz * 0.9 + was.vz * 0.5 }
+          : { x: was.vx, y: CRASH_RAG_UP, z: was.vz };
+        was.fig.ragdoll(this.opts.ragdolls, v, spin(v, car ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
         was.label?.dispose();
         this.freeRig(was);
         this.riders.delete(s.slot);

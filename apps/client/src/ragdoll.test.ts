@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { Euler, Quaternion, Scene, Vector3 } from 'three';
-import { createPhysicsWorld, type CollisionAsset, type TerrainGrid } from '@nn/shared';
-import { PlayerFigure } from './player';
+import { CAR_GROUPS, createPhysicsWorld, type CollisionAsset, type TerrainGrid } from '@nn/shared';
+import { PlayerFigure, RISE_S } from './player';
 import { RagdollWorld } from './ragdoll';
 
 /** Ground at y = 0 (±200 m), a wall at x = 6..6.5 (3 m high). */
@@ -41,17 +41,26 @@ function run(f: PlayerFigure, w: RagdollWorld, at: Vector3, seconds: number) {
 }
 
 describe('ragdoll', () => {
-  test('a rider thrown off at 25 km/h tumbles, comes to rest on the ground and gets up where the sim is', async () => {
+  test('a rider thrown off at 25 km/h flies, comes to rest on the ground and gets up where the sim is', async () => {
     const pw = await createPhysicsWorld(city());
     const w = new RagdollWorld(pw);
     const scene = new Scene();
     const f = new PlayerFigure(scene);
     f.ride(seat, grips, pedals, 'upright');
     const v = 25 / 3.6;
-    f.ragdoll(w, { x: 0, y: 1.2, z: v * 0.75 }, 4, 3);
+    f.ragdoll(w, { x: 0, y: 2.2, z: v }, 3.5, RISE_S + 1.8);
     expect(f.busy).toBe(true);
-    const target = new Vector3(0, 0, 4);
-    const fly = run(f, w, target, 1.5);
+    const target = new Vector3(0, 0, 6);
+    // in the air a while: the hips leave the seat height
+    let top = 0;
+    for (let i = 0; i < 20; i++) {
+      w.step(1 / 60);
+      f.update(target.x, target.y, target.z, { x: 0, y: 0, z: 0 }, 1 / 60);
+      f.group.updateMatrixWorld(true);
+      top = Math.max(top, f.group.children[0]!.localToWorld(new Vector3(0, 0.92, 0)).y);
+    }
+    expect(top).toBeGreaterThan(1.1);
+    const fly = run(f, w, target, 1.45);
     expect(fly.lo).toBeGreaterThan(-0.15); // never through the ground
     expect(Number.isFinite(fly.hi)).toBe(true);
     // lying by now: the pelvis low, near the sim's spot
@@ -59,7 +68,9 @@ describe('ragdoll', () => {
     const hips = body.localToWorld(new Vector3(0, 0.92, 0));
     expect(hips.y).toBeLessThan(0.45);
     expect(Math.hypot(hips.x - target.x, hips.z - target.z)).toBeLessThan(2.5);
-    run(f, w, target, 1.6);
+    // getting up: no joint sinks into the ground
+    const up = run(f, w, target, RISE_S + 0.1);
+    expect(up.lo).toBeGreaterThan(-0.1);
     expect(f.busy).toBe(false);
     expect(f.group.position.distanceTo(target)).toBeLessThan(1e-6);
     // standing again, the next walking frame poses it upright
@@ -122,5 +133,60 @@ describe('ragdoll', () => {
     expect(lo).toBeGreaterThan(1.95);
     const hips = f.group.children[0]!.localToWorld(new Vector3(0, 0.92, 0));
     expect(hips.y).toBeLessThan(2.3 + 0.5);
+  });
+
+  for (const [name, spin] of [['face down', 4], ['face up', -4]] as const) {
+    test(`gets up from lying ${name}: over the ground the whole way, standing at the sim's spot in the end`, async () => {
+      const pw = await createPhysicsWorld(city());
+      const w = new RagdollWorld(pw);
+      const f = new PlayerFigure(new Scene());
+      f.update(0, 0, 0, { x: 0, y: 0, z: 0 }, 1 / 60);
+      f.ragdoll(w, { x: 0, y: 1, z: 3 }, spin, RISE_S + 2);
+      run(f, w, new Vector3(0, 0, 2), 2);
+      expect(f.ragdolling).toBe(true); // getting up
+      const body = f.group.children[0]!;
+      let lo = Infinity, hipsLo = Infinity;
+      for (let i = 0; i < Math.round(RISE_S * 60) + 2; i++) {
+        f.update(0, 0, 2, { x: 0, y: 0, z: 0 }, 1 / 60);
+        if (!f.ragdolling) break;
+        f.group.updateMatrixWorld(true);
+        body.traverse((o) => { if (o !== body) lo = Math.min(lo, o.getWorldPosition(new Vector3()).y); });
+        hipsLo = Math.min(hipsLo, body.localToWorld(new Vector3(0, 0.92, 0)).y);
+      }
+      expect(f.busy).toBe(false);
+      expect(lo).toBeGreaterThan(-0.12);
+      expect(hipsLo).toBeGreaterThan(0.05);
+      expect(f.group.position.distanceTo(new Vector3(0, 0, 2))).toBeLessThan(1e-6);
+    });
+  }
+
+  test('a car driving into a standing ragdoll strikes it: thrown ahead of the car, not through it', async () => {
+    const pw = await createPhysicsWorld(city());
+    const { rapier: R, world } = pw;
+    // a kinematic car box (as the client's stand-in for a streamed car) 4 m behind, driving +z at 10 m/s
+    const car = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 0.75, -2.6));
+    world.createCollider(R.ColliderDesc.cuboid(0.85, 0.5, 2.1).setCollisionGroups(CAR_GROUPS), car);
+    pw.step(); // (into the broad phase, as every sim step does)
+    const w = new RagdollWorld(pw);
+    const f = new PlayerFigure(new Scene());
+    f.update(0, 0, 0, { x: 0, y: 0, z: 0 }, 1 / 60);
+    f.ragdoll(w, { x: 0, y: 0, z: 0 }, 0, 5);
+    let fastest = 0;
+    for (let i = 0; i < 30; i++) {
+      const t = car.translation();
+      car.setNextKinematicTranslation({ x: t.x, y: t.y, z: t.z + 10 / 60 });
+      pw.step();
+      w.step(1 / 60);
+      f.update(0, 0, 0, { x: 0, y: 0, z: 0 }, 1 / 60);
+      f.group.updateMatrixWorld(true);
+      const hips = f.group.children[0]!.localToWorld(new Vector3(0, 0.92, 0));
+      fastest = Math.max(fastest, hips.z);
+    }
+    const front = car.translation().z + 2.1;
+    const hips = f.group.children[0]!.localToWorld(new Vector3(0, 0.92, 0));
+    // the car (front at z ≈ 2.5 now) has pushed the body along: ahead of its front or on the bonnet, never behind it
+    expect(hips.z).toBeGreaterThan(1.5);
+    expect(hips.z).toBeGreaterThan(front - 2.1);
+    expect(fastest).toBeLessThan(front + 6); // struck, not shot away
   });
 });

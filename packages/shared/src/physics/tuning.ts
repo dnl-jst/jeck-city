@@ -140,10 +140,10 @@ export const TUNING = {
     crashKmh: 22,
     crashBlocked: 0.7,
     /** Seconds without control after a crash: thrown off, tumbling (ragdoll on the client), lying, getting up. */
-    getUpSeconds: 2.4,
+    getUpSeconds: 3.8,
     /** A crashed rider is thrown on with this share of the speed the bike hit the obstacle with, plus crashUp upwards (m/s). */
-    crashThrow: 0.4,
-    crashUp: 1.2,
+    crashThrow: 0.85,
+    crashUp: 2.5,
     /** Getting off faster than this (km/h) is a jump off; the bike rolls on. */
     dismountJumpKmh: 10,
     /** Parked bikes get a physics body within near (m) of the player, lose it beyond far. */

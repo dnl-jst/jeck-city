@@ -98,7 +98,7 @@ test('crashing into a tree throws the rider off: no control until up again', asy
   const at = sim.player(1).pos;
   expect(Math.abs(at.x - from.x)).toBeLessThan(0.1);
   expect(at.z - from.z).toBeGreaterThan(0.3);
-  expect(at.z - from.z).toBeLessThan(4);
+  expect(at.z - from.z).toBeLessThan(14); // (thrown at 0.85 × a sprint, it lands and slides on a few metres)
   run(sim, 5);
   expect(sim.player(1).mode).toBe('walk');
   expect(sim.player(1).falling).toBe(false);
