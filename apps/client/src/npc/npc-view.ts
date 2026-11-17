@@ -1,12 +1,13 @@
 import type { Camera, Mesh, Object3D, Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_TYPES, BIKE_WHEEL_RADIUS, bikeLean, CAR_TYPES, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType,
+  lineText, BIKE_GEAR, BIKE_SPECS, BIKE_TYPES, BIKE_WHEEL_RADIUS, bikeLean, CAR_TYPES, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, type CarModels } from '../car';
 import { PlayerFigure } from '../player';
 import type { CarView, RemoteOptions, RiderRig } from '../remote/remote-players';
 import type { NpcDraw } from './npc-feed';
+import { SpeechBubble, type Bubble } from './speech-bubble';
 
 /** Figures (walkers, sitters, cyclists) farther than this (m) are not drawn; cars up to the render radius. */
 const FIGURE_RANGE = 150;
@@ -22,12 +23,17 @@ const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 export type NpcViewOptions = Pick<RemoteOptions, 'figureFor' | 'figureModel' | 'bikeModels' | 'bikeGroundPose' | 'makeRig' | 'occluded' | 'makeCar'> & {
   carModels?: CarModels;
   quality?: () => 'low' | 'medium' | 'high';
+  makeBubble?: (text: string) => Bubble;
 };
+
+/** Gap (m) between the top of a head (or a car roof) and a bubble's tip; a figure's height and a car roof's (m). */
+const BUBBLE_GAP = 0.3, FIGURE_H = 1.8, SEATED_H = 1.3, ROOF_H = 1.5;
 
 type Fig = { fig: PlayerFigure; model: Object3D | null | undefined; shadows: boolean | null };
 type Npc = {
   kind: NpcDraw['kind']; fig: Fig | null; rig: RiderRig | null; car: CarView | null; seen: boolean;
   crank: number; lastSpeed: number; frame: number; talk: number;
+  bubble: { b: Bubble; line: number } | null;
 };
 
 /**
@@ -82,10 +88,11 @@ export class NpcView {
       if (dist > (isCar ? CAR_RANGE : FIGURE_RANGE) || d.alpha <= 0.02) continue;
       let n = this.npcs.get(d.id);
       if (!n) {
-        n = { kind: d.kind, fig: null, rig: null, car: null, seen: true, crank: 0, lastSpeed: d.pose.speed, frame: d.id % 2, talk: d.id * 1.3 };
+        n = { kind: d.kind, fig: null, rig: null, car: null, seen: true, crank: 0, lastSpeed: d.pose.speed, frame: d.id % 2, talk: d.id * 1.3, bubble: null };
         this.npcs.set(d.id, n);
       }
       n.seen = true;
+      this.speak(n, d, dist);
       if (isCar) this.drawCar(n, d, night, camera, dt);
       else {
         // far figures: every second frame (with twice the time step)
@@ -112,6 +119,31 @@ export class NpcView {
       if (n.seen) continue;
       this.release(n);
       this.npcs.delete(id);
+    }
+  }
+
+  /** The bubble of what n says, over its head (drivers: over the driver's side of the roof). */
+  private speak(n: Npc, d: NpcDraw, dist: number): void {
+    if (!d.say) {
+      if (n.bubble) {
+        n.bubble.b.dispose();
+        n.bubble = null;
+      }
+      return;
+    }
+    if (!n.bubble || n.bubble.line !== d.say.line) {
+      n.bubble?.b.dispose();
+      const b = this.opts.makeBubble?.(lineText(d.say.line) ?? '…') ?? new SpeechBubble(lineText(d.say.line) ?? '…');
+      b.attach(this.scene);
+      n.bubble = { b, line: d.say.line };
+    }
+    const h = d.pose.heading;
+    if (d.kind === 'driver') {
+      // the driver sits on the left: left of the heading is (cos h, −sin h)
+      n.bubble.b.place(d.pose.x + Math.cos(h) * 0.4, d.pose.y + ROOF_H + BUBBLE_GAP, d.pose.z - Math.sin(h) * 0.4, dist, d.say.age);
+    } else {
+      const top = (d.kind === 'sitter' ? SEATED_H : FIGURE_H) * d.look.scale;
+      n.bubble.b.place(d.pose.x, d.pose.y + top + BUBBLE_GAP, d.pose.z, dist, d.say.age);
     }
   }
 
@@ -203,6 +235,8 @@ export class NpcView {
   }
 
   private release(n: Npc): void {
+    n.bubble?.b.dispose();
+    n.bubble = null;
     this.freeRig(n);
     if (n.fig) {
       const f = n.fig;

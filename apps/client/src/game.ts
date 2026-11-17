@@ -19,7 +19,10 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { NpcView } from './npc/npc-view';
-import { RemoteCarFeed } from './audio/remote-audio';
+
+/** Audio ids of NPC cars start here (players' cars use their index in manifest.parked). */
+const NPC_AUDIO_ID = 1_000_000;
+import { RemoteCarFeed, type RemoteCarIn } from './audio/remote-audio';
 import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -524,14 +527,20 @@ export class Game {
         }, dt);
       }
     }
+    const npcs = this.session.npcs();
+    this.npcView.update(npcs, this.ctx.camera, night, dt);
+    // NPC cars sound like other players' cars: engine running, the horn while they honk
+    const npcCars: RemoteCarIn[] = [];
+    for (const d of npcs) {
+      if (d.kind !== 'driver') continue;
+      npcCars.push({ id: NPC_AUDIO_ID + d.id, x: d.pose.x, z: d.pose.z, speed: d.pose.speed, accel: 0, engine: 'running', radio: null, horn: d.honk });
+    }
     if (this.remotes) {
       const { walkers, cars, riders } = this.session.remote!();
       const { names, variants, cars: info } = this.session.roster!();
       this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants);
-      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt), dt);
-
-    }
-    this.npcView.update(this.session.npcs(), this.ctx.camera, night, dt);
+      audio?.remoteCars(this.focus(), [...this.carFeed.build(cars, info, this.session.me, dt), ...npcCars], dt);
+    } else audio?.remoteCars(this.focus(), npcCars, dt);
     if (audio) {
       const f = this.focus();
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
