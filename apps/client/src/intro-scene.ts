@@ -13,7 +13,7 @@ import { introMusicSpectrum } from './intro-music';
 
 const RING_BARS = 64;
 const RING_RADIUS = 11.5;
-const CONFETTI = 500;
+const CONFETTI = 1400;
 /** The cathedral's centre (the ring and the camera circle around it). */
 const CENTRE = { x: 0, z: -4 };
 const CONFETTI_COLORS = ['#e3262f', '#ffffff', '#f2c46b', '#2f6fe3', '#3cbf5a', '#e3262f', '#ffffff'];
@@ -207,7 +207,7 @@ export function startIntroScene(container: HTMLElement): () => void {
   const spectrum = new Uint8Array(128) as Uint8Array<ArrayBuffer>;
   const levels = new Float32Array(RING_BARS);
   const dummy = new Object3D();
-  let bassAvg = 0.2, lastBeat = 0, flash = 0, last = performance.now(), frame = 0;
+  let bassAvg = 0.2, lastBeat = 0, flash = 0, last = performance.now(), frame = 0, trickle = 0;
 
   const tick = (now: number): void => {
     frame = requestAnimationFrame(tick);
@@ -225,10 +225,10 @@ export function startIntroScene(container: HTMLElement): () => void {
     for (let i = 1; i <= 6; i++) bass += spectrum[i]! / 255;
     bass /= 6;
     bassAvg += (bass - bassAvg) * Math.min(1, dt * 2.5);
-    if (bass > bassAvg * 1.18 && bass > 0.3 && now - lastBeat > 300) {
+    if (bass > bassAvg * 1.08 && bass > 0.2 && now - lastBeat > 220) {
       lastBeat = now;
       flash = 1;
-      burst(live ? 26 : 10, live ? 0.6 + bass : 0.6);
+      burst(live ? 45 : 16, live ? 0.6 + bass : 0.6);
     }
     flash = Math.max(0, flash - dt * 3);
 
@@ -252,6 +252,13 @@ export function startIntroScene(container: HTMLElement): () => void {
     let mids = 0;
     for (let i = 10; i < 40; i++) mids += spectrum[i]! / 255;
     mids /= 30;
+    // between the beats it keeps snowing confetti, the more the louder
+    trickle += dt * (live ? 25 + 90 * mids : 10);
+    if (trickle >= 1) {
+      const n = Math.floor(trickle);
+      trickle -= n;
+      burst(n, 0.5);
+    }
     windows.color.setRGB(1, 0.62 + 0.25 * flash, 0.25 + 0.2 * flash).multiplyScalar(0.55 + 0.6 * mids + 0.5 * flash);
     flood.intensity = 600 + 400 * flash;
     beamMat.opacity = 0.05 + 0.06 * mids + 0.06 * flash;
