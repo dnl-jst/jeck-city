@@ -42,8 +42,11 @@ type LL = { lat: number; lon: number };
 type Tags = Record<string, string>;
 type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[]; tags?: Tags; members?: { type: string; ref?: number; role: string; geometry?: LL[] }[] };
 
-/** The play area: the union of these Stadtteile (Nippes, Neustadt-Nord with the Agnesviertel). */
-export const BOUNDARY_IDS = [2613766, 2613763];
+/**
+ * The play area: the union of these Stadtteile (Nippes, Neustadt-Nord with the Agnesviertel, Altstadt-Nord,
+ * Altstadt-Süd, Neustadt-Süd).
+ */
+export const BOUNDARY_IDS = [2613766, 2613763, 2613711, 2613712, 2613764];
 const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
