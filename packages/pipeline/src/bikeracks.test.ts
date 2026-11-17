@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest';
 import { crossSectionFromTags } from './crosssection.js';
 import { boxBuilding, loadFixture } from './fixture.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { carContourDistance } from './parking.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot, type RackRow } from './bikeracks.js';
 import { onCarriageway, sideOffsets } from './roadprofile.js';
 
@@ -148,18 +147,14 @@ describe('fillRacks', () => {
 });
 
 describe('spawnBikeSpot', () => {
-  test('spawn bike near but clear of the spawn, the spawn car and buildings', () => {
-    const r = mk(1, 'residential', ROAD, { name: 'Neusser Straße' });
-    const kerb = sideOffsets(r.cross).right.kerb;
-    const spawn = { x: 0, z: kerb + 1.5, heading: Math.PI / 2 }; // facing +x along the road
-    const car = { pos: { x: 1.2, z: kerb - 1 }, heading: Math.PI / 2 };
-    const house = boxBuilding('B1', -30, kerb + 3, 30, kerb + 20, 10);
-    const b = spawnBikeSpot(world([r], []), spawn, car, [house]);
-    const d = Math.hypot(b.x - spawn.x, b.z - spawn.z);
-    expect(d).toBeGreaterThanOrEqual(0.8);
-    expect(d).toBeLessThanOrEqual(3);
-    expect(carContourDistance(car, { x: b.x, z: b.z })).toBeGreaterThanOrEqual(1);
-    expect(b.z).toBeLessThan(kerb + 3); // not in the house
-    expect(b.x).toBeLessThan(0); // on the other side than the car
+  test('spawn bike ~2.2 m behind the player, parallel, clear of buildings', () => {
+    const spawn = { x: 0, z: 0, heading: Math.PI / 2 }; // facing +x
+    const b = spawnBikeSpot(world([], []), spawn, []);
+    expect(b.x).toBeCloseTo(-2.2, 5);
+    expect(b.z).toBeCloseTo(0, 5);
+    expect(b.heading).toBe(spawn.heading);
+    // a house right behind at 2.2 m: the next distance that clears it
+    const c = spawnBikeSpot(world([], []), spawn, [boxBuilding('B', -2.4, -1, -2.0, 1, 5)]);
+    expect(c.x).toBeCloseTo(-1.8, 5);
   });
 });

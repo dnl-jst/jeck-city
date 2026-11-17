@@ -144,6 +144,6 @@ function mix(seed: number, i: number): number {
 export function parkedCars(spots: { pos: Pt; heading: number }[], seed: number): WorldManifest['parked'] {
   return spots.map((s, i) => ({
     x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[mix(seed, i) % PARKED_PALETTE.length]!,
-    type: i === 0 ? 0 : carTypeFor(mix(seed ^ 0x5bd1e995, i) / 4294967296),
+    type: carTypeFor(mix(seed ^ 0x5bd1e995, i) / 4294967296),
   }));
 }

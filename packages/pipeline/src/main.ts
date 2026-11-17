@@ -15,11 +15,11 @@ import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from '
 import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
-import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
+import { parkedCarSpots } from './parking.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot } from './bikeracks.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
-import { findSpawn } from './spawn.js';
+import { placeSpawn, SPAWN_AT, SPAWN_LOOK_AT, topSurface } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
 import { sidewalkFit } from './sidewalkmetric.js';
@@ -48,7 +48,6 @@ const SPAWN_BIKE_CLEAR = 3;
  */
 const SOUND_BIKE = { x: 35.0, z: -729.6, heading: -2.912, type: 5, color: 0xc0262d };
 const TREE_SEED = 2613766;
-const SPAWN_TARGET = { x: 0, z: 0 };
 /**
  * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
  * adaptively until every triangle lies within 2 cm of the 1 m drape (edges down to 5 cm at sharp terrain kinks).
@@ -140,9 +139,7 @@ async function main() {
     console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${streets[name].indices.length / 3} triangles`);
   }
   const graph = buildRoadGraph(f);
-  const flatSpawn = findSpawn(f.roads, SPAWN_TARGET, buildings);
-  const spawn = { ...flatSpawn, y: heightAt(terrain, flatSpawn.x, flatSpawn.z) + flatSpawn.y }; // flat y = sidewalk height
-  console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
+  const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 
   await mkdir(OUT_DIR, { recursive: true });
   for (const file of await readdir(OUT_DIR)) if (/^(chunk|model)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
@@ -189,6 +186,10 @@ async function main() {
   }
   const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: modelCollision, terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
+  // the spawn stands on the walkable surface there: pavement if any, else the terrain
+  const spawnGround = heightAt(terrain, spawn.x, spawn.z);
+  const spawnY = topSurface(collision, spawn.x, spawn.z, spawnGround);
+  console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) on the Domplatte, ${(spawnY - spawnGround).toFixed(2)} m above the terrain`);
   await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
   await writeFile(join(OUT_DIR, 'terrain.bin'), new Uint8Array(terrainBin));
 
@@ -241,10 +242,9 @@ async function main() {
   }
   console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 
-  const spawnCar = spawnCarSpot(f, spawn, buildings);
   const racks = layoutRacks(f, buildings);
-  const carSpots = withSpawnCar(spawnCar, dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks));
-  const spawnBike = spawnBikeSpot(f, spawn, spawnCar, buildings);
+  const carSpots = dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks);
+  const spawnBike = spawnBikeSpot(f, spawn, buildings);
   if (insideAnyFootprint(SOUND_BIKE, buildings)) throw new Error('sound bike: spot lies inside a building');
   const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) =>
     Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR && Math.hypot(b.x - SOUND_BIKE.x, b.z - SOUND_BIKE.z) >= SPAWN_BIKE_CLEAR);
@@ -256,7 +256,7 @@ async function main() {
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
     chunkSize: CHUNK_SIZE,
     chunks,
-    spawn: { x: r2(spawn.x), y: r2(spawn.y), z: r2(spawn.z), heading: r3(spawn.heading) },
+    spawn: { x: r2(spawn.x), y: r2(spawnY), z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
     lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
     trees: trees.map((p) => [r2(p.x), r2(p.z)]),
@@ -282,8 +282,6 @@ async function main() {
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
-  const car0 = manifest.parked[0]!;
-  console.log(`spawn car: ${Math.hypot(car0.x - spawn.x, car0.z - spawn.z).toFixed(2)} m from the spawn`);
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;

@@ -1,13 +1,13 @@
 # Nippes Nights
 
-Open-world-Spiel in Köln-Nippes: Alle Besucher sind gleichzeitig auf der Neusser Straße, zu Fuß, mit dem Rad oder im Auto.
+Open-world-Spiel in Köln (Nippes, Neustadt-Nord, Altstadt-Nord, Altstadt-Süd, Neustadt-Süd): Alle Besucher sind gleichzeitig in der Stadt, zu Fuß, mit dem Rad oder im Auto. Los geht es auf der Domplatte.
 TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ## Entwickeln
 
 ```
 npm ci
-npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~350 MB, nicht im Repository)
+npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~1,3 GB, nicht im Repository)
 npm run dev          # Spielserver + Vite
 npm test
 npm run typecheck
