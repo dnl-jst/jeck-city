@@ -1,9 +1,9 @@
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const TICK_HZ = 60;
 export const SNAPSHOT_EVERY = 3;
 export const MAX_INPUTS_PER_PACKET = 3;
-/** Default player cap per server: what 2 vCPU carry (load test 2026-11-16); MAX_PLAYERS (env) can raise it up to 100 on a faster core. */
-export const MAX_PLAYERS = 60;
+/** Default player cap per server: leaves tick time for the NPCs on 2 vCPU (user decision 2026-11-17; the live server runs 40); MAX_PLAYERS (env) can raise it up to 100 on a faster core. */
+export const MAX_PLAYERS = 40;
 export const INTEREST_RADIUS = 250;
 export const INTEREST_RELEASE = 270;
 export const RECONNECT_S = 15;
@@ -34,3 +34,32 @@ export type StationId = (typeof STATION_IDS)[number];
 /** Validates an untrusted radio message payload: a known station id, or null (radio off / unknown). */
 export const parseStationId = (v: unknown): StationId | null =>
   typeof v === 'string' && (STATION_IDS as readonly string[]).includes(v) ? (v as StationId) : null;
+
+// NPCs (docs/superpowers/specs/2026-11-17-npcs-design.md)
+/** NPCs are sent to clients within the same radius as players (and dropped beyond INTEREST_RELEASE). */
+export const NPC_INTEREST_RADIUS = INTEREST_RADIUS;
+/** New NPCs appear this far (m) from the nearest player... */
+export const NPC_SPAWN_MIN = 180;
+export const NPC_SPAWN_MAX = 250;
+/** ...or, in an area no player has been in before, no closer than this. */
+export const NPC_SPAWN_FIRST_MIN = 40;
+/** NPCs farther than this (m) from every player are dissolved. */
+export const NPC_DESPAWN = 300;
+/** Most NPCs on the server at once. */
+export const NPC_MAX = 400;
+/** NPCs this close (m) to a player get kinematic bodies in the physics world. */
+export const NPC_BODY_RADIUS = 60;
+/** NPCs this close (m) to a player check every tick whether the player is in their way. */
+export const NPC_REACT_RADIUS = 30;
+/** An NPC says something at most once per this many seconds. */
+export const NPC_SAY_COOLDOWN_S = 8;
+/** A blocked NPC speaks up after standing this long (s). */
+export const NPC_SAY_AFTER_S = 0.7;
+/** A blocked NPC gives up and takes another way after this long (s). */
+export const NPC_GIVE_UP_S = 20;
+/** The next plan is sent at least this long (s) before the current one ends. */
+export const NPC_PLAN_LEAD_S = 1;
+/** A new NPC fades in over this long (s) on the client. */
+export const NPC_FADE_IN_S = 1;
+/** A replaced plan is blended into over this long (s) on the client. */
+export const NPC_BLEND_S = 0.15;

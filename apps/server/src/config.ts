@@ -37,7 +37,7 @@ export type Config = {
 
 type Env = Record<string, string | undefined>;
 
-/** Highest MAX_PLAYERS accepted from the environment (the default is MAX_PLAYERS = 60, sized for 2 vCPU). */
+/** Highest MAX_PLAYERS accepted from the environment (the default is MAX_PLAYERS = 40, leaving tick time for the NPCs on 2 vCPU). */
 export const PLAYER_LIMIT = 100;
 
 const repoPath = (p: string): string => fileURLToPath(new URL(`../../../${p}`, import.meta.url));
