@@ -549,9 +549,10 @@ test.skipIf(!haveReal)(
     expect(performance.now() - t0).toBeLessThan(15_000);
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
-    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = terrain + sidewalk 0.12
+    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = the walkable surface there
   },
-  15_000,
+  // decoding and building the whole city in a full parallel test run can take longer than the build bound alone
+  30_000,
 );
 
 describe('multiplayer physics', () => {
