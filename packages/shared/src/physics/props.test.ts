@@ -63,6 +63,16 @@ describe('street props', () => {
     expect(tilt(props.lampPose(0))).toBe(0);
   });
 
+  test('a traffic light pole stops a car and never falls', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const props = new StreetProps(pw, [], [], undefined, [[0, 30]]);
+    const car = new Vehicle(pw, { x: 0, z: 0, heading: 0 });
+    car.setOccupied(true);
+    drive(pw, car, 50, 6);
+    expect(car.pose().z).toBeLessThan(30 - TUNING.props.poleRadius - TUNING.vehicle.length / 2 + 0.1);
+    expect(props.takeFallen()).toEqual([]);
+  });
+
   test('a tree stops even a fast car', async () => {
     const { pw, car } = await scene([], [[0, 40]]);
     drive(pw, car, 50, 6);

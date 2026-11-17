@@ -59,6 +59,9 @@ export const TUNING = {
     /** Tree trunk collider at scale 1 (render trunk: TREE_TRUNK_RADIUS in client trees.ts). */
     trunkRadius: 0.24,
     trunkHeight: 4.2,
+    /** Traffic light pole (fixed, like a trunk; model: data/models/signals). */
+    poleRadius: 0.06,
+    poleHeight: 3.5,
   },
 
   /**

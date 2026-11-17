@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { Client, type Room } from '@colyseus/sdk';
 import {
-  decodeSnapshot, encodeInputs, MAX_INPUTS_PER_PACKET, PROTOCOL_VERSION, TICK_HZ, type PlayerInput, type Snapshot,
+  decodeSnapshot, encodeInputs, MAX_INPUTS_PER_PACKET, prng, PROTOCOL_VERSION, TICK_HZ, type PlayerInput, type Snapshot,
 } from '@nn/shared';
 
 /** walk: on foot to a new target every 3–8 s; drive: gets into a car and keeps it moving; ride: the same on a bike. */
@@ -40,17 +40,7 @@ const HOME_RADIUS = 300;
 const BOARD_TIMEOUT_S = 6;
 const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
 
-/** mulberry32: a small seeded PRNG, uniform in [0, 1). */
-export function prng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+export { prng };
 
 /**
  * A load-test player: sends 60 Hz inputs in packets of 3, follows its own state from the snapshots and counts the bytes

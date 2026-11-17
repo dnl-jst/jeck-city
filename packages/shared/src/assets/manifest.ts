@@ -85,6 +85,8 @@ export type WorldManifest = {
    * hanging; see data/models/character/README.md). Missing in older manifests → [].
    */
   characterModels: { variant: CharacterVariant; file: string; bytes: number }[];
+  /** The NPC network (npc/netgraph.ts NpcNet). Missing in older manifests → no NPCs. */
+  npc?: { file: 'npc.json'; bytes: number };
   /** Terrain height grid (see assets/terrain.ts encodeTerrain). */
   terrain: { file: 'terrain.bin'; bytes: number };
   /** NHN height (m) of local y = 0: world y = NHN − datum. */
@@ -138,7 +140,14 @@ export function parseManifest(json: unknown): WorldManifest {
   if (o.chunkSize !== CHUNK_SIZE) fail('chunkSize', `must be ${CHUNK_SIZE}`);
   const t = obj(o.terrain, 'terrain');
   if (t.file !== 'terrain.bin') fail('terrain.file', "must be 'terrain.bin'");
+  let npc: WorldManifest['npc'];
+  if (o.npc !== undefined) {
+    const n = obj(o.npc, 'npc');
+    if (n.file !== 'npc.json') fail('npc.file', "must be 'npc.json'");
+    npc = { file: 'npc.json', bytes: num(n.bytes, 'npc.bytes') };
+  }
   return {
+    ...(npc ? { npc } : {}),
     version: 2,
     origin: nums(o.origin, 'origin', ['e', 'n']),
     chunkSize: CHUNK_SIZE,

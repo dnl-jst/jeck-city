@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type NpcNet, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { buildNpcNet } from './npcnet.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
@@ -48,6 +49,8 @@ const SPAWN_BIKE_CLEAR = 3;
  */
 const SOUND_BIKE = { x: 35.0, z: -729.6, heading: -2.912, type: 5, color: 0xc0262d };
 const TREE_SEED = 2613766;
+/** Seed of the lawn seat rings in parks. */
+const PARK_SEED = 1766132;
 const SPAWN_TARGET = { x: 0, z: 0 };
 /**
  * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
@@ -251,7 +254,18 @@ async function main() {
   const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
 
+  // NPC network: sidewalks, lanes, cycle lanes, seat rings, junctions with traffic lights
+  const npcNet: NpcNet = buildNpcNet({
+    roads: f.roads, sidewalks, buildings, crossings: f.crossings, greens: f.greens, squares: f.squares.map((s) => s.outline),
+    benches: f.benches, trees, signals: f.signals, giveWay: f.giveWay, stops: f.stops, seed: PARK_SEED,
+  });
+  const npcJson = JSON.stringify(npcNet);
+  await writeFile(join(OUT_DIR, 'npc.json'), npcJson);
+  const signalled = npcNet.junctions.filter((j) => j.signal);
+  console.log(`npc: walk ${npcNet.walk.edges.length} edges, drive ${npcNet.drive.edges.length}, cycle ${npcNet.cycle.edges.length}, seats ${npcNet.seats.length} rings (${npcNet.seats.filter((s) => s.bench).length} benches), ${npcNet.junctions.length} junctions (${signalled.filter((j) => !j.signal!.midblock).length} with traffic lights, ${signalled.filter((j) => j.signal!.midblock).length} midblock signals, ${signalled.reduce((n, j) => n + j.poles.length, 0)} poles), ${mb(npcJson.length)}`);
+
   const manifest: WorldManifest = {
+    npc: { file: 'npc.json', bytes: Buffer.byteLength(npcJson) },
     version: 2,
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
     chunkSize: CHUNK_SIZE,

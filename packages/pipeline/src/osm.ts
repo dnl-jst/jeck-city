@@ -8,7 +8,8 @@ export type Pt = { x: number; z: number };
  * width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order;
  * profile (withProfiles): side edges per vertex incl. ramps between ways.
  */
-export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile };
+/** priority: tagged priority_road (a Vorfahrtstraße). */
+export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile; priority?: boolean };
 export type OsmFeatures = {
   boundary: Pt[];
   roads: Road[];
@@ -26,6 +27,11 @@ export type OsmFeatures = {
   benches: Pt[];
   /** highway=crossing nodes and signalled crossings (crossing=traffic_signals): where NPC walkers cross a road. */
   crossings: Pt[];
+  /** highway=traffic_signals nodes. */
+  signals: Pt[];
+  /** highway=give_way and highway=stop nodes (the approach they stand on has lower priority). */
+  giveWay: Pt[];
+  stops: Pt[];
 };
 
 export type BikeParking = { pos: Pt; outline?: Pt[]; kind: 'stands' | 'wall' | 'other'; capacity: number };
@@ -114,13 +120,14 @@ function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Ro
   const cross = reverse ? reversed(tagged) : tagged;
   const lanes = cross.lanesForward + cross.lanesBackward;
   const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width: cross.carriageway, oneway, lanes, cross };
+  if (t.priority_road === 'designated' || t.priority_road === 'yes') road.priority = true;
   if (t.name) road.name = t.name;
   return road;
 }
 
 export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
-  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [], benches: [], crossings: [] };
+  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [], benches: [], crossings: [], signals: [], giveWay: [], stops: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
@@ -147,6 +154,9 @@ export function parseOsm(json: unknown): OsmFeatures {
       const pos = wgs84ToLocal(el.lat, el.lon);
       if (t.highway === 'crossing' || (t.crossing !== undefined && t.crossing !== 'no')) f.crossings.push(pos);
       if (t.amenity === 'bench') f.benches.push(pos);
+      if (t.highway === 'traffic_signals') f.signals.push(pos);
+      else if (t.highway === 'give_way') f.giveWay.push(pos);
+      else if (t.highway === 'stop') f.stops.push(pos);
       if (t.natural === 'tree') f.trees.push(pos);
       else if (t.highway === 'street_lamp') f.lamps.push(pos);
       else if (isStopTags(t)) stops.push({ pos, name: t.name!, prio: t.public_transport === 'platform' ? 0 : 1 });

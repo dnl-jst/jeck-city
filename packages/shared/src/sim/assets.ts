@@ -1,17 +1,20 @@
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { parseManifest, type WorldManifest } from '../assets/manifest';
 import { decodeTerrain, type TerrainGrid } from '../assets/terrain';
+import { parseNpcNet, type NpcNet } from '../npc/netgraph';
 
 /** TextDecoder exists in Node 24 and every browser; declared here because the shared lib is ES-only. */
 declare const TextDecoder: new () => { decode(input: ArrayBuffer): string };
 
-/** The three files both server and client build the simulated world from. */
-export type WorldAssets = { manifest: WorldManifest; collision: CollisionAsset; terrain: TerrainGrid };
+/** The files both server and client build the simulated world from; npc: the NPC network (absent: no NPCs). */
+export type WorldAssets = { manifest: WorldManifest; collision: CollisionAsset; terrain: TerrainGrid; npc?: NpcNet | null };
 
 /** Reads manifest.json, collision.bin and terrain.bin through `read` (fetch in the browser, fs on the server). */
 export async function loadWorldAssets(read: (file: string) => Promise<ArrayBuffer>): Promise<WorldAssets> {
   const [m, c, t] = await Promise.all([read('manifest.json'), read('collision.bin'), read('terrain.bin')]);
-  return { manifest: parseManifest(JSON.parse(new TextDecoder().decode(m))), collision: decodeCollision(c), terrain: decodeTerrain(t) };
+  const manifest = parseManifest(JSON.parse(new TextDecoder().decode(m)));
+  const npc = manifest.npc ? parseNpcNet(JSON.parse(new TextDecoder().decode(await read(manifest.npc.file)))) : null;
+  return { manifest, collision: decodeCollision(c), terrain: decodeTerrain(t), npc };
 }
 
 /**

@@ -20,6 +20,7 @@ const valid = (): WorldManifest => ({
   rackModels: [{ kind: 0, file: 'rack_hoop.glb', bytes: 5 }],
     characterModels: [{ variant: 'woman', file: 'character_woman.glb', bytes: 7 }],
   carModels: [],
+  npc: { file: 'npc.json', bytes: 77 },
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -76,6 +77,12 @@ test('manifest parse: bikes and racks', () => {
   const m = parseManifest(JSON.parse(JSON.stringify(valid())));
   expect(m.bikeRacks).toEqual([{ x: 4, z: 5, heading: 1.2, kind: 0 }]);
   expect(m.bikes).toEqual([{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }]);
+});
+
+test('manifest parse: npc is optional and validated', () => {
+  const { npc: _n, ...old } = valid();
+  expect(parseManifest(old).npc).toBeUndefined();
+  expect(() => parseManifest({ ...valid(), npc: { file: 'other.json', bytes: 1 } as never })).toThrow();
 });
 
 test('manifest parse: old manifest without bikes gets empty lists', () => {

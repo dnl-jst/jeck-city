@@ -1,8 +1,9 @@
-import type { NetEdge, NetGraph } from '@nn/shared';
+import { GraphIndex, prng, type NetEdge, type NetGraph, type NpcNet, type SeatRing } from '@nn/shared';
+import { buildJunctions } from './signals.js';
 import type { BuildingMesh } from './buildings.js';
 import { footprintContains } from './footprint.js';
 import type { Pt, Road } from './osm.js';
-import { cumulative, dedupe, distToPolyline, DRIVABLE, offsetLine, pointAt } from './polyline.js';
+import { cumulative, dedupe, distToPolyline, DRIVABLE, offsetLine, pointAt, pointInPolygon } from './polyline.js';
 import { edgeAt, onCarriageway } from './roadprofile.js';
 import { buildingGrid, widthAt, type SidewalkWidths } from './sidewalkwidth.js';
 
@@ -22,7 +23,7 @@ const SNAP = 0.05;
 const key = (p: Pt): string => `${Math.round(p.x / SNAP)},${Math.round(p.z / SNAP)}`;
 const d2 = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.z - b.z);
 
-type Line = { pts: Pt[]; width: number; crossing: boolean };
+type Line = { pts: Pt[]; width: number; crossing: boolean; oneway: boolean };
 
 /**
  * Collects polylines and turns them into a graph: a vertex becomes a node where a line ends or where its position is
@@ -31,10 +32,10 @@ type Line = { pts: Pt[]; width: number; crossing: boolean };
 export class NetBuilder {
   readonly lines: Line[] = [];
 
-  add(pts: Pt[], width: number, crossing = false): Line | null {
+  add(pts: Pt[], width: number, crossing = false, oneway = false): Line | null {
     const clean = dedupeSnap(pts);
     if (clean.length < 2) return null;
-    const l = { pts: clean, width, crossing };
+    const l = { pts: clean, width, crossing, oneway };
     this.lines.push(l);
     return l;
   }
@@ -82,8 +83,11 @@ export class NetBuilder {
         const piece = l.pts.slice(start, i + 1);
         const a = node(piece[0]!), b = node(piece[piece.length - 1]!);
         if (a !== b) {
-          const e: NetEdge = { a, b, pts: densify(piece).map((p) => [r2(p.x), r2(p.z)]), width: r2(l.width), oneway: false };
+          const e: NetEdge = { a, b, pts: densify(piece).map((p) => [r2(p.x), r2(p.z)]), width: r2(l.width), oneway: l.oneway };
           if (l.crossing) e.crossing = true;
+          const list = this.edgesOf.get(l);
+          if (list) list.push(g.edges.length);
+          else this.edgesOf.set(l, [g.edges.length]);
           g.edges.push(e);
         }
         start = i;
@@ -91,6 +95,9 @@ export class NetBuilder {
     }
     return g;
   }
+
+  /** After build(): the edges each line became, in order along it. */
+  readonly edgesOf = new Map<Line, number[]>();
 }
 
 const r2 = (v: number): number => Math.round(v * 100) / 100;
@@ -330,4 +337,321 @@ function nearestArc(pts: Pt[], cum: number[], p: Pt): { s: number; dist: number 
     if (d < best.dist) best = { s: cum[i - 1]! + t * Math.sqrt(l2), dist: d };
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Lanes (cars) and cycle lanes
+
+/** Service ways shorter than this (m) get no lanes (driveway stubs). */
+const SERVICE_MIN = 30;
+/** Points on a turn arc. */
+const TURN_POINTS = 6;
+/** Cut-back at junctions is capped at this (m). */
+const CUT_MAX = 20;
+
+/** Distance (m) from the way's centre line to the lane's centre on side (+1 right of the way, -1 left) at arc length s. */
+type LaneOffset = (r: Road, side: number, s: number) => number;
+
+/** Cars: the outermost lane on that side (one-way ways: the rightmost lane, which may be the centre). */
+const driveOffset: LaneOffset = (r, side, s) => edgeAt(r, side, 'lane', s) - r.cross.laneWidth / 2;
+/** Bikes: the middle of a cycle lane where there is one, else 0.7 m inside the lane's outer edge. */
+const cycleOffset: LaneOffset = (r, side, s) => {
+  const lane = edgeAt(r, side, 'lane', s), cycle = edgeAt(r, side, 'cycle', s);
+  return cycle - lane > 0.5 ? (lane + cycle) / 2 : lane - 0.7;
+};
+
+const laneRoads = (roads: Road[]): Road[] => roads.filter((r) => {
+  const pts = dedupe(r.points);
+  if (pts.length < 2) return false;
+  if (DRIVABLE.has(r.kind)) return true;
+  return r.kind === 'service' && cumulative(pts)[pts.length - 1]! >= SERVICE_MIN;
+});
+
+/** A quadratic Bézier from p0 to p2 around the corner where the lines p0 + t·d0 and p2 − u·d2 meet. */
+function turnArc(p0: Pt, d0: Pt, p2: Pt, d2: Pt): Pt[] {
+  const den = d0.x * d2.z - d0.z * d2.x;
+  let c = { x: (p0.x + p2.x) / 2, z: (p0.z + p2.z) / 2 };
+  if (Math.abs(den) > 0.05) {
+    const t = ((p2.x - p0.x) * d2.z - (p2.z - p0.z) * d2.x) / den;
+    const span = d2Of(p0, p2);
+    if (t > 0 && t < 2 * span + 5) c = { x: p0.x + d0.x * t, z: p0.z + d0.z * t };
+  }
+  const out: Pt[] = [];
+  for (let k = 0; k < TURN_POINTS; k++) {
+    const u = k / (TURN_POINTS - 1), v = 1 - u;
+    out.push({ x: v * v * p0.x + 2 * u * v * c.x + u * u * p2.x, z: v * v * p0.z + 2 * u * v * c.z + u * u * p2.z });
+  }
+  return out;
+}
+const d2Of = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.z - b.z);
+const unitOf = (a: Pt, b: Pt): Pt => {
+  const l = d2Of(a, b) || 1;
+  return { x: (b.x - a.x) / l, z: (b.z - a.z) / l };
+};
+
+/**
+ * One-way lane lines along the ways (one per direction; one-way ways only in theirs), ending short of junctions
+ * where they would reach into another way's carriageway; at every junction an arc from each arriving lane to each
+ * leaving lane of the other arms (no U-turns); at a dead end of a two-way way a turning arc from one lane to the other.
+ */
+function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunction[] {
+  const ways = laneRoads(roads);
+  const uses = new Map<string, number>();
+  for (const r of ways) dedupe(r.points).forEach((p, i, a) => uses.set(key(p), (uses.get(key(p)) ?? 0) + (i === 0 || i === a.length - 1 ? 1 : 2)));
+  const isNode = (p: Pt): boolean => (uses.get(key(p)) ?? 0) >= 2;
+
+  type LanePiece = { r: Road; pts: Pt[]; s: number[] };
+  type LArm = {
+    pc: LanePiece; atStart: boolean; dir: Pt; kerb: number; inEnd: Pt | null; outStart: Pt | null;
+    inLine: Line | null; outLine: Line | null; rightKerb: number;
+  };
+  const pieces: LanePiece[] = [];
+  for (const r of ways) {
+    const pts = dedupe(r.points), cum = cumulative(pts);
+    let start = 0;
+    for (let i = 1; i < pts.length; i++) {
+      if (i < pts.length - 1 && !isNode(pts[i]!)) continue;
+      pieces.push({ r, pts: pts.slice(start, i + 1), s: cum.slice(start, i + 1) });
+      start = i;
+    }
+  }
+  const arms = new Map<string, LArm[]>();
+  const armOf = new Map<string, LArm>();
+  for (const pc of pieces) {
+    for (const atStart of [true, false]) {
+      const end = atStart ? pc.pts[0]! : pc.pts[pc.pts.length - 1]!;
+      const next = atStart ? pc.pts[1]! : pc.pts[pc.pts.length - 2]!;
+      const s = atStart ? pc.s[0]! : pc.s[pc.s.length - 1]!;
+      const kerb = Math.max(edgeAt(pc.r, 1, 'kerb', s), edgeAt(pc.r, -1, 'kerb', s));
+      const arm: LArm = { pc, atStart, dir: unitOf(end, next), kerb, inEnd: null, outStart: null, inLine: null, outLine: null, rightKerb: 0 };
+      armOf.set(`${pieces.indexOf(pc)}:${atStart}`, arm);
+      if (!isNode(end)) continue;
+      const list = arms.get(key(end)) ?? [];
+      list.push(arm);
+      arms.set(key(end), list);
+    }
+  }
+  const cutOf = (a: LArm): number => {
+    const list = arms.get(key(a.atStart ? a.pc.pts[0]! : a.pc.pts[a.pc.pts.length - 1]!));
+    if (!list) return 0;
+    let cut = 0;
+    for (const o of list) {
+      if (o === a) continue;
+      const sin = Math.abs(a.dir.x * o.dir.z - a.dir.z * o.dir.x);
+      if (a.dir.x * o.dir.x + a.dir.z * o.dir.z < -0.87) continue;
+      cut = Math.max(cut, Math.min(CUT_MAX, o.kerb / Math.max(0.3, sin) + 1));
+    }
+    return cut;
+  };
+
+  pieces.forEach((pc, idx) => {
+    const a0 = armOf.get(`${idx}:true`)!, a1 = armOf.get(`${idx}:false`)!;
+    const total = pc.s[pc.s.length - 1]! - pc.s[0]!;
+    const c0 = cutOf(a0), c1 = cutOf(a1);
+    if (total - c0 - c1 < 1) return;
+    const width = pc.r.cross.laneWidth;
+    const lane = (side: number): Pt[] | null => {
+      const line = offsetLine(pc.pts, pc.pts.map((_, i) => side * offset(pc.r, side, pc.s[i]!)));
+      const lc = cumulative(line), lt = lc[lc.length - 1]!;
+      const part = trim(line, (c0 / total) * lt, lt - (c1 / total) * lt);
+      return part.length >= 2 ? part : null;
+    };
+    const s0 = pc.s[0]!, s1 = pc.s[pc.s.length - 1]!;
+    const fwd = lane(1);
+    if (fwd) {
+      const l = b.add(fwd, width, false, true);
+      a0.outStart = fwd[0]!;
+      a0.outLine = l;
+      a1.inEnd = fwd[fwd.length - 1]!;
+      a1.inLine = l;
+      a1.rightKerb = edgeAt(pc.r, 1, 'kerb', s1) - offset(pc.r, 1, s1);
+    }
+    if (!pc.r.oneway) {
+      const back = lane(-1)?.reverse() ?? null;
+      if (back) {
+        const l = b.add(back, width, false, true);
+        a1.outStart = back[0]!;
+        a1.outLine = l;
+        a0.inEnd = back[back.length - 1]!;
+        a0.inLine = l;
+        a0.rightKerb = edgeAt(pc.r, -1, 'kerb', s0) - offset(pc.r, -1, s0);
+      }
+    }
+  });
+  const junctions: LaneJunction[] = [];
+  for (const [k, list] of arms) {
+    const turns: Line[] = [];
+    for (const a of list) {
+      if (!a.inEnd) continue;
+      for (const o of list) {
+        if (o === a || !o.outStart) continue;
+        const l = b.add(turnArc(a.inEnd, { x: -a.dir.x, z: -a.dir.z }, o.outStart, o.dir), a.pc.r.cross.laneWidth, false, true);
+        if (l) turns.push(l);
+      }
+    }
+    if (list.length < 3) continue;
+    const at = list[0]!.atStart ? list[0]!.pc.pts[0]! : list[0]!.pc.pts[list[0]!.pc.pts.length - 1]!;
+    junctions.push({
+      key: k, x: at.x, z: at.z, turns,
+      arms: list.map((a) => ({ road: a.pc.r, dir: a.dir, kerb: a.kerb, inEnd: a.inEnd, inLine: a.inLine, rightKerb: a.rightKerb, laneWidth: a.pc.r.cross.laneWidth })),
+    });
+  }
+
+  // junctions: arcs from every arriving lane to every leaving lane of another arm
+  // dead ends of two-way ways: turn around
+  for (const a of armOf.values()) {
+    const end = a.atStart ? a.pc.pts[0]! : a.pc.pts[a.pc.pts.length - 1]!;
+    if (isNode(end) || !a.inEnd || !a.outStart) continue;
+    const back = { x: -a.dir.x, z: -a.dir.z };
+    const tip = { x: (a.inEnd.x + a.outStart.x) / 2 + back.x * 3, z: (a.inEnd.z + a.outStart.z) / 2 + back.z * 3 };
+    b.add([...turnArc(a.inEnd, back, tip, { x: a.outStart.x - a.inEnd.x, z: a.outStart.z - a.inEnd.z }).slice(0, -1), ...turnArc(tip, unitOf(a.inEnd, a.outStart), a.outStart, a.dir)], a.pc.r.cross.laneWidth, false, true);
+  }
+  return junctions;
+}
+
+/**
+ * A junction (three or more arms) as buildLanes saw it: per arm the way, its direction away from the node, the widest
+ * kerb, the arriving lane (its line and end) and the distance from that lane's centre to its right kerb; the turn arcs.
+ */
+export type LaneJunction = {
+  key: string; x: number; z: number; turns: Line[];
+  arms: { road: Road; dir: Pt; kerb: number; inEnd: Pt | null; inLine: Line | null; rightKerb: number; laneWidth: number }[];
+};
+
+/** The driving network: lanes and junction arcs (all edges one-way). */
+export function buildDriveGraph(roads: Road[]): NetGraph {
+  return driveNet(roads).graph;
+}
+
+function driveNet(roads: Road[]): { graph: NetGraph; b: NetBuilder; junctions: LaneJunction[] } {
+  const b = new NetBuilder();
+  const junctions = buildLanes(roads, driveOffset, b);
+  return { graph: b.build(), b, junctions };
+}
+
+/**
+ * The cycling network: lanes at the right edge of the carriageway (or on its cycle lane) like the car lanes, plus OSM
+ * cycleways (two-way unless one-way), joined at their ends to the nearest cycle line within 10 m.
+ */
+export function buildCycleGraph(roads: Road[]): NetGraph {
+  return cycleNet(roads).graph;
+}
+
+function cycleNet(roads: Road[]): { graph: NetGraph; b: NetBuilder; junctions: LaneJunction[] } {
+  const b = new NetBuilder();
+  const junctions = buildLanes(roads, cycleOffset, b);
+  const ways: Line[] = [];
+  for (const r of roads) {
+    if (r.kind !== 'cycleway') continue;
+    const l = b.add(densify(dedupe(r.points)), Math.max(1.5, r.width), false, r.oneway);
+    if (l) ways.push(l);
+  }
+  for (const l of ways) {
+    for (const p of [l.pts[0]!, l.pts[l.pts.length - 1]!]) {
+      const shared = b.lines.some((o) => o !== l && o.pts.some((q) => key(q) === key(p)));
+      if (!shared) b.attach(p, ATTACH_MAX, l, 2);
+    }
+  }
+  return { graph: b.build(), b, junctions };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Seats
+
+/** Greens from this size (m²) get lawn rings, one per LAWN_PER m². */
+const LAWN_MIN_AREA = 2000;
+const LAWN_PER = 4000;
+const LAWN_RADIUS = 0.9;
+const TREE_CLEAR = 3;
+const PATH_CLEAR = 2;
+const RING_CLEAR = 6;
+
+const area = (ring: Pt[]): number => {
+  let a = 0;
+  for (let i = 0; i < ring.length; i++) {
+    const p = ring[i]!, q = ring[(i + 1) % ring.length]!;
+    a += p.x * q.z - q.x * p.z;
+  }
+  return Math.abs(a) / 2;
+};
+
+const facing = (c: Pt, q: Pt): number => Math.atan2(c.x - q.x, c.z - q.z);
+const r2Seat = (c: Pt, q: Pt) => ({ x: r2(q.x), z: r2(q.z), heading: Math.round(facing(c, q) * 1000) / 1000 });
+
+/**
+ * Seat rings: every bench inside a green or square becomes a ring of three (two on the bench, one opposite, all
+ * facing the ring's centre 1 m in front of the bench, towards the nearest path); greens of 2000 m² and more get one
+ * lawn ring per 4000 m² (3–4 seats on a 0.9 m circle) at seeded random spots ≥ 3 m from trees, ≥ 2 m from walk paths.
+ */
+export function buildSeats(greens: Pt[][], squares: Pt[][], benches: Pt[], trees: Pt[], walk: NetGraph, seed: number): SeatRing[] {
+  const out: SeatRing[] = [];
+  const ix = new GraphIndex(walk);
+  const areas = [...greens, ...squares];
+  for (const bp of benches) {
+    if (!areas.some((a) => pointInPolygon(bp, a))) continue;
+    const n = ix.nearestEdge(bp.x, bp.z, 15);
+    let f = { x: 0, z: 1 };
+    if (n) {
+      const e = walk.edges[n.edge]!;
+      const c = ix.cum[n.edge]!;
+      let k = 1;
+      while (k < e.pts.length - 1 && c[k]! < n.s) k++;
+      const [ax, az] = e.pts[k - 1]!, [qx, qz] = e.pts[k]!;
+      const t = (n.s - c[k - 1]!) / ((c[k]! - c[k - 1]!) || 1);
+      const foot = { x: ax + (qx - ax) * t, z: az + (qz - az) * t };
+      if (n.d > 0.1) f = unitOf(bp, foot);
+    }
+    const c = { x: bp.x + f.x, z: bp.z + f.z };
+    const side = { x: -f.z, z: f.x };
+    const seats = [
+      { x: bp.x + side.x * 0.55, z: bp.z + side.z * 0.55 },
+      { x: bp.x - side.x * 0.55, z: bp.z - side.z * 0.55 },
+      { x: c.x + f.x * 0.9, z: c.z + f.z * 0.9 },
+    ];
+    out.push({ x: r2(c.x), z: r2(c.z), seats: seats.map((q) => r2Seat(c, q)), bench: true });
+  }
+  const rng = prng(seed);
+  const taken: Pt[] = out.map((s) => ({ x: s.x, z: s.z }));
+  for (const g of greens) {
+    const A = area(g);
+    if (A < LAWN_MIN_AREA) continue;
+    const want = Math.floor(A / LAWN_PER);
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    for (const p of g) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minZ = Math.min(minZ, p.z); maxZ = Math.max(maxZ, p.z); }
+    let placed = 0;
+    for (let tries = 0; tries < 200 * want && placed < want; tries++) {
+      const c = { x: minX + rng() * (maxX - minX), z: minZ + rng() * (maxZ - minZ) };
+      if (!pointInPolygon(c, g) || distToPolyline(c, [...g, g[0]!]) < 2) continue;
+      if (trees.some((t) => d2Of(t, c) < TREE_CLEAR)) continue;
+      if (ix.nearestEdge(c.x, c.z, PATH_CLEAR)) continue;
+      if (taken.some((t) => d2Of(t, c) < RING_CLEAR)) continue;
+      const n = 3 + Math.floor(rng() * 2);
+      const a0 = rng() * Math.PI * 2;
+      const seats = Array.from({ length: n }, (_, k) => {
+        const a = a0 + (k / n) * Math.PI * 2;
+        return r2Seat(c, { x: c.x + Math.sin(a) * LAWN_RADIUS, z: c.z + Math.cos(a) * LAWN_RADIUS });
+      });
+      out.push({ x: r2(c.x), z: r2(c.z), seats, bench: false });
+      taken.push(c);
+      placed++;
+    }
+  }
+  return out;
+}
+
+export type NpcNetInput = {
+  roads: Road[]; sidewalks: Map<Road, SidewalkWidths>; buildings: BuildingMesh[]; crossings: Pt[];
+  greens: Pt[][]; squares: Pt[][]; benches: Pt[]; trees: Pt[];
+  signals: Pt[]; giveWay: Pt[]; stops: Pt[]; seed: number;
+};
+
+/** The whole NPC network: walk, drive and cycle graphs, seat rings and junctions with their signals. */
+export function buildNpcNet(i: NpcNetInput): NpcNet {
+  const walk = buildWalkGraph(i.roads, i.sidewalks, i.crossings, i.buildings);
+  const drive = driveNet(i.roads), cycle = cycleNet(i.roads);
+  return {
+    version: 1, walk, drive: drive.graph, cycle: cycle.graph,
+    seats: buildSeats(i.greens, i.squares, i.benches, i.trees, walk, i.seed),
+    junctions: buildJunctions({ drive, cycle, walk, signals: i.signals, giveWay: i.giveWay, stops: i.stops, seed: i.seed }),
+  };
 }

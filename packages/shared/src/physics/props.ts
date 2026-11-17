@@ -61,7 +61,7 @@ export class StreetProps {
 
   constructor(
     private readonly pw: PhysicsWorld, lamps: readonly (readonly [number, number])[], trees: readonly (readonly [number, number])[],
-    terrain?: TerrainGrid,
+    terrain?: TerrainGrid, poles: readonly (readonly [number, number])[] = [],
   ) {
     const { rapier: R, world } = pw;
     const groundY = (x: number, z: number) => (terrain ? heightAt(terrain, x, z) : 0);
@@ -71,6 +71,13 @@ export class StreetProps {
       world.createCollider(
         R.ColliderDesc.cylinder((T.trunkHeight * k) / 2, T.trunkRadius * k).setTranslation(x, groundY(x, z) + (T.trunkHeight * k) / 2, z)
           .setCollisionGroups(PROP_GROUPS),
+        this.shared,
+      );
+    }
+    // traffic light poles: fixed, they never fall
+    for (const [x, z] of poles) {
+      world.createCollider(
+        R.ColliderDesc.cylinder(T.poleHeight / 2, T.poleRadius).setTranslation(x, groundY(x, z) + T.poleHeight / 2, z).setCollisionGroups(PROP_GROUPS),
         this.shared,
       );
     }

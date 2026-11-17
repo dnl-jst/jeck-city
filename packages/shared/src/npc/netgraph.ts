@@ -1,3 +1,5 @@
+import type { JunctionInfo } from './signals';
+
 /**
  * The NPC network (npc.json, written by the pipeline): walking, driving and cycling graphs and seat rings in parks.
  * Coordinates are world x/z in metres; heights come from the server's collision (see NpcDirector).
@@ -15,7 +17,8 @@ export type NetGraph = { nodes: [number, number][]; edges: NetEdge[] };
 /** Seats of a group in a park: centre and seats (position, heading towards the centre); bench: on an OSM bench. */
 export type SeatRing = { x: number; z: number; seats: { x: number; z: number; heading: number }[]; bench: boolean };
 
-export type NpcNet = { version: 1; walk: NetGraph; drive: NetGraph; cycle: NetGraph; seats: SeatRing[] };
+/** junctions: every junction of the drive graph with its approaches, signals and poles (see signals.ts). */
+export type NpcNet = { version: 1; walk: NetGraph; drive: NetGraph; cycle: NetGraph; seats: SeatRing[]; junctions: JunctionInfo[] };
 
 const fail = (what: string): never => {
   throw new Error(`npc.json: ${what}`);
@@ -42,7 +45,9 @@ export function parseNpcNet(json: unknown): NpcNet {
   if (o.version !== 1) fail(`unknown version ${String(o.version)}`);
   const seats = o.seats as SeatRing[];
   if (!Array.isArray(seats) || !seats.every((s) => s && isNum(s.x) && isNum(s.z) && Array.isArray(s.seats) && s.seats.every((q) => isNum(q.x) && isNum(q.z) && isNum(q.heading)))) fail('seats');
-  return { ...(o as object), version: 1, walk: parseGraph(o.walk, 'walk'), drive: parseGraph(o.drive, 'drive'), cycle: parseGraph(o.cycle, 'cycle'), seats } as NpcNet;
+  const junctions = (o.junctions ?? []) as JunctionInfo[];
+  if (!Array.isArray(junctions) || !junctions.every((j) => j && isNum(j.x) && isNum(j.z) && Array.isArray(j.approaches) && Array.isArray(j.turns))) fail('junctions');
+  return { ...(o as object), version: 1, walk: parseGraph(o.walk, 'walk'), drive: parseGraph(o.drive, 'drive'), cycle: parseGraph(o.cycle, 'cycle'), seats, junctions } as NpcNet;
 }
 
 const CELL = 50;
