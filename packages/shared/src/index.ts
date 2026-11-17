@@ -18,3 +18,4 @@ export * from './physics/parkedbikes';
 export * from './physics/surface';
 export * from './net';
 export * from './sim';
+export * from './npc';
