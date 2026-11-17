@@ -1,4 +1,7 @@
-import { NPC_DESPAWN, NPC_MAX, NPC_PLAN_LEAD_S, NPC_SPAWN_FIRST_MIN, NPC_SPAWN_MAX, NPC_SPAWN_MIN, TICK_HZ } from '../net/constants';
+import {
+  KNOCKDOWN_KMH, KNOCKDOWN_S, NPC_DESPAWN, NPC_GIVE_UP_S, NPC_MAX, NPC_PLAN_LEAD_S, NPC_REACT_RADIUS, NPC_SAY_AFTER_S, NPC_SAY_COOLDOWN_S,
+  NPC_SPAWN_FIRST_MIN, NPC_SPAWN_MAX, NPC_SPAWN_MIN, TICK_HZ,
+} from '../net/constants';
 import { linesFor } from '../npc/lines';
 import type { NpcMsg } from '../npc/net';
 import { GraphIndex, type NetLayer, type NpcNet } from '../npc/netgraph';
@@ -62,7 +65,14 @@ export type NpcState = {
   overtakeUntil: number;
   /** While overtaking: the plan's path is longer than its legs by `extra` over its length `at` (legsFrom scales). */
   shift?: { extra: number; at: number };
+  /** Blocked by a player since (tick) or null; tick it last said something. */
+  blockedSince: number | null; saidAt: number;
+  /** Knocked down: lying until this tick, then getting up until getupUntil (0: not). */
+  downUntil: number; getupUntil: number;
 };
+
+/** What a body in the physics world needs of an NPC near a player. */
+export type NpcBody = { id: number; kind: NpcKind; x: number; y: number; z: number; heading: number; pitch: number; vehicleType: number; lying: boolean };
 
 const LAYER_OF: Record<'walker' | 'cyclist' | 'driver', NetLayer> = { walker: 'walk', cyclist: 'cycle', driver: 'drive' };
 
@@ -138,6 +148,8 @@ export class NpcDirector {
   private obstacleGrid = new Map<string, Obstacle[]>();
   /** Turn arcs vehicles have committed to (past the point where they could still stop), by NPC id. */
   private readonly claims = new Map<number, { j: number; layer: 'drive' | 'cycle'; turn: number }>();
+  /** Player id → the NPC scolding them and until when (one at a time). */
+  private readonly scolding = new Map<number, { npc: number; until: number }>();
 
   constructor(readonly net: NpcNet, private readonly heightAt: (x: number, z: number, layer: NetLayer) => number, seed: number) {
     this.rng = prng(seed);
@@ -189,6 +201,7 @@ export class NpcDirector {
   private newMoving(id: number, kind: NpcKind, look: NpcLook, layer: NetLayer, cruise: number, tick: number): NpcState {
     return {
       id, kind, look, layer, legs: [], cruise, nextPlanAt: tick, hold: false, waitingSince: null, cap: Infinity, lastTraffic: -Infinity, overtakeUntil: -1,
+      blockedSince: null, saidAt: -Infinity, downUntil: 0, getupUntil: 0,
       plan: { id, kind, look, startTick: tick, path: [], ramps: [], action: 'wait', seq: -1 },
     };
   }
@@ -226,7 +239,13 @@ export class NpcDirector {
     const msgs: NpcMsg[] = [];
     for (const n of this.npcs.values()) if (n.kind !== 'sitter' && !n.hold && tick >= n.nextPlanAt) this.extend(n, tick, msgs);
     if (tick % TRAFFIC_EVERY === 0) this.refreshObstacles(tick);
-    for (const n of [...this.npcs.values()]) if (n.kind !== 'sitter' && (n.id + tick) % TRAFFIC_EVERY === 0) this.traffic(n, tick, msgs);
+    this.knocks(tick, msgs);
+    for (const n of [...this.npcs.values()]) this.timers(n, tick, msgs);
+    const nearPlayers = this.nearPlayerIds();
+    for (const n of [...this.npcs.values()]) {
+      if (n.kind === 'sitter' || n.downUntil || n.getupUntil) continue;
+      if ((n.id + tick) % TRAFFIC_EVERY === 0 || nearPlayers.has(n.id)) this.traffic(n, tick, msgs);
+    }
     if (tick % CENSUS_EVERY === 0) this.census(tick, foci, msgs);
     return msgs;
   }
@@ -380,17 +399,12 @@ export class NpcDirector {
   private refreshObstacles(tick: number): void {
     const list: Obstacle[] = [];
     for (const n of this.npcs.values()) {
-      if (n.kind === 'sitter') continue;
       const p = planAt(n.plan, tick);
       const size = n.kind === 'driver' ? SIZE.car : n.kind === 'cyclist' ? SIZE.bike : SIZE.person;
       list.push({
         id: n.id, x: p.x, z: p.z, vx: Math.sin(p.heading) * p.speed, vz: Math.cos(p.heading) * p.speed, len: size.len, half: size.half, npc: n,
         mode: n.kind === 'walker' ? 'walk' : n.kind === 'driver' ? 'drive' : 'ride',
       });
-    }
-    for (const pl of this.players) {
-      const size = pl.mode === 'drive' ? SIZE.car : pl.mode === 'ride' ? SIZE.bike : SIZE.person;
-      list.push({ id: -pl.id - 1, x: pl.x, z: pl.z, vx: pl.vx, vz: pl.vz, len: size.len, half: size.half, npc: null, mode: pl.mode });
     }
     this.obstacles = list;
     this.obstacleGrid = new Map();
@@ -400,7 +414,25 @@ export class NpcDirector {
     }
   }
 
+  private playerObstacle(pl: PlayerNear): Obstacle {
+    const size = pl.mode === 'drive' ? SIZE.car : pl.mode === 'ride' ? SIZE.bike : SIZE.person;
+    return { id: -pl.id - 1, x: pl.x, z: pl.z, vx: pl.vx, vz: pl.vz, len: size.len, half: size.half + (pl.mode === 'walk' ? 0.05 : 0), npc: null, mode: pl.mode };
+  }
+
+  /** NPCs (positions from the last refresh) within NPC_REACT_RADIUS of a player: they check traffic every tick. */
+  private nearPlayerIds(): Set<number> {
+    const out = new Set<number>();
+    for (const pl of this.players) for (const o of this.nearNpcObstacles(pl.x, pl.z, NPC_REACT_RADIUS)) out.add(o.id);
+    return out;
+  }
+
   private nearObstacles(x: number, z: number, r: number): Obstacle[] {
+    const out = this.nearNpcObstacles(x, z, r);
+    for (const pl of this.players) if (Math.abs(pl.x - x) <= r + 5 && Math.abs(pl.z - z) <= r + 5) out.push(this.playerObstacle(pl));
+    return out;
+  }
+
+  private nearNpcObstacles(x: number, z: number, r: number): Obstacle[] {
     const out: Obstacle[] = [];
     for (let cx = Math.floor((x - r) / OBST_CELL); cx <= Math.floor((x + r) / OBST_CELL); cx++) {
       for (let cz = Math.floor((z - r) / OBST_CELL); cz <= Math.floor((z + r) / OBST_CELL); cz++) out.push(...(this.obstacleGrid.get(`${cx},${cz}`) ?? []));
@@ -425,16 +457,16 @@ export class NpcDirector {
   }
 
   /** Samples every 1.5 m ahead along pts: distance ahead and position. */
-  private static samples(pts: PathPt[], look: number): { d: number; x: number; z: number }[] {
+  private static samples(pts: PathPt[], look: number, step = 1.5): { d: number; x: number; z: number }[] {
     const out: { d: number; x: number; z: number }[] = [];
-    let acc = 0, next = 0.75;
+    let acc = 0, next = step / 2;
     for (let i = 1; i < pts.length && next <= look; i++) {
       const a = pts[i - 1]!, b = pts[i]!;
       const l = Math.hypot(b.x - a.x, b.z - a.z);
       while (next <= acc + l && next <= look) {
         const t = l > 0 ? (next - acc) / l : 0;
         out.push({ d: next, x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t });
-        next += 1.5;
+        next += step;
       }
       acc += l;
     }
@@ -511,6 +543,11 @@ export class NpcDirector {
         break;
       }
     }
+    // a player standing in the way: say something, go round, give up
+    if (leader && !leader.npc && Math.hypot(leader.vx, leader.vz) < 0.8) {
+      if (this.blockedByPlayer(n, tick, pose, legs, leader, leaderD, stop, msgs)) return;
+    } else if (n.blockedSince !== null && (!leader || leader.npc)) n.blockedSince = null;
+    if (leader?.npc && leader.npc.kind === 'sitter') leader = null;
     // a moving leader: follow at its speed (or overtake a slow cyclist) instead of stopping
     if (leader) {
       const lv = Math.hypot(leader.vx, leader.vz);
@@ -634,6 +671,27 @@ export class NpcDirector {
   /** Walkers wait at signalled crossings until the green man. */
   private walkerTraffic(n: NpcState, tick: number, pose: ReturnType<typeof planAt>, msgs: NpcMsg[]): void {
     const legs = this.legsFrom(n, pose.s);
+    // a player in the way (2.5 m ahead)
+    if (n.overtakeUntil <= tick && this.players.length) {
+      const pts = this.routePoints('walk', legs, 3);
+      const ahead = NpcDirector.samples(pts, 3, 0.4);
+      let hit: { o: Obstacle; d: number } | null = null;
+      for (const pl of this.players) {
+        if (Math.abs(pl.x - pose.x) > 6 || Math.abs(pl.z - pose.z) > 6) continue;
+        const o = this.playerObstacle(pl);
+        for (const sm of ahead) {
+          if (Math.hypot(o.x - sm.x, o.z - sm.z) <= SIZE.person.half + o.half + 0.1) {
+            if (!hit || sm.d < hit.d) hit = { o, d: sm.d };
+            break;
+          }
+        }
+      }
+      if (hit && Math.hypot(hit.o.vx, hit.o.vz) < 0.8) {
+        if (this.blockedByPlayer(n, tick, pose, legs, hit.o, hit.d, hit.d - (SIZE.person.half + hit.o.half + 0.45), msgs)) return;
+        return;
+      }
+      if (n.blockedSince !== null) n.blockedSince = null;
+    }
     let off = 0;
     for (let k = 0; k < legs.length && off <= PED_WAIT + 1; k++) {
       const leg = legs[k]!;
@@ -658,7 +716,7 @@ export class NpcDirector {
    * comes before the manoeuvre ends; returns whether it started.
    */
   private tryOvertake(n: NpcState, tick: number, pose: ReturnType<typeof planAt>, legs: Leg[], leaderD: number, lv: number, msgs: NpcMsg[]): boolean {
-    const layer = 'drive';
+    const layer = n.layer as 'drive' | 'cycle';
     const vme = legs[0] ? legs[0].v : 0;
     if (vme - lv < 2) return false;
     const gain = leaderD + SIZE.car.len + 6;
@@ -702,13 +760,208 @@ export class NpcDirector {
     let pathLen = 0;
     for (let i = 1; i < path.length; i++) pathLen += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.z - path[i - 1]!.z);
     const routeLegs = this.trimLegs(legs, legsLen);
-    const ramps = rampsForLegs([{ len: pathLen, v: vme }], pose.speed, vme, ACCEL.driver);
+    const ramps = rampsForLegs([{ len: pathLen, v: vme }], pose.speed, vme, ACCEL[n.kind as 'driver']);
     msgs.push(this.replan(n, tick, path, ramps, 'move', routeLegs));
     this.setShift(n, path, pathLen - legsLen);
     n.overtakeUntil = tick + Math.ceil((pathLen / vme) * TICK_HZ);
     n.cap = Infinity;
     n.lastTraffic = tick;
     return true;
+  }
+
+  /**
+   * A player stands in n's way `d` m ahead (stop: how far n can go). After NPC_SAY_AFTER_S n says something (cooldown,
+   * one NPC per player at a time; drivers honk), then goes round if there is room, else waits; after NPC_GIVE_UP_S it
+   * turns back. Returns whether it changed n's plan beyond holding.
+   */
+  private blockedByPlayer(n: NpcState, tick: number, pose: ReturnType<typeof planAt>, legs: Leg[], o: Obstacle, d: number, stop: number, msgs: NpcMsg[]): boolean {
+    const playerId = -o.id - 1;
+    n.blockedSince ??= tick;
+    const since = tick - n.blockedSince;
+    if (since >= NPC_SAY_AFTER_S * TICK_HZ && pose.speed < 0.3) {
+      const sc = this.scolding.get(playerId);
+      const free = !sc || sc.until <= tick || sc.npc === n.id || !this.npcs.has(sc.npc);
+      if (free && tick - n.saidAt >= NPC_SAY_COOLDOWN_S * TICK_HZ) {
+        const lines = linesFor(n.kind === 'driver' ? 'blockedCar' : 'blocked');
+        msgs.push({ t: 'say', id: n.id, line: lines[Math.floor(this.rng() * lines.length)]! });
+        if (n.kind === 'driver') msgs.push({ t: 'honk', id: n.id });
+        n.saidAt = tick;
+        this.scolding.set(playerId, { npc: n.id, until: tick + 3 * TICK_HZ });
+      }
+      if (since >= NPC_GIVE_UP_S * TICK_HZ) {
+        if (this.turnBack(n, tick, pose, legs, msgs)) {
+          n.blockedSince = null;
+          return true;
+        }
+      } else if (n.kind === 'walker' ? this.stepAround(n, tick, pose, legs, o, d, msgs) : this.tryOvertake(n, tick, pose, legs, d, 0, msgs)) {
+        n.blockedSince = null;
+        return true;
+      }
+    }
+    this.holdAt(n, tick, pose, legs, Math.max(0, stop), msgs);
+    return true;
+  }
+
+  /** A walker goes round a person on a wide enough way: sideways past them and back onto its line. */
+  private stepAround(n: NpcState, tick: number, pose: ReturnType<typeof planAt>, legs: Leg[], o: Obstacle, d: number, msgs: NpcMsg[]): boolean {
+    const leg = legs[0];
+    if (!leg) return false;
+    const width = this.net.walk.edges[leg.edge]!.width;
+    const hx = Math.sin(pose.heading), hz = Math.cos(pose.heading);
+    const lat = (o.x - pose.x) * -hz + (o.z - pose.z) * hx; // the obstacle's offset right of n's line
+    const clear = o.half + SIZE.person.half + 0.25;
+    const side = lat > 0 ? -1 : 1; // pass on the side away from it
+    const target = lat + side * clear; // n's offset right of its line while passing
+    if (Math.abs(target) > width / 2 - 0.2) return false;
+    const total = d + clear + 2.5;
+    const routeLen = legs.reduce((a, l) => a + Math.abs(l.to - l.from), 0);
+    if (routeLen < total + 1) return false;
+    const base = densifyPath(this.routePoints('walk', legs, Math.min(routeLen, total + 10)), 0.5);
+    const rampIn = Math.max(0.6, d - 0.6), rampOut = 1.5;
+    let acc = 0;
+    const path = base.map((p, i) => {
+      if (i > 0) acc += Math.hypot(p.x - base[i - 1]!.x, p.z - base[i - 1]!.z);
+      const k = acc < rampIn ? acc / rampIn : acc > total - rampOut ? Math.max(0, (total - acc) / rampOut) : 1;
+      const off = target * smooth(Math.min(1, k));
+      const q = base[Math.min(base.length - 1, i + 1)]!, r = base[Math.max(0, i - 1)]!;
+      const dl = Math.hypot(q.x - r.x, q.z - r.z) || 1;
+      // right of travel: (-dz, dx) / l
+      return { x: p.x - ((q.z - r.z) / dl) * off, y: p.y, z: p.z + ((q.x - r.x) / dl) * off };
+    });
+    let pathLen = 0;
+    for (let i = 1; i < path.length; i++) pathLen += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.z - path[i - 1]!.z);
+    const ramps = rampsForLegs([{ len: pathLen, v: n.cruise }], pose.speed, n.cruise, ACCEL.walker);
+    msgs.push(this.replan(n, tick, path, ramps, 'move', this.trimLegs(legs, acc)));
+    this.setShift(n, path, pathLen - acc);
+    n.hold = false;
+    n.waitingSince = null;
+    n.overtakeUntil = tick + Math.ceil((pathLen / n.cruise) * TICK_HZ);
+    n.lastTraffic = tick;
+    return true;
+  }
+
+  /** Gives up: walkers walk back the way they came, vehicles turn onto the lane the other way. */
+  private turnBack(n: NpcState, tick: number, pose: ReturnType<typeof planAt>, legs: Leg[], msgs: NpcMsg[]): boolean {
+    const layer = n.layer as NetLayer;
+    const leg = legs[0];
+    if (!leg) return false;
+    let back: Leg | null = null;
+    const e = this.net[layer].edges[leg.edge]!;
+    if (!e.oneway) {
+      back = { ...leg, to: leg.to >= leg.from ? 0 : this.ix[layer].length(leg.edge) };
+    } else {
+      // the nearest edge running the other way within 5 m to the left
+      const hx = Math.sin(pose.heading), hz = Math.cos(pose.heading);
+      const lx = pose.x + hz * 3, lz = pose.z - hx * 3;
+      const ix = this.ix[layer];
+      for (const i of ix.near(lx, lz, 6)) {
+        const f = this.net[layer].edges[i]!;
+        const [ax, az] = f.pts[0]!, [bx, bz] = f.pts[f.pts.length - 1]!;
+        const fl = Math.hypot(bx - ax, bz - az) || 1;
+        if (((bx - ax) * hx + (bz - az) * hz) / fl > -0.7) continue;
+        const near = ix.nearestEdge(lx, lz, 6);
+        if (!near || near.edge !== i) continue;
+        back = { edge: i, from: near.s, to: ix.length(i), v: this.legSpeed(n, layer, i) };
+        break;
+      }
+    }
+    if (!back) return false;
+    n.legs = [back];
+    n.shift = undefined;
+    n.plan = { ...n.plan, path: [{ x: pose.x, y: pose.y, z: pose.z }], ramps: [{ s0: 0, s1: 0, v0: 0.3, v1: 0.3 }], action: 'move' };
+    n.hold = false;
+    n.waitingSince = null;
+    n.cap = Infinity;
+    n.lastTraffic = tick;
+    this.extend(n, tick, msgs);
+    return true;
+  }
+
+  /** Players in cars or on bikes faster than KNOCKDOWN_KMH knock down the walkers and cyclists they run into. */
+  private knocks(tick: number, msgs: NpcMsg[]): void {
+    for (const pl of this.players) {
+      if (pl.mode === 'walk') continue;
+      const v = Math.hypot(pl.vx, pl.vz);
+      if (v < 0.5) continue;
+      const size = pl.mode === 'drive' ? SIZE.car : SIZE.bike;
+      const fx = pl.vx / v, fz = pl.vz / v;
+      for (const o of this.nearNpcObstacles(pl.x, pl.z, 8)) {
+        const n = o.npc!;
+        if ((n.kind !== 'walker' && n.kind !== 'cyclist') || n.downUntil || n.getupUntil) continue;
+        const p = planAt(n.plan, tick);
+        const dx = p.x - pl.x, dz = p.z - pl.z;
+        const along = dx * fx + dz * fz, lat = Math.abs(dx * -fz + dz * fx);
+        const r = n.kind === 'walker' ? SIZE.person.half : SIZE.bike.half;
+        if (Math.abs(along) > size.len / 2 + r + v / TICK_HZ || lat > size.half + r) continue;
+        if (v * 3.6 > KNOCKDOWN_KMH) this.knockDown(n, tick, p, fx, fz, v, msgs);
+        else this.shove(n, tick, p, dx * -fz + dz * fx >= 0 ? -fz : fz, dx * -fz + dz * fx >= 0 ? fx : -fx, msgs);
+      }
+    }
+  }
+
+  private knockDown(n: NpcState, tick: number, p: ReturnType<typeof planAt>, fx: number, fz: number, v: number, msgs: NpcMsg[]): void {
+    const fly = 0.9 * v, t = 0.4, dist = fly * t;
+    const end = { x: p.x + fx * dist, z: p.z + fz * dist };
+    const layer = n.layer as NetLayer;
+    const path: PathPt[] = [
+      { x: p.x, y: p.y, z: p.z },
+      { x: (p.x + end.x) / 2, y: p.y + 0.5, z: (p.z + end.z) / 2 },
+      { x: end.x, y: this.heightAt(end.x, end.z, layer), z: end.z },
+    ];
+    let len = 0;
+    for (let i = 1; i < path.length; i++) len += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y, path[i]!.z - path[i - 1]!.z);
+    msgs.push(this.replan(n, tick, path, [{ s0: 0, s1: len, v0: len / t, v1: len / t }], 'down', n.legs));
+    n.hold = true;
+    n.nextPlanAt = Infinity;
+    n.downUntil = tick + Math.round((t + KNOCKDOWN_S) * TICK_HZ);
+    n.blockedSince = null;
+    n.overtakeUntil = -1;
+    this.claims.delete(n.id);
+  }
+
+  /** A slow vehicle pushes a person or cyclist aside (0.8 m to the side, away from its path). */
+  private shove(n: NpcState, tick: number, p: ReturnType<typeof planAt>, sx: number, sz: number, msgs: NpcMsg[]): void {
+    if (tick - n.lastTraffic < 10) return;
+    const to = { x: p.x + sx * 0.8, z: p.z + sz * 0.8 };
+    const path = [{ x: p.x, y: p.y, z: p.z }, { x: to.x, y: this.heightAt(to.x, to.z, n.layer as NetLayer), z: to.z }];
+    msgs.push(this.replan(n, tick, path, rampsForLegs([{ len: 0.8, v: 2 }], 2, 0, 6), 'move', n.legs));
+    n.hold = true;
+    n.nextPlanAt = Infinity;
+    n.lastTraffic = tick;
+  }
+
+  /** Lying → getting up → on its way again (saying what it thinks of that). */
+  private timers(n: NpcState, tick: number, msgs: NpcMsg[]): void {
+    if (n.downUntil && tick >= n.downUntil) {
+      const p = planAt(n.plan, tick);
+      const h = p.heading;
+      msgs.push(this.replan(n, tick, [{ x: p.x, y: p.y, z: p.z }, { x: p.x + Math.sin(h) * 0.5, y: p.y, z: p.z + Math.cos(h) * 0.5 }], [], 'getup', n.legs));
+      n.downUntil = 0;
+      n.getupUntil = tick + TICK_HZ;
+      if (this.rng() < 0.3) msgs.push({ t: 'say', id: n.id, line: linesFor('getup')[0]! });
+    } else if (n.getupUntil && tick >= n.getupUntil) {
+      n.getupUntil = 0;
+      msgs.push({ t: 'say', id: n.id, line: linesFor('hit')[0]! });
+      n.saidAt = tick;
+      n.hold = true;
+      this.resume(n, tick, msgs);
+    }
+  }
+
+  /** NPCs within r of any of the points at tick, as physics bodies need them. */
+  bodiesNear(tick: number, points: readonly { x: number; z: number }[], r: number): NpcBody[] {
+    const out: NpcBody[] = [];
+    const seen = new Set<number>();
+    for (const q of points) {
+      for (const n of this.npcs.values()) {
+        if (seen.has(n.id)) continue;
+        const p = planAt(n.plan, tick);
+        if (Math.abs(p.x - q.x) > r || Math.abs(p.z - q.z) > r || Math.hypot(p.x - q.x, p.z - q.z) > r) continue;
+        seen.add(n.id);
+        out.push({ id: n.id, kind: n.kind, x: p.x, y: p.y, z: p.z, heading: p.heading, pitch: p.pitch, vehicleType: n.look.vehicleType, lying: n.plan.action === 'down' });
+      }
+    }
+    return out;
   }
 
   /** legs cut to their first `len` m. */
@@ -873,6 +1126,7 @@ export class NpcDirector {
       const st: NpcState = {
         id, kind: 'sitter', look, layer: 'seat', legs: [], cruise: 0, nextPlanAt: Infinity, ring: ringIx, seat: k,
         hold: false, waitingSince: null, cap: Infinity, lastTraffic: -Infinity, overtakeUntil: -1,
+        blockedSince: null, saidAt: -Infinity, downUntil: 0, getupUntil: 0,
         plan: { id, kind: 'sitter', look, startTick: tick, path, ramps: [], action: 'sit', seq: 0 },
       };
       this.npcs.set(id, st);

@@ -415,6 +415,8 @@ const SERVICE_MIN = 30;
 const TURN_POINTS = 6;
 /** Cut-back at junctions is capped at this (m). */
 const CUT_MAX = 20;
+/** Junction nodes joined by a way piece shorter than this (m) are one junction. */
+const MERGE_NODES = 12;
 
 /** Distance (m) from the way's centre line to the lane's centre on side (+1 right of the way, -1 left) at arc length s. */
 type LaneOffset = (r: Road, side: number, s: number) => number;
@@ -482,9 +484,36 @@ function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunct
       start = i;
     }
   }
+  // nodes joined by a piece shorter than MERGE_NODES form one junction (OSM splits big junctions into several nodes)
+  const parent = new Map<string, string>();
+  const find = (k: string): string => {
+    let r = k;
+    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(k, r);
+    return r;
+  };
+  const internal = new Set<LanePiece>();
+  for (const pc of pieces) {
+    const a = pc.pts[0]!, z = pc.pts[pc.pts.length - 1]!;
+    if (!isNode(a) || !isNode(z) || pc.s[pc.s.length - 1]! - pc.s[0]! >= MERGE_NODES) continue;
+    const ra = find(key(a)), rz = find(key(z));
+    if (ra !== rz) parent.set(ra, rz);
+    internal.add(pc);
+  }
+  const clusterPts = new Map<string, Pt[]>();
+  for (const pc of pieces) {
+    for (const p of [pc.pts[0]!, pc.pts[pc.pts.length - 1]!]) {
+      if (!isNode(p)) continue;
+      const c = find(key(p));
+      const list = clusterPts.get(c) ?? [];
+      if (!list.some((q) => key(q) === key(p))) list.push(p);
+      clusterPts.set(c, list);
+    }
+  }
   const arms = new Map<string, LArm[]>();
   const armOf = new Map<string, LArm>();
   pieces.forEach((pc, pieceIx) => {
+    if (internal.has(pc)) return;
     for (const atStart of [true, false]) {
       const end = atStart ? pc.pts[0]! : pc.pts[pc.pts.length - 1]!;
       const next = atStart ? pc.pts[1]! : pc.pts[pc.pts.length - 2]!;
@@ -493,13 +522,16 @@ function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunct
       const arm: LArm = { pc, atStart, dir: unitOf(end, next), kerb, inEnd: null, outStart: null, inLine: null, outLine: null, rightKerb: 0 };
       armOf.set(`${pieceIx}:${atStart}`, arm);
       if (!isNode(end)) continue;
-      const list = arms.get(key(end)) ?? [];
+      const c = find(key(end));
+      const list = arms.get(c) ?? [];
       list.push(arm);
-      arms.set(key(end), list);
+      arms.set(c, list);
     }
   });
   const cutOf = (a: LArm): number => {
-    const list = arms.get(key(a.atStart ? a.pc.pts[0]! : a.pc.pts[a.pc.pts.length - 1]!));
+    const end = a.atStart ? a.pc.pts[0]! : a.pc.pts[a.pc.pts.length - 1]!;
+    if (!isNode(end)) return 0;
+    const list = arms.get(find(key(end)));
     if (!list) return 0;
     let cut = 0;
     for (const o of list) {
@@ -512,6 +544,7 @@ function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunct
   };
 
   pieces.forEach((pc, idx) => {
+    if (internal.has(pc)) return;
     const a0 = armOf.get(`${idx}:true`)!, a1 = armOf.get(`${idx}:false`)!;
     const total = pc.s[pc.s.length - 1]! - pc.s[0]!;
     const c0 = cutOf(a0), c1 = cutOf(a1);
@@ -557,7 +590,8 @@ function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunct
       }
     }
     if (list.length < 3) continue;
-    const at = list[0]!.atStart ? list[0]!.pc.pts[0]! : list[0]!.pc.pts[list[0]!.pc.pts.length - 1]!;
+    const cp = clusterPts.get(k) ?? [];
+    const at = { x: cp.reduce((a, p) => a + p.x, 0) / (cp.length || 1), z: cp.reduce((a, p) => a + p.z, 0) / (cp.length || 1) };
     junctions.push({
       key: k, x: at.x, z: at.z, turns,
       arms: list.map((a) => ({ road: a.pc.r, dir: a.dir, kerb: a.kerb, inEnd: a.inEnd, inLine: a.inLine, rightKerb: a.rightKerb, laneWidth: a.pc.r.cross.laneWidth })),

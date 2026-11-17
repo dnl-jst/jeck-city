@@ -92,6 +92,18 @@ test('a midblock signal gets a pedestrian phase', () => {
   for (const a of mb[0]!.approaches) expect(a.group).toBe(0);
 });
 
+test('a signal node lights only its nearest junction', () => {
+  // two junctions 25 m apart, one signal 5 m from the first
+  const roads = [...cross4(), road([{ x: 100, z: 0 }, { x: 125, z: 0 }]), road([{ x: 25, z: -100 }, { x: 25, z: 0 }]), road([{ x: 25, z: 0 }, { x: 25, z: 100 }])];
+  const r = roads.map((x) => x);
+  // the east arm of the cross passes x = 25: split it there
+  r[1] = road([o, { x: 25, z: 0 }]);
+  r.push(road([{ x: 25, z: 0 }, { x: 100, z: 0 }]));
+  const js = net(r, { signals: [{ x: 4, z: 3 }] }).junctions;
+  expect(js.filter((j) => j.signal).length).toBe(1);
+  expect(Math.hypot(js.find((j) => j.signal)!.x, js.find((j) => j.signal)!.z)).toBeLessThan(1);
+});
+
 test('junctions get different signal offsets', () => {
   const roads = [...cross4(), road([{ x: 100, z: 0 }, { x: 200, z: 0 }]), road([{ x: 100, z: -100 }, { x: 100, z: 0 }]), road([{ x: 100, z: 0 }, { x: 100, z: 100 }])];
   const js = net(roads, { signals: [o, { x: 100, z: 0 }] }).junctions.filter((j) => j.signal && !j.signal.midblock);

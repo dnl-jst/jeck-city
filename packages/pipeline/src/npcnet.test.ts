@@ -133,6 +133,17 @@ test('junction offers turns but no U-turns', () => {
   for (const e of arriving) expect(ix.out(e.b).length).toBe(3);
 });
 
+test('a junction split into two nodes 6 m apart still connects every arm', () => {
+  // a main road through (0,0) and (6,0); a side road leaves at each node
+  const a = { x: 0, z: 0 }, b = { x: 6, z: 0 };
+  const roads = [road([{ x: -80, z: 0 }, a]), road([a, b]), road([b, { x: 80, z: 0 }]), road([a, { x: 0, z: -80 }]), road([b, { x: 6, z: 80 }])];
+  const g = buildDriveGraph(roads);
+  const ix = new GraphIndex(g);
+  // from the lane arriving from the west, three ways on (east, north, south)
+  const west = g.edges.find((e) => dirOf(e).x > 50 && e.pts[0]![0] < -70)!;
+  expect(ix.out(west.b).length).toBe(3);
+});
+
 test('cycle lanes sit right of the drive lanes', () => {
   const r = road([{ x: 0, z: 0 }, { x: 100, z: 0 }]);
   const east = (g: NetGraph) => g.edges.find((e) => dirOf(e).x > 50)!;

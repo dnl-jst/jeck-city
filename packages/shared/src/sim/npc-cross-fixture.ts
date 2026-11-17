@@ -22,7 +22,7 @@ export type CrossNet = {
  * other out-lane, and a turning loop at each arm's far end. Walk graph: sidewalks 5 m off the centre line, crossings
  * 10 m from the centre, corners. One junction info entry: groups N/S = 0, E/W = 1; ranks per arm; signal or not.
  */
-export function crossNet(opts: { signal?: boolean; offsetTicks?: number; ranks?: Partial<Record<Arm, number>>; len?: number } = {}): CrossNet {
+export function crossNet(opts: { signal?: boolean; offsetTicks?: number; ranks?: Partial<Record<Arm, number>>; len?: number; walkWidth?: number } = {}): CrossNet {
   const len = opts.len ?? 100;
   const drive: NetGraph = { nodes: [], edges: [] };
   const node = (g: NetGraph, x: number, z: number): number => {
@@ -71,7 +71,7 @@ export function crossNet(opts: { signal?: boolean; offsetTicks?: number; ranks?:
   const crossing = {} as Record<Arm, number>, sidewalk = {} as Record<Arm, number>;
   for (const a of ARMS) {
     crossing[a] = edge(walk, [along(a, CROSS_AT, WALK_OFF), along(a, CROSS_AT, -WALK_OFF)], false, { crossing: true });
-    sidewalk[a] = edge(walk, [along(a, len, -WALK_OFF), along(a, CROSS_AT, -WALK_OFF)], false);
+    sidewalk[a] = edge(walk, [along(a, len, -WALK_OFF), along(a, CROSS_AT, -WALK_OFF)], false, { width: opts.walkWidth ?? 3 });
     edge(walk, [along(a, CROSS_AT, WALK_OFF), along(a, len, WALK_OFF)], false);
   }
   ARMS.forEach((a, i) => {

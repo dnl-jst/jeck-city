@@ -69,6 +69,16 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
   const cycleIx = new GraphIndex(cycle.graph);
   const turnEdges = new Set(drive.junctions.flatMap((lj) => lj.turns.flatMap((l) => drive.b.edgesOf.get(l) ?? [])));
   const rng = prng(seed);
+  // every signal node belongs to the nearest junction within SIGNAL_RADIUS (one signal must not light up several)
+  const signalsOf = new Map<LaneJunction, number[]>();
+  signals.forEach((s, i) => {
+    let best: LaneJunction | null = null, bd = SIGNAL_RADIUS;
+    for (const lj of drive.junctions) {
+      const d = dist(s, lj);
+      if (d <= bd) [best, bd] = [lj, d];
+    }
+    if (best) signalsOf.set(best, [...(signalsOf.get(best) ?? []), i]);
+  });
 
   const rankOf = (road: Road, j: Pt): number => {
     let r = (RANK[road.kind] ?? 2) + (road.priority ? 1 : 0);
@@ -79,8 +89,8 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
   for (const lj of drive.junctions) {
     const centre = { x: lj.x, z: lj.z };
     const groups = axisGroups(lj.arms.map((a) => a.dir));
-    const sig = signals.map((s, i) => [s, i] as const).filter(([s]) => dist(s, centre) <= SIGNAL_RADIUS);
-    for (const [, i] of sig) usedSignals.add(i);
+    const sig = signalsOf.get(lj) ?? [];
+    for (const i of sig) usedSignals.add(i);
     const signalled = sig.length > 0;
     const approaches: Approach[] = [];
     const armOfApproach: number[] = [];
