@@ -31,8 +31,10 @@ kölschen Spruch (Sprechblase) und warten dann, bis der Weg frei ist, oder gehen
 ## Nicht-Ziele (diese Version)
 
 - Keine gesprochenen Stimmen (später, Abschnitt „Später: Stimmen“).
-- Keine Ampeln, keine Verkehrsregeln jenseits von „rechts fahren, Abstand halten, an Kreuzungen langsam, wer zuerst
-  kommt, fährt zuerst“.
+- Keine Verkehrsregeln jenseits von „rechts fahren, Abstand halten, Ampeln, Vorfahrt“ (Abschnitt 9). Keine Schilder,
+  keine Abbiegespuren, keine Grüne Welle.
+- Keine Strafen für Spieler: Ampeln und Vorfahrt gelten für Spieler nur optisch (Nutzer offen gelassen, Claudes
+  Entscheidung). Wer bei Rot fährt, merkt es nur an NPCs, die bremsen, hupen und schimpfen.
 - Keine Straßenbahn, keine Busse.
 - NPCs steigen nicht in geparkte Autos oder auf abgestellte Räder; NPC-Fahrzeuge sind eigene Fahrzeuge, die mit dem NPC
   entstehen und verschwinden.
@@ -120,8 +122,7 @@ Das Netz wird nur vom Server gelesen. Clients brauchen es nicht, weil die Pläne
 - **Routen:** Ein bewegter NPC wählt an jedem Knoten zufällig (geseedeter PRNG) eine Fortsetzung, ohne direkt
   umzukehren. Passanten queren Straßen nur an Querungen bzw. Kreuzungen.
 - **Abstand:** NPC-Autos und -Räder halten Abstand zum Vordermann auf derselben Spur (Bremsen statt Auffahren). An
-  Kreuzungen fährt zuerst, wer zuerst ankommt (Reservierung des Kreuzungsknotens). NPC-Autos halten für Passanten auf
-  Querungen an.
+  Kreuzungen gelten Ampeln bzw. Vorfahrt (Abschnitt 9). NPC-Autos halten für Passanten auf Querungen an.
 - **Parkgruppen:** sitzen, bewegen Kopf und Hände abwechselnd, als würden sie reden. Kommt ein Spieler auf ≤ 4 m
   heran, schauen sie zu ihm. Gelegentlich zeigt einer eine kurze Sprechblase mit kölschem Smalltalk (Liste in
   Abschnitt 5).
@@ -270,8 +271,46 @@ bekommen. Schreibweise vor dem Merge von jemandem prüfen lassen, der Kölsch sp
    Speicher stabil) und **mindestens 150 aktive NPCs** über den ganzen Lauf (Startwert, die Bots stehen alle in 300 m
    um den Spawn). Das Protokoll nennt NPC-Zahl, NPC-Anteil an der Tick-Zeit und den Eingriff der Last-Bremse.
 5. **Sichtprüfung:** Screenshots/Playwright mit GPU an mehreren Orten (Neusser Straße, ein Park, eine Kreuzung,
-   Domplatte): NPCs auf Gehwegen, Autos auf der rechten Spur, Parkgruppe sitzend, Sprechblase beim Blockieren.
+   Domplatte): NPCs auf Gehwegen, Autos auf der rechten Spur, Parkgruppe sitzend, Sprechblase beim Blockieren;
+   eine Ampelkreuzung bei Tag und Nacht (Autos warten bei Rot an der Haltelinie, Passanten queren bei Grün), eine
+   Kreuzung ohne Ampel (rechts vor links). Ampelmodell zusätzlich als Blender-Standbilder.
 6. Bestehende Checks bleiben grün: `npm test`, `npm run typecheck`, `npm run drive-check`, `npm run mp-check`.
+
+### 9. Ampeln und Vorfahrt (Nutzer, 2026-11-17: im selben Branch)
+
+**Ampeln:**
+- **Wo:** Aus OSM `highway=traffic_signals` (~1000 Knoten; oft mehrere je Kreuzung) bildet die Pipeline
+  **Ampelkreuzungen**: Signal-Knoten im Umkreis von 30 m um einen Kreuzungsknoten gehören zu ihm. Signale mitten auf
+  einer Strecke (Fußgängerampel) werden eine eigene Ampel nur für die Querung.
+- **Was steht da:** je Zufahrt ein Mast rechts an der Haltelinie mit Autoampel (rot/gelb/grün) und, wo ein Gehweg
+  quert, Fußgängerampeln (rotes/grünes Männchen) an beiden Enden der Querung. Haltelinie als Markierung auf der
+  Fahrbahn. Masten stehen auf dem Gehweg an der Bordsteinkante, nicht auf der Fahrbahn, nicht in Hauseingängen.
+- **Modell (Nutzer):** in Blender gebaut, nach den Konventionen in `data/models/README.md` (`build.py` erzeugt
+  `.blend` + `.glb`, headless). Typische Kölner/deutsche Ampel: grauer Mast, schwarzes Gehäuse mit drei Lichtern und
+  Blende, Fußgängersignal mit zwei Lichtern; Knoten für die einzelnen Lichter, damit der Client sie schaltet.
+  Lichter leuchten (emissiv) und sind nachts gut sichtbar. Der Mast ist Kollision wie eine Laterne (fest, kippt nicht).
+- **Phasen:** Jede Ampelkreuzung hat einen festen Umlauf aus zwei Phasen (Zufahrten paarweise nach Richtung
+  gruppiert, z. B. Nord/Süd und Ost/West): Grün 20 s, Gelb 3 s, Rot-Gelb 1 s, Allrot 2 s. Fußgänger parallel zur
+  grünen Fahrtrichtung haben Grün, mit 5 s früherem Ende. Bei mehr als vier Zufahrten: die zwei Gruppen nach dem
+  Winkel aufteilen. Fußgängerampel auf der Strecke: Umlauf 40 s, davon 12 s Fußgänger-Grün. Jede Kreuzung hat einen
+  festen Versatz aus ihrer Kennung, damit nicht alle gleichzeitig schalten.
+- **Synchron ohne Netz:** Die Phase ist eine reine Funktion `signalAt(ampel, tick)` in `@nn/shared`, ausgewertet am
+  Server-Tick (Client: Schätzung wie für die Interpolation). Es geht nichts übers Netz.
+- **NPCs:** Autos und Radfahrer halten bei Rot und Gelb (wenn sie noch sicher halten können) an der Haltelinie und
+  fahren bei Grün. Passanten queren an Ampelquerungen nur bei Grün; wer schon auf der Fahrbahn ist, geht weiter.
+  NPC-Autos, die bei Grün abbiegen, lassen Passanten mit Grün auf der Querung durch (bestehende Querungsregel).
+
+**Vorfahrt ohne Ampel (Nutzer: rechts vor links):**
+- Kreuzungen ohne Ampel, an denen gleichrangige Straßen zusammenkommen: **rechts vor links.** Ein NPC-Fahrzeug fährt
+  in die Kreuzung, wenn kein anderes Fahrzeug von rechts innerhalb von 3 s an der Kreuzung ist.
+- **Vorfahrtstraße (Claudes Entscheidung):** In Deutschland sind Hauptstraßen fast immer per Schild bevorrechtigt, und
+  OSM hat diese Schilder kaum. Näherung: Eine Straße höherer Klasse (`primary` > `secondary` > `tertiary` >
+  `residential`/`unclassified` > `living_street`/`service`) hat Vorfahrt vor einer niedrigeren; nur unter gleichen
+  Klassen gilt rechts vor links. Wo OSM `priority_road=*` oder `highway=give_way`/`stop` kennt, gilt das.
+- **Verklemmung:** Stehen an allen Zufahrten Fahrzeuge (rechts vor links blockiert sich selbst), fährt nach 2 s das
+  Fahrzeug, das am längsten wartet.
+- **Spieler** zählen für die Vorfahrt mit: Kommt ein Spieler-Fahrzeug von rechts, wartet der NPC. Nimmt ein Spieler
+  einem NPC die Vorfahrt, bremst der NPC (Korridorprüfung) und hupt bzw. schimpft.
 
 ## Später: Stimmen
 
