@@ -4,6 +4,7 @@ export * from './assets/map';
 export * from './assets/collision';
 export * from './assets/terrain';
 export * from './sun';
+export * from './weather';
 export * from './physics/tuning';
 export * from './physics/world';
 export * from './physics/character';
