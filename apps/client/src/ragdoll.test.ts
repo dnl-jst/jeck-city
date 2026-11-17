@@ -189,4 +189,35 @@ describe('ragdoll', () => {
     expect(hips.z).toBeGreaterThan(front - 2.1);
     expect(fastest).toBeLessThan(front + 6); // struck, not shot away
   });
+
+  test('lying still after a tumble, the joints are within a body\'s range (not crumpled)', async () => {
+    const pw = await createPhysicsWorld(city());
+    const w = new RagdollWorld(pw);
+    const throws = [[{ x: 0, y: 2.2, z: 7 }, 3.5], [{ x: 3, y: 3, z: -6 }, -2.5], [{ x: -8, y: 1, z: 2 }, 0], [{ x: 0, y: 4, z: 10 }, 6]] as const;
+    for (const [v, spin] of throws) {
+      const f = new PlayerFigure(new Scene());
+      f.ride(seat, grips, pedals, 'sport');
+      f.ragdoll(w, v, spin, 10);
+      run(f, w, new Vector3(0, 0, 0), 2.5);
+      const body = f.group.children[0]!;
+      const torso = body.children.find((c) => c.position.x === 0 && c.position.y > 0.5)!;
+      const legs = body.children.filter((c) => Math.abs(c.position.x) > 0.05);
+      const arms = torso.children.filter((c) => Math.abs(c.position.x) > 0.1);
+      const e = (o: { quaternion: Quaternion }) => new Euler().setFromQuaternion(o.quaternion, 'XYZ');
+      // the spine bends forward at most ~90°, back a little, hardly twists
+      expect(e(torso).x).toBeGreaterThan(-0.75);
+      expect(e(torso).x).toBeLessThan(1.75);
+      expect(Math.abs(e(torso).y)).toBeLessThan(0.85);
+      for (const leg of legs) {
+        expect(e(leg).x).toBeGreaterThan(-2.6);
+        expect(e(leg).x).toBeLessThan(0.8);
+      }
+      for (const arm of arms) {
+        const fore = arm.children.find((c) => c.position.y < -0.1)!;
+        // elbows never bend backwards: the forearm (rest: straight down the upper arm) does not point behind it
+        const d = new Vector3(0, -1, 0).applyQuaternion(fore.quaternion);
+        expect(d.z).toBeGreaterThan(-0.3); // (the limits give a little, ~15°)
+      }
+    }
+  });
 });

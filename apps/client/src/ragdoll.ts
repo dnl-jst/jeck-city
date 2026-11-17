@@ -7,8 +7,6 @@ type Vec3 = { x: number; y: number; z: number };
 /** Ragdoll spin (rad/s per m/s of throw, at most SPIN_MAX): over the handlebar head first; hit by a car, legs swept away. */
 export const CRASH_SPIN = 0.5, KNOCK_SPIN = -0.3;
 const SPIN_MAX = 6;
-/** Thrown over the handlebar: the body keeps the bike's velocity and gets this much upwards (m/s). */
-export const CRASH_RAG_UP = 2.2;
 /** Spin for a throw at v: `perMs` × horizontal speed, capped either way. */
 export function ragSpin(v: Vec3, perMs: number): number {
   return Math.max(-SPIN_MAX, Math.min(SPIN_MAX, perMs * Math.hypot(v.x, v.z)));

@@ -89,6 +89,8 @@ const PROXIMITY_EVERY = 30;
 const RESET_CHECK_EVERY = 60;
 /** Feet above the surface when placed (spawn, getting out). */
 const DROP = 0.02;
+/** A rider's hips above the bike's ground (m): a crash throws them from there. */
+const RIDER_HIPS = 1.0;
 /** A spawn spot closer than this (m) to another player's feet is taken. */
 const SPAWN_PERSON_GAP = 1;
 const KMH = 1 / 3.6;
@@ -461,8 +463,8 @@ export class WorldSim {
         ev.push({ t: 'bell', id, x: s.x, z: s.z });
       }
       if (r.crashed) {
-        // thrown on (over the handlebar) with a share of the speed it hit the obstacle with
-        const h = pl.ridden!.state().heading, v = r.crashSpeed * TUNING.bike.crashThrow;
+        // thrown on over the handlebar with the speed the bike hit the obstacle with
+        const h = pl.ridden!.state().heading, v = r.crashSpeed;
         this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v });
       }
     } else if (pl.car === null) {
@@ -617,6 +619,8 @@ export class WorldSim {
     const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
     this.leaveBike(id, pl, spot, s, true, ev);
     pl.fallTicks = FALL_TICKS;
+    // thrown from the saddle (the hips at about RIDER_HIPS above the bike's ground), not from beside the bike
+    pl.char.teleport({ x: s.x, y: s.y + RIDER_HIPS - TUNING.character.radius, z: s.z });
     pl.char.knock(thrown, FALL_TICKS);
   }
 

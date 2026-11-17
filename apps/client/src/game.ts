@@ -19,7 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
-import { CRASH_RAG_UP, CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
+import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -438,8 +438,6 @@ export class Game {
 
   /** Off the bike (heading: the bike's): stepped off, or crashed (into something, or hit by a car) and fell. */
   private leftBike(heading: number, crash: boolean, hitByCar = false): void {
-    // the bike's last velocity before it stopped: the rider's body keeps it
-    const b = this.currBike, bv = b ? { x: Math.sin(b.heading) * b.speed, z: Math.cos(b.heading) * b.speed } : { x: 0, z: 0 };
     this.currBike = this.prevBike = null;
     if (this.rig) {
       this.rig.detachLights();
@@ -455,9 +453,9 @@ export class Game {
     this.ctx.hud.setHint('');
     this.ctx.audio?.dismountBike();
     if (crash) {
-      // from the riding pose: flies on over the handlebar with the bike's speed, or with the car's push and some of its own
-      const k = this.knockVelocity();
-      const v = hitByCar ? { x: k.x + bv.x * 0.5, y: k.y, z: k.z + bv.z * 0.5 } : { x: bv.x, y: CRASH_RAG_UP, z: bv.z };
+      // from the riding pose, thrown as the sim throws the player (WorldSim.crash): over the handlebar with the bike's
+      // speed, or with the car's push and half of its own
+      const v = this.knockVelocity();
       this.figure.ragdoll(this.ragdolls, v, ragSpin(v, hitByCar ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
       this.ctx.audio?.crashBike();
     }

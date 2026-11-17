@@ -91,14 +91,23 @@ test('crashing into a tree throws the rider off: no control until up again', asy
   const p = sim.player(1);
   expect(p.mode).toBe('down');
   expect(p.falling).toBe(true);
-  // thrown on with the bike's momentum and lying: walking input (sideways here) and E do nothing
-  const from = p.pos;
-  const ev = run(sim, Math.round(TUNING.bike.getUpSeconds * 60) - 2, { ...N, forward: 1, use: true, yaw: Math.PI / 2 });
+  // thrown from the saddle into the tree: bounces off it and comes down in front of it, never past it; meanwhile
+  // walking input (sideways here) and E do nothing
+  const bike = sim.bikes.poses[0]!;
+  let top = 0, past = -Infinity;
+  const ev: SimEvent[] = [];
+  for (let t = 0; t < Math.round(TUNING.bike.getUpSeconds * 60) - 2; t++) {
+    ev.push(...sim.step(new Map([[1, { ...N, forward: 1, use: true, yaw: Math.PI / 2 }]])));
+    const q = sim.player(1).pos;
+    top = Math.max(top, q.y);
+    past = Math.max(past, q.z);
+  }
   expect(ev.filter((e) => e.t === 'mount' || e.t === 'enter')).toEqual([]);
   const at = sim.player(1).pos;
-  expect(Math.abs(at.x - from.x)).toBeLessThan(0.1);
-  expect(at.z - from.z).toBeGreaterThan(0.3);
-  expect(at.z - from.z).toBeLessThan(14); // (thrown at 0.85 × a sprint, it lands and slides on a few metres)
+  expect(top).toBeGreaterThan(0.6); // in the air from the saddle
+  expect(past).toBeLessThan(-10 - 0.3); // the trunk at z = −10 stops it
+  expect(Math.hypot(at.x - bike.x, at.z - bike.z)).toBeLessThan(3);
+  expect(at.y).toBeLessThan(0.1); // lying on the ground by now
   run(sim, 5);
   expect(sim.player(1).mode).toBe('walk');
   expect(sim.player(1).falling).toBe(false);

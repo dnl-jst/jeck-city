@@ -98,7 +98,9 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
       const s = bike.state();
       if (fast) {
         knocked.add(id);
-        sim.knockOffBike(id, ev, { x: vel.x * 0.9, y: vel.y * 0.9 + KNOCK_UP, z: vel.z * 0.9 });
+        // the car's push plus half the rider's own momentum
+        const bx = Math.sin(s.heading) * s.speed * 0.5, bz = Math.cos(s.heading) * s.speed * 0.5;
+        sim.knockOffBike(id, ev, { x: vel.x * 0.9 + bx, y: vel.y * 0.9 + KNOCK_UP, z: vel.z * 0.9 + bz });
         ev.push({ t: 'knock', id, by: i });
         ev.push({ t: 'impact', x: s.x, z: s.z, strength: speed });
         struck = true;

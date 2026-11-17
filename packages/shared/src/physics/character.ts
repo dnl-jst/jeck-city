@@ -13,8 +13,18 @@ type Vec3 = { x: number; y: number; z: number };
  */
 export type CharacterState = { x: number; y: number; z: number; vx: number; vy: number; vz: number; grounded: boolean; downTicks: number };
 
-/** Horizontal deceleration of a knocked-down person on the ground (m/s²). */
-const KNOCK_FRICTION = 6;
+/** Horizontal deceleration of a knocked-down person sliding on the ground (m/s²). */
+const KNOCK_FRICTION = 7;
+/**
+ * A knocked-down (thrown, lying) person moves as a ball of the capsule's radius, its bottom at the feet position: it
+ * flies, bounces off walls, trees and cars (KNOCK_BOUNCE of the speed into them; KNOCK_BOUNCE_GROUND off the ground)
+ * and slides out, like the body the client shows as a ragdoll. Bikes and people do not stop it.
+ */
+const KNOCK_BOUNCE = 0.3, KNOCK_BOUNCE_GROUND = 0.15;
+/** The thrown ball's query groups: member of bit 0 (so cars, which ignore people, still count), never bikes or people. */
+const KNOCK_QUERY_GROUPS = 0x0001_ffe7;
+/** Ground: a contact normal at least this steep upwards. */
+const GROUND_NY = 0.6;
 
 const T = TUNING.character;
 /** Every step is exactly one fixed world step, so client prediction and server stay in lockstep. */
@@ -66,30 +76,21 @@ export class Character {
 
   applyInput(i: CharacterInput): void {
     if (!this.enabled) return;
-    let vx = 0, vz = 0;
     if (this.downTicks > 0) {
-      // knocked down: input is ignored, the knock velocity slides out with ground friction
-      vx = this.kvx;
-      vz = this.kvz;
-      if (this.grounded) {
-        const sp = Math.hypot(vx, vz);
-        const k = sp > 0 ? Math.max(0, sp - KNOCK_FRICTION * DT) / sp : 0;
-        this.kvx *= k;
-        this.kvz *= k;
-      }
-    } else {
-      let f = i.forward, r = i.right;
-      const l = Math.hypot(f, r);
-      if (l > 1) { f /= l; r /= l; }
-      const speed = i.run ? T.runSpeed : T.walkSpeed;
-      const s = Math.sin(i.yaw), c = Math.cos(i.yaw);
-      // forward = (sin, cos), right = forward × up = (−cos, sin)
-      vx = (f * s - r * c) * speed;
-      vz = (f * c + r * s) * speed;
-      if (i.jump && this.grounded) {
-        this.vy = T.jumpSpeed;
-        this.grounded = false;
-      }
+      this.thrownStep();
+      return;
+    }
+    let f = i.forward, r = i.right;
+    const l = Math.hypot(f, r);
+    if (l > 1) { f /= l; r /= l; }
+    const speed = i.run ? T.runSpeed : T.walkSpeed;
+    const s = Math.sin(i.yaw), c = Math.cos(i.yaw);
+    // forward = (sin, cos), right = forward × up = (−cos, sin)
+    const vx = (f * s - r * c) * speed;
+    const vz = (f * c + r * s) * speed;
+    if (i.jump && this.grounded) {
+      this.vy = T.jumpSpeed;
+      this.grounded = false;
     }
     this.vy += T.gravity * DT;
 
@@ -106,10 +107,54 @@ export class Character {
     const p = this.body.translation();
     this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
     this.vel = { x: m.x / DT, y: m.y / DT, z: m.z / DT };
-    if (this.downTicks > 0) this.downTicks--;
   }
 
-  /** Knocked down for `ticks` steps: input is ignored and the capsule flies/slides with velocity v (gravity and ground friction act). */
+  /**
+   * One step knocked down: the ball (see KNOCK_BOUNCE) moves with the knock velocity under gravity, swept against the
+   * world; every contact takes the speed into the surface back with a bounce, ground contact slides it out.
+   */
+  private thrownStep(): void {
+    const { rapier: R, world } = this.pw;
+    const rad = T.radius;
+    const ball = new R.Ball(rad);
+    const p = this.body.translation();
+    let cx = p.x, cy = p.y - CENTRE + rad, cz = p.z;
+    let vx = this.kvx, vy = this.vy + T.gravity * DT, vz = this.kvz;
+    let grounded = false;
+    let left = DT;
+    for (let k = 0; k < 4 && left > 1e-6; k++) {
+      const hit = world.castShape({ x: cx, y: cy, z: cz }, { x: 0, y: 0, z: 0, w: 1 }, { x: vx, y: vy, z: vz }, ball, T.skin, left, false,
+        R.QueryFilterFlags.EXCLUDE_SENSORS, KNOCK_QUERY_GROUPS, this.collider, this.body);
+      const t = hit ? Math.min(left, hit.time_of_impact) : left;
+      cx += vx * t; cy += vy * t; cz += vz * t;
+      left -= t;
+      if (!hit) break;
+      // the surface's normal towards the ball: normal1, in world space as the ball is not turned (normal2 is in the hit
+      // collider's own frame)
+      const n = hit.normal1, vn = vx * n.x + vy * n.y + vz * n.z;
+      const ground = n.y > GROUND_NY;
+      if (ground) grounded = true;
+      if (vn < 0) {
+        const e = 1 + (ground ? KNOCK_BOUNCE_GROUND : KNOCK_BOUNCE);
+        vx -= e * vn * n.x; vy -= e * vn * n.y; vz -= e * vn * n.z;
+      }
+      if (ground && Math.abs(vy) < 1) vy = 0; // resting on it, not hopping
+    }
+    if (grounded) {
+      const sp = Math.hypot(vx, vz), k = sp > 0 ? Math.max(0, sp - KNOCK_FRICTION * DT) / sp : 0;
+      vx *= k;
+      vz *= k;
+    }
+    this.kvx = vx; this.kvz = vz; this.vy = grounded && vy <= 0 ? 0 : vy;
+    this.grounded = grounded;
+    const feet = { x: cx, y: cy - rad, z: cz };
+    this.body.setNextKinematicTranslation({ x: feet.x, y: feet.y + CENTRE, z: feet.z });
+    this.vel = { x: (feet.x - p.x) / DT, y: (feet.y + CENTRE - p.y) / DT, z: (feet.z - p.z) / DT };
+    this.pushX = this.pushZ = 0;
+    this.downTicks--;
+  }
+
+  /** Knocked down for `ticks` steps: input is ignored, the person is thrown with velocity v as a ball (see KNOCK_BOUNCE). */
   knock(v: Vec3, ticks: number): void {
     this.kvx = v.x;
     this.kvz = v.z;

@@ -53,6 +53,19 @@ export const RISE_S = RISE_BLEND + Math.max(GET_UP_PRONE.at(-1)!.t, GET_UP_SUPIN
  * body neither folds like cloth nor stays stiff. Knees are hinges with limits.
  */
 const TONE = { spine: [40, 6], neck: [25, 3], hip: [8, 1.5], shoulder: [3, 0.8], elbow: [4, 0.8], knee: [3, 0.8] } as const;
+/**
+ * How far the ball joints turn (rad, about the parent's x, y, z; sign conventions of update(): + x bends the torso and
+ * head forward, − x swings a thigh or an arm forward and bends an elbow), so a body lying still is not crumpled.
+ * Sideways (z) ranges are for the left side (+x); the right side mirrors them.
+ */
+type Range = readonly [number, number];
+const RANGE: Record<'spine' | 'neck' | 'hip' | 'shoulder' | 'elbow', readonly [Range, Range, Range]> = {
+  spine: [[-0.5, 1.5], [-0.6, 0.6], [-0.45, 0.45]],
+  neck: [[-0.8, 0.9], [-1.1, 1.1], [-0.5, 0.5]],
+  hip: [[-2.3, 0.5], [-0.6, 0.6], [-0.3, 0.9]],
+  shoulder: [[-3.0, 1.0], [-1.3, 1.3], [-0.5, 2.8]],
+  elbow: [[-2.6, -0.05], [-1.3, 1.3], [-0.4, 0.4]],
+};
 /** Knee hinge range (rad, flexion positive about the shin's x axis). */
 const KNEE_MIN = -0.02, KNEE_MAX = 2.5;
 
@@ -732,7 +745,7 @@ export class PlayerFigure {
     world.addCollider(R.ColliderDesc.roundCuboid(Math.max(0.08, p.shoulder.x - 0.13), Math.max(0.05, neck.y / 2 - 0.08), 0.06, 0.05)
       .setTranslation(0, neck.y / 2, 0), torso);
     world.addCollider(R.ColliderDesc.ball(0.11).setTranslation(0, 0.12, 0.01), head);
-    const joint = (a: RAPIER.RigidBody, b: RAPIER.RigidBody, anchor: Vector3, tone: readonly [number, number]) => {
+    const joint = (a: RAPIER.RigidBody, b: RAPIER.RigidBody, anchor: Vector3, tone: readonly [number, number], range: readonly [Range, Range, Range], side = 1) => {
       const j = world.world.createImpulseJoint(R.JointData.spherical(anchor, { x: 0, y: 0, z: 0 }), a, b, true);
       // rapier.js 0.21 reports a spherical joint as generic and wraps it without the motor methods: borrow them
       const S = R.SphericalImpulseJoint.prototype;
@@ -740,9 +753,15 @@ export class PlayerFigure {
         S.configureMotorModel.call(j, ax, R.MotorModel.AccelerationBased);
         S.configureMotorPosition.call(j, ax, 0, tone[0], tone[1]);
       }
+      // limits per angular axis (the raw set takes any axis; the generic wrapper has no setter for them)
+      const raw = (j as unknown as { rawSet: { jointSetLimits(h: number, axis: number, min: number, max: number): void } }).rawSet;
+      const [rx, ry, rz] = range;
+      raw.jointSetLimits(j.handle, R.JointAxis.AngX, rx[0], rx[1]);
+      raw.jointSetLimits(j.handle, R.JointAxis.AngY, ry[0], ry[1]);
+      raw.jointSetLimits(j.handle, R.JointAxis.AngZ, side > 0 ? rz[0] : -rz[1], side > 0 ? rz[1] : -rz[0]);
     };
-    joint(pelvis, torso, this.torso.position, TONE.spine);
-    joint(torso, head, neck, TONE.neck);
+    joint(pelvis, torso, this.torso.position, TONE.spine, RANGE.spine);
+    joint(torso, head, neck, TONE.neck, RANGE.neck);
     for (let i = 0; i < 2; i++) {
       const thigh = parts[3 + i]!.body, shin = parts[5 + i]!.body, upper = parts[7 + i]!.body, fore = parts[9 + i]!.body;
       const knee = this.shins[i]!.position, ankle = this.feet[i]!.position, elbow = this.forearms[i]!.position;
@@ -752,9 +771,10 @@ export class PlayerFigure {
       world.addCollider(R.ColliderDesc.cuboid(0.045, 0.035, 0.12).setTranslation(ankle.x, ankle.y - 0.03, ankle.z + 0.05), shin);
       capsule(upper, elbow, 0.055);
       capsule(fore, this.hands[i]!.position.clone().add(this.segs(i).palm), 0.045);
-      joint(pelvis, thigh, this.legs[i]!.position, TONE.hip);
-      joint(torso, upper, this.arms[i]!.position, TONE.shoulder);
-      joint(upper, fore, elbow, TONE.elbow);
+      const side = i === 0 ? 1 : -1;
+      joint(pelvis, thigh, this.legs[i]!.position, TONE.hip, RANGE.hip, side);
+      joint(torso, upper, this.arms[i]!.position, TONE.shoulder, RANGE.shoulder, side);
+      joint(upper, fore, elbow, TONE.elbow, RANGE.elbow, side);
       const k = world.world.createImpulseJoint(R.JointData.revolute(knee, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }), thigh, shin, true) as RAPIER.RevoluteImpulseJoint;
       k.setLimits(KNEE_MIN, KNEE_MAX);
       k.configureMotorModel(R.MotorModel.AccelerationBased);
