@@ -11,6 +11,8 @@ export function bootErrorMessage(e: unknown): string {
 export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · H hupen · R Radio · N Ton · M Karte · G Grafik · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
+/** Bottom hint while driving a car. */
+export const DRIVE_HINT = 'W Gas · S bremsen/rückwärts · A/D lenken · Leertaste Handbremse · H hupen · R Radio (halten: Senderwahl) · Mausrad Sender · E aussteigen';
 /** Bottom hint while riding a bike. */
 export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
 /** Bottom hint on the sound Long John (radio through its box). */

@@ -1,6 +1,6 @@
 import { describe, expect, it, test } from 'vitest';
 import { FetchError, NoWebGLError } from './errors';
-import { bootErrorMessage, CONTROLS_HINT, HUD_CSS, RIDE_HINT } from './hud';
+import { bootErrorMessage, CONTROLS_HINT, DRIVE_HINT, HUD_CSS, RIDE_HINT } from './hud';
 
 describe('bootErrorMessage', () => {
   it('names missing WebGL', () => {
@@ -34,4 +34,8 @@ test('controls hint names the map key', () => {
 
 test('riding hint names the bike keys', () => {
   expect(RIDE_HINT).toBe('W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen');
+});
+
+test('driving hint names the car keys', () => {
+  for (const k of ['W Gas', 'Leertaste Handbremse', 'H hupen', 'R Radio', 'E aussteigen']) expect(DRIVE_HINT).toContain(k);
 });
