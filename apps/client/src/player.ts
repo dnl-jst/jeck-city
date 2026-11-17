@@ -13,10 +13,13 @@ const GET_UP = 0.5;
 /** Knocked down by a car: seconds to fall over backwards and to get up again (setDown). */
 export const DOWN_IN_S = 0.25, DOWN_OUT_S = 0.3;
 
-/** Ragdoll: pulled towards the sim's position after this long, once its pelvis is slower than PULL_SLOW (m/s). */
-const PULL_AFTER_S = 0.6, PULL_SLOW = 1.5;
-/** Pull towards the sim's position (1/s², 1/s) once the ragdoll strays further than PULL_FREE_M. */
-const PULL_K = 10, PULL_C = 4, PULL_FREE_M = 0.25;
+/**
+ * The ragdoll's centre of mass follows the sim's position (the thrown ball the camera follows, or the streamed
+ * position of another player): a stiff spring and damper towards it and its velocity (1/s², 1/s), the same
+ * acceleration on every part so the body moves as one and only arms, legs and the turning are left to the joints.
+ * TRACK_Y: the centre of mass above the sim's feet position; TRACK_MAX: the most acceleration (m/s²) it applies.
+ */
+const TRACK_K = 50, TRACK_C = 14, TRACK_Y = 0.2, TRACK_MAX = 80;
 
 /**
  * A get-up keyframe in the frame of the spot the figure will stand on (feet at the origin, facing +z): hip joint
@@ -282,7 +285,11 @@ export class PlayerFigure {
   private downTarget = 0;
   private down = 0;
   /** Ragdoll (ragdoll()): its parts (body per skeleton group), seconds since it started, when it gets up. */
-  private rag: { world: RagdollWorld; parts: { node: Object3D; body: RAPIER.RigidBody }[]; t: number; upAt: number } | null = null;
+  private rag: {
+    world: RagdollWorld; parts: { node: Object3D; body: RAPIER.RigidBody }[]; t: number; upAt: number;
+    /** The sim position last frame and its velocity (smoothed), to track. */
+    last: Vector3 | null; vel: Vector3;
+  } | null = null;
   /** Getting up from the ragdoll: from its last pose to standing at the sim's position, over RISE_S. */
   private rise: { t: number; pos: Vector3; q: Quaternion; locals: Quaternion[]; heading: number; keys: Key[]; from: Vector3 } | null = null;
 
@@ -789,7 +796,7 @@ export class PlayerFigure {
     this.scene.add(this.group);
     this.group.position.set(0, 0, 0);
     this.group.rotation.set(0, 0, 0);
-    this.rag = { world, parts, t: 0, upAt: Math.max(0.3, upSeconds - RISE_S) };
+    this.rag = { world, parts, t: 0, upAt: Math.max(0.3, upSeconds - RISE_S), last: null, vel: new Vector3(v.x, v.y, v.z) };
     this.readRagdoll();
     this.model?.apply();
   }
@@ -819,18 +826,27 @@ export class PlayerFigure {
   private tickRagdoll(x: number, y: number, z: number, dt: number): void {
     const rag = this.rag!;
     rag.t += dt;
-    const pelvis = rag.parts[0]!.body;
-    const c = pelvis.worldCom();
+    // the whole body's centre of mass and velocity
+    let m = 0;
+    const c = new Vector3(), v = new Vector3();
+    for (const { body } of rag.parts) {
+      const bm = body.mass(), p = body.worldCom(), lv = body.linvel();
+      m += bm;
+      c.x += p.x * bm; c.y += p.y * bm; c.z += p.z * bm;
+      v.x += lv.x * bm; v.y += lv.y * bm; v.z += lv.z * bm;
+    }
+    c.divideScalar(m);
+    v.divideScalar(m);
     rag.world.cover(c.x, c.z);
-    // lying: drawn towards where the sim has the player (it gets up there), never yanked
-    const lv = pelvis.linvel();
-    if (rag.t > PULL_AFTER_S && Math.hypot(lv.x, lv.y, lv.z) < PULL_SLOW) {
-      const dx = x - c.x, dz = z - c.z, d = Math.hypot(dx, dz);
-      if (d > PULL_FREE_M) {
-        const v = pelvis.linvel(), f = (d - PULL_FREE_M) / d;
-        const ax = PULL_K * dx * f - PULL_C * v.x, az = PULL_K * dz * f - PULL_C * v.z;
-        for (const { body } of rag.parts) body.applyImpulse({ x: ax * body.mass() * dt, y: 0, z: az * body.mass() * dt }, true);
-      }
+    // follow the sim's position: where it is and how fast it moves (from frame to frame, smoothed)
+    const target = new Vector3(x, y + TRACK_Y, z);
+    if (rag.last && dt > 1e-4) rag.vel.lerp(target.clone().sub(rag.last).divideScalar(dt), Math.min(1, dt * 20));
+    rag.last = target.clone();
+    const a = target.sub(c).multiplyScalar(TRACK_K).add(rag.vel.clone().sub(v).multiplyScalar(TRACK_C));
+    if (a.length() > TRACK_MAX) a.setLength(TRACK_MAX);
+    for (const { body } of rag.parts) {
+      const k = body.mass() * dt;
+      body.applyImpulse({ x: a.x * k, y: a.y * k, z: a.z * k }, true);
     }
     this.readRagdoll();
     // fell through the world (a gap in the copied surroundings): stand up where the sim is

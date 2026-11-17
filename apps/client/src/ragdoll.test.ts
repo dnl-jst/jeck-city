@@ -40,6 +40,41 @@ function run(f: PlayerFigure, w: RagdollWorld, at: Vector3, seconds: number) {
   return { lo, hi };
 }
 
+/**
+ * A stand-in for the sim's thrown position (feet): from `from` at v under gravity, sliding out at 7 m/s² on the
+ * ground at y = 0 (as Character's knocked-down ball, without walls).
+ */
+function thrown(from: Vector3, v: { x: number; y: number; z: number }) {
+  const p = from.clone(), u = new Vector3(v.x, v.y, v.z);
+  return (dt: number) => {
+    u.y -= 9.81 * dt;
+    p.addScaledVector(u, dt);
+    if (p.y <= 0) {
+      p.y = 0;
+      u.y = 0;
+      const sp = Math.hypot(u.x, u.z), k = sp > 0 ? Math.max(0, sp - 7 * dt) / sp : 0;
+      u.x *= k;
+      u.z *= k;
+    }
+    return p;
+  };
+}
+
+/** Runs the figure for `seconds` at 60 fps following `sim` (the sim's feet position each frame); returns the largest distance of its centre from it while in the air. */
+function follow(f: PlayerFigure, w: RagdollWorld, sim: (dt: number) => Vector3, seconds: number): number {
+  let worst = 0;
+  for (let i = 0; i < Math.round(seconds * 60); i++) {
+    w.step(1 / 60);
+    const p = sim(1 / 60);
+    f.update(p.x, p.y, p.z, { x: 0, y: 0, z: 0 }, 1 / 60);
+    if (!f.ragdolling || i < 12) continue; // (it settles onto the track in the first frames)
+    f.group.updateMatrixWorld(true);
+    const hips = f.group.children[0]!.localToWorld(new Vector3(0, 0.92, 0));
+    if (p.y > 0.3) worst = Math.max(worst, Math.hypot(hips.x - p.x, hips.z - p.z));
+  }
+  return worst;
+}
+
 describe('ragdoll', () => {
   test('a rider thrown off at 25 km/h flies, comes to rest on the ground and gets up where the sim is', async () => {
     const pw = await createPhysicsWorld(city());
@@ -198,7 +233,7 @@ describe('ragdoll', () => {
       const f = new PlayerFigure(new Scene());
       f.ride(seat, grips, pedals, 'sport');
       f.ragdoll(w, v, spin, 10);
-      run(f, w, new Vector3(0, 0, 0), 2.5);
+      follow(f, w, thrown(new Vector3(0, 0.7, 0), v), 2.5);
       const body = f.group.children[0]!;
       const torso = body.children.find((c) => c.position.x === 0 && c.position.y > 0.5)!;
       const legs = body.children.filter((c) => Math.abs(c.position.x) > 0.05);
@@ -220,4 +255,14 @@ describe('ragdoll', () => {
       }
     }
   }, 20_000);
+
+  test('the body flies along with the sim\'s position (the camera follows that), not on a course of its own', async () => {
+    const pw = await createPhysicsWorld(city());
+    const w = new RagdollWorld(pw);
+    const f = new PlayerFigure(new Scene());
+    f.ride(seat, grips, pedals, 'upright');
+    const v = { x: 0, y: 4, z: 6 };
+    f.ragdoll(w, v, 3, 10);
+    expect(follow(f, w, thrown(new Vector3(0, 0.7, 0), v), 1.2)).toBeLessThan(0.5);
+  });
 });
