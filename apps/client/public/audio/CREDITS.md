@@ -33,4 +33,4 @@ loops were made seamless with a short tail-into-head crossfade (sample-continuou
 
 | File | Source | Notes |
 |---|---|---|
-| intro-song.m4a | „Kölle, du bist unser Ding“, made by the project owner with [Suno](https://suno.com) | title song on the intro and loading screens; converted from Opus to AAC 160 kbit/s |
+| intro-song.m4a | „Fasching im Stadtzentrum“, made by the project owner with [Suno](https://suno.com) | title song on the intro and loading screens; converted from Opus to AAC 160 kbit/s |
