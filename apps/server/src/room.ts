@@ -209,12 +209,12 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     log('error', 'uncaught exception', { method: methodName, error: String(error), stack: error.stack });
   }
 
-  /** Test and diagnostics access: the input queue / slot of a session. */
   /** Publishes a new weather to everyone (only changed fields travel). */
   setWeather(w: Weather): void {
     Object.assign(this.state.weather, w);
   }
 
+  /** Test and diagnostics access: the input queue / slot of a session. */
   queueOf(sessionId: string): InputQueue | undefined {
     return this.seats.get(sessionId)?.queue;
   }

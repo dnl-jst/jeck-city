@@ -97,6 +97,19 @@ describe('WeatherService', () => {
     svc.stop();
   });
 
+  it('stop() during a fetch: no warning, no reschedule', async () => {
+    const fetchJson = vi.fn((s: AbortSignal) =>
+      new Promise<unknown>((_res, rej) => s.addEventListener('abort', () => rej(new Error('aborted')))));
+    const { svc, onUpdate } = make(fetchJson);
+    svc.start();
+    await vi.advanceTimersByTimeAsync(100);
+    svc.stop();
+    await vi.advanceTimersByTimeAsync(WEATHER_RETRY_MS * 3);
+    expect(fetchJson).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.filter((c) => c[0] === 'warn' || c[0] === 'debug')).toHaveLength(0);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('stop() cancels the pending timer', async () => {
     const fetchJson = vi.fn().mockResolvedValue(SAMPLE);
     const { svc } = make(fetchJson);

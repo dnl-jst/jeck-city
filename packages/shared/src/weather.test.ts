@@ -37,7 +37,23 @@ test('kind floors on precip', () => {
   expect(parse({ weather_code: 61, precipitation: 0 })!.precip).toBeGreaterThanOrEqual(1);
   expect(parse({ weather_code: 51, precipitation: 0 })!.precip).toBeGreaterThanOrEqual(0.3);
   expect(parse({ weather_code: 71, precipitation: 0 })!.precip).toBeGreaterThanOrEqual(0.5);
-  expect(parse({ weather_code: 0, precipitation: 0.2 })!.precip).toBeCloseTo(0.8);
+});
+
+test('dry kinds never rain, whatever precipitation says', () => {
+  for (const code of [0, 1, 2, 3, 45, 48]) expect(parse({ weather_code: code, precipitation: 0.2 })!.precip, String(code)).toBe(0);
+});
+
+test('wind and visibility plausibility', () => {
+  expect(parse({ wind_speed_10m: -0.1 })).toBeNull();
+  expect(parse({ wind_speed_10m: 300.1 })).toBeNull();
+  expect(parse({ wind_speed_10m: 0 })!.windSpeed).toBe(0);
+  expect(parse({ wind_speed_10m: 300 })!.windSpeed).toBe(300);
+  expect(parse({ wind_direction_10m: 360 })!.windDir).toBe(0);
+  expect(parse({ wind_direction_10m: 370 })!.windDir).toBe(10);
+  expect(parse({ wind_direction_10m: -90 })!.windDir).toBe(270);
+  expect(parse({ wind_direction_10m: -0 })!.windDir).toBe(0);
+  expect(parse({ visibility: -1 })).toBeNull();
+  expect(parse({ visibility: 0 })!.visibility).toBe(0);
 });
 
 test('snow flag', () => {
@@ -79,6 +95,7 @@ test('presets', () => {
   expect(weatherPreset(null)).toBeNull();
   expect(weatherPreset(undefined)).toBeNull();
   for (const n of WEATHER_PRESETS) expect(weatherPreset(n), n).not.toBeNull();
+  expect(weatherPreset('mist')).toMatchObject({ kind: 'fog', cloud: 1, precip: 0, visibility: 700 });
   expect(UNKNOWN_WEATHER).toMatchObject({ known: false, kind: 'clear', cloud: 0, precip: 0, visibility: 50000, label: '' });
 });
 

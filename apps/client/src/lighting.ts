@@ -51,6 +51,13 @@ const OVERCAST_HEMI_GAIN = 0.3;
 const MIN_FOG_FAR = 60;
 /** Weather fog starts at this share of its far distance at the latest. */
 const FOG_NEAR_SHARE = 0.3;
+/**
+ * Fog far per metre of reported visibility. Linear fog with this far reads like the reported visibility: real fog
+ * (a few hundred m) and mist (~1 km) close in visibly even at the short view distance of quality 'low'.
+ */
+const FOG_VIS_SCALE = 0.35;
+/** Below this visibility (m: haze) the fog starts nearer and far shrinks to up to half; at and above it nothing changes. */
+const HAZE_VIS = 5000;
 
 function greyTowards(c: Color, k: number): void {
   const g = (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) * OVERCAST_GREY;
@@ -87,10 +94,24 @@ export function skyClearness(overcast: number): number {
   return Math.min(1, Math.max(0, 1 - overcast / CLOUD_HIDES));
 }
 
-/** Fog distances (m) pulled in to the visibility (m); far never below MIN_FOG_FAR, near always before far. */
-export function weatherFog(near: number, far: number, visibility: number): { near: number; far: number } {
-  const f = Math.min(far, Math.max(MIN_FOG_FAR, visibility));
-  return { near: Math.min(near, f * FOG_NEAR_SHARE), far: f };
+export type FogRange = { near: number; far: number };
+
+/**
+ * Fog distances (m) for a visibility (m), written into `out` (no allocation per frame). From HAZE_VIS on the fog stays
+ * as it is; below, near moves towards the camera and far shrinks (haze), and far follows the visibility perceptually
+ * (FOG_VIS_SCALE) down to MIN_FOG_FAR (fog). Far never grows past `far`, near always stays before far.
+ */
+export function weatherFog(near: number, far: number, visibility: number, out: FogRange = { near: 0, far: 0 }): FogRange {
+  if (!(visibility < HAZE_VIS)) {
+    out.near = near;
+    out.far = far;
+    return out;
+  }
+  const t = Math.max(0, visibility / HAZE_VIS); // 0 dense fog .. 1 light haze
+  const f = Math.min(far, Math.max(MIN_FOG_FAR, Math.min(far * (0.5 + 0.5 * t), visibility * FOG_VIS_SCALE)));
+  out.far = f;
+  out.near = Math.min(near * t, f * FOG_NEAR_SHARE);
+  return out;
 }
 
 /** Indices of the `n` lamps nearest to (x, z), nearest first, leaving out those in `skip`. */
@@ -265,14 +286,7 @@ export class Lighting {
     this.fog.color.copy(mood.horizon);
     const near = (150 - 90 * night) * this.viewScale;
     const far = (FULL_VIEW - 200 * night) * this.viewScale;
-    if (look.visibility >= far) {
-      this.fog.near = near;
-      this.fog.far = far;
-    } else {
-      const f = weatherFog(near, far, look.visibility);
-      this.fog.near = f.near;
-      this.fog.far = f.far;
-    }
+    weatherFog(near, far, look.visibility, this.fog);
     this.facadeSky.value.copy(mood.horizon).lerp(mood.zenith, 0.4);
     this.facadeNight.value = night;
 

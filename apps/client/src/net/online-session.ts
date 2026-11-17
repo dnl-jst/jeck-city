@@ -202,7 +202,7 @@ export class OnlineSession implements Session {
   /** The city's weather as synced through the room state; null until it is known. */
   weather(): Weather | null {
     const w = this.link.state.weather;
-    return w.known ? w : null;
+    return w?.known ? w : null;
   }
 
   stats(): NetStats {

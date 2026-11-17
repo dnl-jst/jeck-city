@@ -89,6 +89,36 @@ describe('weatherFog', () => {
     expect(f.far).toBeLessThanOrEqual(200);
     expect(f.near).toBeLessThan(f.far);
   });
+  it('closes real fog in even at the short view distance of quality low', () => {
+    const f = weatherFog(69, 300, 800);
+    expect(f.far).toBeLessThan(300);
+    expect(f.far).toBeLessThan(800 * 0.4);
+    expect(f.near).toBeLessThan(f.far);
+    const night = weatherFog(28, 208, 700);
+    expect(night.far).toBeLessThan(208);
+  });
+  it('pulls near in a little for haze, more for thicker haze', () => {
+    const haze = weatherFog(69, 300, 3000);
+    expect(haze.near).toBeLessThan(69);
+    expect(haze.near).toBeGreaterThan(69 * 0.4);
+    expect(haze.far).toBeLessThanOrEqual(300);
+    expect(weatherFog(69, 300, 1500).near).toBeLessThan(haze.near);
+  });
+  it('is monotonic in visibility and keeps near < far', () => {
+    let prev = { near: 0, far: 0 };
+    for (const v of [0, 100, 300, 700, 1500, 3000, 4999, 5000, 20000, 50000]) {
+      const f = weatherFog(150, 650, v);
+      expect(f.near).toBeLessThan(f.far);
+      expect(f.far).toBeGreaterThanOrEqual(prev.far);
+      expect(f.near).toBeGreaterThanOrEqual(prev.near);
+      prev = f;
+    }
+  });
+  it('writes into the given object', () => {
+    const out = { near: 1, far: 2 };
+    expect(weatherFog(150, 650, 700, out)).toBe(out);
+    expect(out.far).toBeLessThan(650);
+  });
   it('never brings far below 60 m', () => {
     for (const v of [0, 10, 59, 60, 61]) {
       const f = weatherFog(150, 650, v);

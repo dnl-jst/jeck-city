@@ -28,6 +28,8 @@ export type Weather = {
 };
 
 const MAX_VISIBILITY = 50_000;
+/** Wind speeds above this (km/h) are implausible for Cologne: the sample is rejected. */
+const MAX_WIND_KMH = 300;
 
 export const UNKNOWN_WEATHER: Weather = {
   known: false, kind: 'clear', cloud: 0, precip: 0, snow: false, visibility: MAX_VISIBILITY,
@@ -106,19 +108,25 @@ export function parseOpenMeteo(json: unknown, now: number): Weather | null {
   if (temperature < -50 || temperature > 60) return null;
   if (cloudPct < 0 || cloudPct > 100) return null;
   if (precipitation < 0) return null;
+  if (visibility < 0) return null;
+  if (windSpeed < 0 || windSpeed > MAX_WIND_KMH) return null;
   const wc = weatherCode(code);
   if (!wc) return null;
 
-  const precip = Math.max(precipitation * 3600 / interval, KIND_FLOOR[wc.kind] ?? 0);
+  // a dry code (clear/cloudy/fog) never rains, whatever the precipitation field says: the badge must match the sky
+  const floor = KIND_FLOOR[wc.kind];
+  const precip = floor === undefined ? 0 : Math.max(precipitation * 3600 / interval, floor);
   return {
     known: true, kind: wc.kind, label: wc.label, cloud: cloudPct / 100, precip, snow: wc.kind === 'snow',
-    visibility: Math.min(Math.max(visibility, 0), MAX_VISIBILITY), windSpeed, windDir, temperature, updatedAt: now,
+    visibility: Math.min(visibility, MAX_VISIBILITY), windSpeed, windDir: ((windDir % 360) + 360) % 360 + 0,
+    temperature, updatedAt: now,
   };
 }
 
 const PRESETS: Record<string, Omit<Weather, 'known' | 'updatedAt'>> = {
   clear: { kind: 'clear', label: 'klar', cloud: 0.1, precip: 0, snow: false, visibility: MAX_VISIBILITY, windSpeed: 8, windDir: 250, temperature: 18 },
   cloudy: { kind: 'cloudy', label: 'bedeckt', cloud: 1, precip: 0, snow: false, visibility: 20000, windSpeed: 15, windDir: 250, temperature: 12 },
+  mist: { kind: 'fog', label: 'Nebel', cloud: 1, precip: 0, snow: false, visibility: 700, windSpeed: 4, windDir: 90, temperature: 6 },
   fog: { kind: 'fog', label: 'Nebel', cloud: 1, precip: 0, snow: false, visibility: 150, windSpeed: 3, windDir: 90, temperature: 5 },
   drizzle: { kind: 'drizzle', label: 'Nieselregen', cloud: 1, precip: 0.4, snow: false, visibility: 8000, windSpeed: 10, windDir: 250, temperature: 9 },
   rain: { kind: 'rain', label: 'Regen', cloud: 1, precip: 2.5, snow: false, visibility: 6000, windSpeed: 18, windDir: 250, temperature: 8 },

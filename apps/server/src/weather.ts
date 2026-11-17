@@ -55,6 +55,7 @@ export class WeatherService {
       this.onUpdate(weather);
       return true;
     } catch (error) {
+      if (this.stopper.signal.aborted) return false; // stopped mid-fetch: nothing to report
       // First failure of a series warns, the rest of the series stays at debug; a success resets the series.
       const first = this.failures++ === 0;
       log(first ? 'warn' : 'debug', 'weather fetch failed', { failures: this.failures, error: error instanceof Error ? error.message : String(error) });
