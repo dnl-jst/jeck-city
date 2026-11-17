@@ -731,6 +731,8 @@ def crossing_spire(B):
 # Stairs are straight flights at an even pitch where DGM1 has them (the middle of its slope). DGM1 smooths steps into
 # a bulging slope that would show through them, so each flight comes with a *_cut surface along its inner corners:
 # the pipeline lowers the terrain to just below it (see packages/pipeline/src/terraincut.ts).
+# the stairs' collision ramps run on this far past the lowest step, dipping under the ground in front of it (m)
+RAMP_RUNOUT = 3.0
 DOMTREPPE = dict(u0=-31.0, u1=21.0, v_top=63.0, v_bot=77.0, n=29, top=5.85, bottom=1.1)
 
 
@@ -870,16 +872,19 @@ def build_collision(C):
     # Domtreppe: a ramp through the nosings, cheek walls
     d = DOMTREPPE
     rise = (d['top'] - d['bottom']) / d['n']
-    tread = (d['v_bot'] - d['v_top']) / d['n']
-    # the ramp runs on one tread past the lowest step down to the ground, so there is no lip to climb at the foot
-    C.face([(d['u0'], d['v_top'] - 0.5, d['top']), (d['u1'], d['v_top'] - 0.5, d['top']), (d['u1'], d['v_bot'] + tread, d['bottom']),
-            (d['u0'], d['v_bot'] + tread, d['bottom'])], x, out=(0, 0, 1))
+    # the ramp runs on past the lowest step and dives under the ground (RAMP_RUNOUT): wherever the ground in front lies,
+    # the ramp rises out of it without a lip to climb
+    slope = (d['top'] - d['bottom']) / (d['v_bot'] - d['v_top'] + 0.5)
+    v_end = d['v_bot'] + RAMP_RUNOUT
+    C.face([(d['u0'], d['v_top'] - 0.5, d['top']), (d['u1'], d['v_top'] - 0.5, d['top']), (d['u1'], v_end, d['bottom'] - slope * RAMP_RUNOUT),
+            (d['u0'], v_end, d['bottom'] - slope * RAMP_RUNOUT)], x, out=(0, 0, 1))
     for u in (d['u0'] - 1.2, d['u1']):
         boxm(C, u, u + 1.2, d['v_top'] - 2.0, d['v_bot'], SINK, d['top'] + 0.6, x)
     # stairs to the Kardinal-Höffner-Platz: a ramp through the nosings; the Kreuzblume; the fountain's low disc
     a0, a1, b0, b1 = KHP_STAIRS
-    tread = (a1 - a0) / 5
-    C.face([(a0 - tread, b0, KHP_LOW), (a1, b0, KHP_HIGH), (a1, b1, KHP_HIGH), (a0 - tread, b1, KHP_LOW)], x, out=(0, 0, 1))
+    slope = (KHP_HIGH - KHP_LOW) / (a1 - a0)
+    u_end = a0 - RAMP_RUNOUT
+    C.face([(u_end, b0, KHP_LOW - slope * RAMP_RUNOUT), (a1, b0, KHP_HIGH), (a1, b1, KHP_HIGH), (u_end, b1, KHP_LOW - slope * RAMP_RUNOUT)], x, out=(0, 0, 1))
     boxm(C, a1, a1 + 0.5, b0, b1, SINK, KHP_HIGH, x)
     cu, cv, zg = KREUZBLUME
     prism(C, poly_n(cu, cv, 1.25, 8), zg - 0.3, zg + 2.25, x)
