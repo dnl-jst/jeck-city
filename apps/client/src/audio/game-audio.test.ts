@@ -73,6 +73,21 @@ test('crank plays the starter', () => {
   expect(shots.map((s) => s.id)).toEqual(['doorOpen', 'doorClose', 'engineStart']);
 });
 
+test('own engine, tyres and starter play on the muffled cabin bus', async () => {
+  const { audio, shots, voices } = setup();
+  audio.unlock();
+  await flush();
+  await audio.load();
+  audio.enterCar();
+  audio.doorClosed();
+  audio.crank();
+  audio.engineRunning();
+  expect(shots.find((s) => s.id === 'engineStart')!.o).toMatchObject({ bus: 'cabin' });
+  const car = voices.filter((v) => v.id.startsWith('engine') || v.id === 'skid');
+  expect(car.length).toBeGreaterThan(1);
+  expect(car.every((v) => v.bus === 'cabin')).toBe(true);
+});
+
 test('leaving while cranking', () => {
   const { audio, shots, tunes } = setup();
   audio.enterCar();

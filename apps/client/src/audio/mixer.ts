@@ -11,7 +11,7 @@ export const MIX = {
   engine: 0.55,
   skid: 0.6,
   impact: 0.9,
-  ambience: 0.4,
+  ambience: 0.17,
   rain: 0.5,
   tramBell: 0.7,
   static: 0.25,
@@ -50,6 +50,15 @@ const RAMP = 0.03;
 /** In-car / outside transition: ramp over ~0.3 s. */
 const CAR_RAMP = 0.3 / 3;
 
+/** Outside ambience while sitting in the car: level and lowpass cutoff (Hz). */
+const AMBIENCE_IN_CAR = { gain: 0.35, lowpassHz: 700 };
+/** The own car's engine and tyres heard from the driver's seat: a bit quieter, muffled by the body. */
+export const CABIN_IN_CAR = { gain: 0.75, lowpassHz: 2200 };
+/** Lowpass cutoff that leaves a bus effectively unfiltered. */
+const OPEN_HZ = 20000;
+
+export type Bus = 'sfx' | 'ambience' | 'cabin';
+
 /** A playing one-shot; stop() fades it out quickly and disconnects it. */
 export interface ShotVoice {
   stop(): void;
@@ -72,7 +81,7 @@ function movePanner(p: PannerNode, x: number, z: number, t: number): void {
 
 /**
  * Web Audio mixer for the game's recordings (never the radio — that stays on an HTMLAudioElement).
- * Buses: master → destination, sfx → master, ambience → lowpass → master.
+ * Buses: master → destination, sfx → master, ambience → lowpass → master, cabin (own car) → lowpass → master.
  * Nothing touches `AudioContext` before `unlock()` (first user gesture).
  */
 export class AudioMixer {
@@ -81,6 +90,8 @@ export class AudioMixer {
   private sfx: GainNode | null = null;
   private ambience: GainNode | null = null;
   private lowpass: BiquadFilterNode | null = null;
+  private cabin: GainNode | null = null;
+  private cabinLowpass: BiquadFilterNode | null = null;
   private readonly raw = new Map<FileSoundId, ArrayBuffer>();
   private readonly buffers = new Map<SoundId, AudioBuffer>();
   private muted = false;
@@ -98,13 +109,16 @@ export class AudioMixer {
       this.master.connect(ctx.destination);
       this.sfx = ctx.createGain();
       this.sfx.connect(this.master);
-      this.lowpass = ctx.createBiquadFilter();
-      this.lowpass.type = 'lowpass';
-      this.lowpass.frequency.value = this.inCar ? 700 : 20000;
+      const amb = this.inCar ? AMBIENCE_IN_CAR : { gain: 1, lowpassHz: OPEN_HZ };
+      this.lowpass = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: amb.lowpassHz });
       this.lowpass.connect(this.master);
-      this.ambience = ctx.createGain();
-      this.ambience.gain.value = this.inCar ? 0.35 : 1;
+      this.ambience = new GainNode(ctx, { gain: amb.gain });
       this.ambience.connect(this.lowpass);
+      const cab = this.inCar ? CABIN_IN_CAR : { gain: 1, lowpassHz: OPEN_HZ };
+      this.cabinLowpass = new BiquadFilterNode(ctx, { type: 'lowpass', frequency: cab.lowpassHz });
+      this.cabinLowpass.connect(this.master);
+      this.cabin = new GainNode(ctx, { gain: cab.gain });
+      this.cabin.connect(this.cabinLowpass);
       const l = ctx.listener;
       if (l.upX) {
         l.upX.value = 0;
@@ -176,17 +190,26 @@ export class AudioMixer {
 
   setInCar(inCar: boolean): void {
     this.inCar = inCar;
-    if (!this.ctx || !this.ambience || !this.lowpass) return;
+    if (!this.ctx || !this.ambience || !this.lowpass || !this.cabin || !this.cabinLowpass) return;
     const t = this.ctx.currentTime;
-    this.ambience.gain.setTargetAtTime(inCar ? 0.35 : 1, t, CAR_RAMP);
-    this.lowpass.frequency.setTargetAtTime(inCar ? 700 : 20000, t, CAR_RAMP);
+    this.ambience.gain.setTargetAtTime(inCar ? AMBIENCE_IN_CAR.gain : 1, t, CAR_RAMP);
+    this.lowpass.frequency.setTargetAtTime(inCar ? AMBIENCE_IN_CAR.lowpassHz : OPEN_HZ, t, CAR_RAMP);
+    this.cabin.gain.setTargetAtTime(inCar ? CABIN_IN_CAR.gain : 1, t, CAR_RAMP);
+    this.cabinLowpass.frequency.setTargetAtTime(inCar ? CABIN_IN_CAR.lowpassHz : OPEN_HZ, t, CAR_RAMP);
   }
 
-  /** Sample played once; with `at` it is positioned in the world (HRTF panner). Silent before unlock/load. */
-  oneShot(id: SoundId, o: { gain?: number; rate?: number; at?: { x: number; z: number } } = {}): ShotVoice {
+  /**
+   * Sample played once; with `at` it is positioned in the world (HRTF panner). `bus` 'cabin' for the own car's
+   * sounds (muffled while inside). Silent before unlock/load.
+   */
+  oneShot(
+    id: SoundId,
+    o: { gain?: number; rate?: number; at?: { x: number; z: number }; bus?: 'sfx' | 'cabin' } = {},
+  ): ShotVoice {
     const ctx = this.ctx;
     const buffer = this.buffers.get(id);
-    if (!ctx || !this.sfx || !buffer) return SILENT;
+    const out = o.bus === 'cabin' ? this.cabin : this.sfx;
+    if (!ctx || !out || !buffer) return SILENT;
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.playbackRate.value = o.rate ?? 1;
@@ -204,10 +227,10 @@ export class AudioMixer {
         positionZ: o.at.z,
       });
       gain.connect(panner);
-      panner.connect(this.sfx);
+      panner.connect(out);
       pan = panner;
     } else {
-      gain.connect(this.sfx);
+      gain.connect(out);
     }
     src.start();
     let ended = false;
@@ -228,9 +251,9 @@ export class AudioMixer {
   }
 
   /** Looping voice on a bus. Starts silent: call setGain to fade it in. Silent no-op before unlock/load. */
-  loop(id: SoundId, bus: 'sfx' | 'ambience'): LoopVoice {
+  loop(id: SoundId, bus: Bus): LoopVoice {
     const ctx = this.ctx;
-    const out = bus === 'sfx' ? this.sfx : this.ambience;
+    const out = bus === 'sfx' ? this.sfx : bus === 'ambience' ? this.ambience : this.cabin;
     const buffer = this.buffers.get(id);
     if (!ctx || !out || !buffer) return SILENT;
     const src = ctx.createBufferSource();
