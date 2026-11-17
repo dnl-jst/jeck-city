@@ -154,7 +154,7 @@ resize();
 const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
 attachInput(input, canvas, (locked) => {
-  hud.setHint(locked ? '' : LOOK_HINT);
+  hud.setHint(locked ? (game?.modeHint ?? '') : LOOK_HINT);
   game?.map.onLockChange(locked);
 });
 const world = new WorldLoader(scene, '/world/');

@@ -5,7 +5,7 @@ import {
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
@@ -211,6 +211,13 @@ export class Game {
     return out;
   }
 
+  /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
+  get modeHint(): string {
+    if (this.mode === 'drive') return DRIVE_HINT;
+    if (this.mode === 'ride') return this.bikeType() === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT;
+    return '';
+  }
+
   /** One rendered frame: input, the session's fixed steps, poses for rendering. night 0..1 drives the car lights. */
   frame(dt: number, night: number): void {
     const { input, flyAllowed, audio } = this.ctx;
@@ -383,6 +390,7 @@ export class Game {
     this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!);
     this.follow.setDriving(true, headingOf(pose));
     this.mode = 'drive';
+    this.ctx.hud.setHint(this.modeHint);
     this.ctx.audio?.enterCar();
   }
 
@@ -397,6 +405,7 @@ export class Game {
     this.mode = 'walk';
     this.airTime = 0;
     this.closeWheel();
+    this.ctx.hud.setHint('');
     this.ctx.audio?.exitCar();
   }
 
@@ -414,7 +423,7 @@ export class Game {
     }
     this.follow.setDriving(true, s.heading, 'bike');
     this.mode = 'ride';
-    this.ctx.hud.setHint(ridden.type === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT);
+    this.ctx.hud.setHint(this.modeHint);
     this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
