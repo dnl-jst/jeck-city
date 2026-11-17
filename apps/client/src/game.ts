@@ -5,7 +5,7 @@ import {
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
@@ -19,6 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
+import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
@@ -130,6 +131,13 @@ export class Game {
     session.onCorrection = () => this.resample();
   }
 
+  /** The own car's and bike's lights and the parked cars' draw radius at a quality level. */
+  setQuality(q: Quality): void {
+    this.driven.setQuality(q);
+    this.bikeLights.setDiscoDots(q.discoDots);
+    this.cars.setRadius(q.carRadius);
+  }
+
   /** Fixed steps run so far (tests wait on simulation time, not on the wall clock). */
   get steps(): number {
     return this.session.steps;
@@ -201,6 +209,16 @@ export class Game {
     const out = this.fallen;
     this.fallen = [];
     return out;
+  }
+
+  /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
+  get modeHint(): string {
+    if (this.mode === 'drive') return DRIVE_HINT;
+    if (this.mode === 'ride') {
+      const t = this.bikeType();
+      return t === 'soundjohn' ? SOUND_RIDE_HINT : t === 'escooter' ? SCOOTER_RIDE_HINT : RIDE_HINT;
+    }
+    return '';
   }
 
   /** One rendered frame: input, the session's fixed steps, poses for rendering. night 0..1 drives the car lights. */
@@ -375,6 +393,7 @@ export class Game {
     this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!);
     this.follow.setDriving(true, headingOf(pose));
     this.mode = 'drive';
+    this.ctx.hud.setHint(this.modeHint);
     this.ctx.audio?.enterCar();
   }
 
@@ -389,6 +408,7 @@ export class Game {
     this.mode = 'walk';
     this.airTime = 0;
     this.closeWheel();
+    this.ctx.hud.setHint('');
     this.ctx.audio?.exitCar();
   }
 
@@ -406,7 +426,7 @@ export class Game {
     }
     this.follow.setDriving(true, s.heading, 'bike');
     this.mode = 'ride';
-    this.ctx.hud.setHint(ridden.type === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT);
+    this.ctx.hud.setHint(this.modeHint);
     this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
@@ -452,7 +472,7 @@ export class Game {
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt);
+      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded);
       if (!this.flying) this.follow.update(p, 0, dt);
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
@@ -472,7 +492,8 @@ export class Game {
           [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);
       }
       if (!this.flying) this.follow.update(s, s.heading, dt);
-      audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
+      // a scooter has no freewheel: never ticks
+      audio?.ride({ speed: Math.abs(s.speed), pedalling: (this.ctl.forward > 0 && s.speed > 0.3) || BIKE_SPECS[this.rig?.type ?? 'dutch'].motor === true, grounded: s.grounded }, dt);
     } else if (this.currPose && this.carId !== null) {
       const { sim } = this.session;
       const prev = this.prevPose ?? this.currPose;

@@ -3,6 +3,7 @@ import type { BuildingMesh } from './buildings.js';
 import { FLAG_BACKDROP } from './chunks.js';
 import { footprintDistance } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
+import { placeRand } from './placerand.js';
 import { DRIVABLE, distToPolyline, pointInPolygon } from './polyline.js';
 
 export const BACKDROP_DISTANCE = 150;
@@ -129,21 +130,13 @@ export function shopSign(b: BuildingMesh, shop: Pt, roads: Road[]): ShopSign | u
 /** Everyday car colours: white, black, silver, grey, dark blue, red, VW-ish blue, beige. */
 export const PARKED_PALETTE = [0xf2f2ee, 0x161616, 0xb9bdc1, 0x6a6d71, 0x1d2a45, 0xa51c1f, 0x2d5f8f, 0xd6c6a2];
 
-/** 32-bit integer mix (murmur3 finalizer) of seed and index. */
-function mix(seed: number, i: number): number {
-  let h = (seed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0;
-  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
 /**
- * Parked cars on the spots: colour from the palette, type mixed over CAR_TYPES by CAR_TYPE_WEIGHTS. spots[0] is the
- * spawn car, always a kleinwagen.
+ * Parked cars on the spots: colour from the palette, type mixed over CAR_TYPES by CAR_TYPE_WEIGHTS, both drawn per
+ * position (placeRand: a car keeps its look when other spots come or go). spots[0] is the spawn car, always a kleinwagen.
  */
 export function parkedCars(spots: { pos: Pt; heading: number }[], seed: number): WorldManifest['parked'] {
   return spots.map((s, i) => ({
-    x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[mix(seed, i) % PARKED_PALETTE.length]!,
-    type: carTypeFor(mix(seed ^ 0x5bd1e995, i) / 4294967296),
+    x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[Math.floor(placeRand(seed, s.pos, 2) * PARKED_PALETTE.length)]!,
+    type: carTypeFor(placeRand(seed, s.pos, 3)),
   }));
 }

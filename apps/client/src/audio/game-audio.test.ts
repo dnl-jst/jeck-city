@@ -6,6 +6,7 @@ import { RadioTuner, type StationId } from './stations';
 
 interface FakeVoice extends LoopVoice {
   id: SoundId;
+  bus: string;
   gain: number;
   stopped: boolean;
 }
@@ -24,8 +25,8 @@ function setup() {
       shots.push(shot);
       return { stop() { shot.stopped = true; } };
     },
-    loop: (id) => {
-      const v: FakeVoice = { id, gain: 0, stopped: false, setGain(g) { v.gain = g; }, setRate() {}, stop() { v.stopped = true; } };
+    loop: (id, bus) => {
+      const v: FakeVoice = { id, bus, gain: 0, stopped: false, setGain(g) { v.gain = g; }, setRate() {}, stop() { v.stopped = true; } };
       voices.push(v);
       return v;
     },
@@ -70,6 +71,21 @@ test('crank plays the starter', () => {
   audio.doorClosed();
   audio.crank();
   expect(shots.map((s) => s.id)).toEqual(['doorOpen', 'doorClose', 'engineStart']);
+});
+
+test('own engine, tyres and starter play on the muffled cabin bus', async () => {
+  const { audio, shots, voices } = setup();
+  audio.unlock();
+  await flush();
+  await audio.load();
+  audio.enterCar();
+  audio.doorClosed();
+  audio.crank();
+  audio.engineRunning();
+  expect(shots.find((s) => s.id === 'engineStart')!.o).toMatchObject({ bus: 'cabin' });
+  const car = voices.filter((v) => v.id.startsWith('engine') || v.id === 'skid');
+  expect(car.length).toBeGreaterThan(1);
+  expect(car.every((v) => v.bus === 'cabin')).toBe(true);
 });
 
 test('leaving while cranking', () => {
@@ -343,4 +359,38 @@ test('sound Long John: radio on while sitting on it, tunable, off on getting off
   expect(audio.station).toBeNull();
   audio.radioStep(1);
   expect(tunes).toHaveLength(3);
+});
+
+test('weather(rain) sets the rain loop gain on the ambience bus', async () => {
+  const { audio, voices } = setup();
+  audio.unlock();
+  await audio.load();
+  await flush();
+  audio.weather(0.5);
+  const rain = voices.filter((v) => v.id === 'rain');
+  expect(rain).toHaveLength(1);
+  expect(rain[0]!.bus).toBe('ambience');
+  expect(rain[0]!.gain).toBeCloseTo(0.25);
+});
+
+test('weather(0) silences the rain loop without stopping it', async () => {
+  const { audio, voices } = setup();
+  audio.unlock();
+  await audio.load();
+  await flush();
+  audio.weather(0.5);
+  audio.weather(0);
+  const rain = voices.find((v) => v.id === 'rain')!;
+  expect(rain.gain).toBe(0);
+  expect(rain.stopped).toBe(false);
+});
+
+test('weather before unlock is applied when the loops start', async () => {
+  const { audio, voices } = setup();
+  audio.weather(1);
+  expect(voices).toEqual([]);
+  await audio.load();
+  audio.unlock();
+  await flush();
+  expect(voices.find((v) => v.id === 'rain')?.gain).toBeCloseTo(0.5);
 });

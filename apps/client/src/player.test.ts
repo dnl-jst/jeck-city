@@ -21,6 +21,15 @@ describe('riding pose', () => {
     }
   });
 
+  test('standing on a scooter deck: feet close to the centre line, one behind the other (legs roll inwards)', () => {
+    const f = new PlayerFigure(new Scene());
+    const hips = new Vector3(0, 1.01, -0.09);
+    const feet: [Vector3, Vector3] = [new Vector3(0.03, 0.175, 0.07), new Vector3(-0.035, 0.175, -0.21)];
+    f.ride(hips, grips, feet, 'standing');
+    expect(f.foot(0).distanceTo(feet[0])).toBeLessThan(0.05);
+    expect(f.foot(1).distanceTo(feet[1])).toBeLessThan(0.05);
+  });
+
   test('race posture leans forward more than upright', () => {
     const f = new PlayerFigure(new Scene());
     f.ride(seat, grips, pedals(0), 'upright');
@@ -198,6 +207,24 @@ describe('walking and running', () => {
       expect(highest).toBeLessThan(what === 'walking' ? 0.06 : 0.2);
     });
   }
+
+  test('running up stairs (steep climb, still on the ground) keeps the gait; only airborne tucks the legs', () => {
+    const swing = (airborne: boolean) => {
+      const f = new PlayerFigure(new Scene());
+      let lo = Infinity, hi = -Infinity;
+      for (let n = 0; n < 120; n++) {
+        // the controller steps up the stairs: big vertical speed spikes while grounded
+        f.update(0, 0, 0, { x: 0, y: n % 6 === 0 ? 10 : 2.5, z: 5.5 }, 1 / 60, airborne);
+        if (n < 60) continue;
+        const a = f.group.children[0]!.children[0]!.rotation.x; // left leg (body → first leg)
+        lo = Math.min(lo, a);
+        hi = Math.max(hi, a);
+      }
+      return hi - lo;
+    };
+    expect(swing(false)).toBeGreaterThan(0.5);
+    expect(swing(true)).toBeLessThan(0.1);
+  });
 
   test('running bends the knee further in swing than walking, both feet are off between the steps', () => {
     const peak = (run: number) => Math.max(...Array.from({ length: 100 }, (_, k) => gaitPose(k / 100, run).knee));

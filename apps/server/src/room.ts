@@ -3,7 +3,7 @@ import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomE
 import {
   CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
   parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
-  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type WorldAssets,
+  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
 import { LagLine } from './fake-lag';
@@ -207,6 +207,11 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   onUncaughtException(error: RoomException, methodName: RoomMethodName): void {
     if (error.cause instanceof ServerError) return; // a deliberate rejection (onAuth/onJoin), already logged
     log('error', 'uncaught exception', { method: methodName, error: String(error), stack: error.stack });
+  }
+
+  /** Publishes a new weather to everyone (only changed fields travel). */
+  setWeather(w: Weather): void {
+    Object.assign(this.state.weather, w);
   }
 
   /** Test and diagnostics access: the input queue / slot of a session. */

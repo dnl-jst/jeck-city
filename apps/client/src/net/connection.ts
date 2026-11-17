@@ -1,13 +1,13 @@
 import { Client, type Room } from '@colyseus/sdk';
 import {
   decodeSnapshot, encodeInputs, NAME_ERRORS, PROTOCOL_VERSION, RECONNECT_S, RETRY_CONNECT_S,
-  type InputPacket, type Snapshot, type StationId,
+  type InputPacket, type Snapshot, type StationId, type Weather,
 } from '@nn/shared';
 import { ServerClock } from './clock';
 
 export const CONNECT_TEXTS = {
-  unreachable: 'Nippes ist gerade nicht erreichbar – versuch es später nochmal.',
-  full: 'Nippes ist gerade voll – versuch es gleich nochmal.',
+  unreachable: 'Jeck City ist gerade nicht erreichbar – versuch es später nochmal.',
+  full: 'Jeck City ist gerade voll – versuch es gleich nochmal.',
   version: 'Neue Version – bitte Seite neu laden.',
   rate: 'Zu viele Versuche – warte kurz.',
 } as const;
@@ -32,6 +32,7 @@ export type NetState = {
   cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
   bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number }>;
   lamps: StateMap<StatePose>;
+  weather: Weather;
 };
 
 /** Why a join did not work, from the error the SDK throws. */

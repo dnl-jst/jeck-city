@@ -1,12 +1,15 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { JOIN_PER_IP_PER_MIN, MAX_PLAYERS, RECONNECT_S } from '@nn/shared';
+import { JOIN_PER_IP_PER_MIN, MAX_PLAYERS, RECONNECT_S, WEATHER_PRESETS, weatherPreset, type Weather } from '@nn/shared';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
 /** Dev-only network degradation: delay ms ± jitterMs per message, stallPct % of messages held back further. */
 export type FakeLag = { ms: number; jitterMs: number; stallPct: number };
+
+/** Where the weather comes from: Open-Meteo, nowhere (clear sky), or a fixed preset (dev only). */
+export type WeatherSource = 'live' | 'off' | { fixed: Weather };
 
 export type Config = {
   port: number;
@@ -29,6 +32,7 @@ export type Config = {
   reconnectS: number;
   /** Joins allowed per address in a sliding 60 s window; NN_JOIN_PER_MIN raises it, in dev only (load test: all bots share one address). */
   joinPerMin: number;
+  weather: WeatherSource;
 };
 
 type Env = Record<string, string | undefined>;
@@ -68,6 +72,15 @@ function parseFakeLag(raw: string): FakeLag {
   return { ms: ms!, jitterMs: jitterMs!, stallPct: stallPct! };
 }
 
+/** NN_WEATHER = live | off | a preset name; presets are dev-only (production falls back to live). */
+function parseWeather(raw: string | undefined, dev: boolean): WeatherSource {
+  if (!raw || raw === 'live') return 'live';
+  if (raw === 'off') return 'off';
+  const fixed = weatherPreset(raw);
+  if (!fixed) throw new Error(`NN_WEATHER must be one of live|off|${WEATHER_PRESETS.join('|')}, got "${raw}"`);
+  return dev ? { fixed } : 'live';
+}
+
 /** Server configuration from environment variables; `overrides` (tests) win over the environment. */
 export function loadConfig(env: Env = process.env, overrides: Partial<Config> = {}): Config {
   const logLevel = (env.LOG_LEVEL || 'info') as LogLevel;
@@ -84,6 +97,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
     fakeLag: dev && env.NN_FAKE_LAG ? parseFakeLag(env.NN_FAKE_LAG) : null,
     reconnectS: RECONNECT_S,
     joinPerMin: dev ? intEnv(env, 'NN_JOIN_PER_MIN', JOIN_PER_IP_PER_MIN, 1, 100_000) : JOIN_PER_IP_PER_MIN,
+    weather: parseWeather(env.NN_WEATHER, dev),
     ...overrides,
   };
 }

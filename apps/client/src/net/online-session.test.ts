@@ -616,6 +616,13 @@ function fixtureCarPose(a: WorldAssets, i: number): CarPose {
   return { x: c.x, y: 0, z: c.z, qx: 0, qy: Math.sin(c.heading / 2), qz: 0, qw: Math.cos(c.heading / 2) };
 }
 
+describe('OnlineSession weather', () => {
+  test('a state without the weather field (older server) means unknown weather, no throw', async () => {
+    const { session } = await setup(fixtureAssets(), { x: -70, z: -70 }, 75);
+    expect(session.weather()).toBeNull();
+  });
+});
+
 describe('remoteList', () => {
   test('flattens walkers, riders and drivers; leaves out me; down while knocked over', () => {
     const w = (slot: number, state: 0 | 2) => [`w${slot}`, { slot, x: slot, y: 0, z: 2 * slot, yaw: 0, speed: 0, state }] as const;

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, worldHash,
+  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
   type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
@@ -13,7 +13,8 @@ import { startServer, type RunningServer } from './server';
 
 const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
 writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
-const cfg = loadConfig({}, { port: 0, maxPlayers: 2, logLevel: 'error', joinPerMin: 1000, reconnectS: 3, clientDir });
+const base = { port: 0, maxPlayers: 2, logLevel: 'error' as const, joinPerMin: 1000, reconnectS: 3, clientDir, weather: 'off' as const };
+const cfg = loadConfig({}, base);
 const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(`${cfg.worldDir}/${f}`));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -425,4 +426,20 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(Number.isInteger(h.dropped)).toBe(true);
     await leaveAll();
   });
+
+  it('syncs the weather through the room state', async () => {
+    const other = await startServer(loadConfig({}, { ...base, weather: { fixed: weatherPreset('snow')! } }));
+    try {
+      const c = await new Client(`ws://127.0.0.1:${other.port}`).join('nippes', { name: 'Anna', protocolVersion: PROTOCOL_VERSION, worldHash: hash });
+      c.onMessage('s', () => undefined);
+      c.onMessage('welcome', () => undefined);
+      const w = () => c.state as unknown as { weather: { known: boolean; kind: string } };
+      await until(() => w().weather?.known === true && w().weather.kind === 'snow');
+      other.room.setWeather(weatherPreset('rain')!);
+      await until(() => w().weather.kind === 'rain');
+      await c.leave().catch(() => 0);
+    } finally {
+      await other.stop();
+    }
+  }, 20_000);
 });
