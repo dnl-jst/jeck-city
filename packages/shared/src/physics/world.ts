@@ -75,6 +75,16 @@ export function onBeforeStep(pw: PhysicsWorld, fn: () => void): () => void {
   return () => set.delete(fn);
 }
 
+/** Callbacks run right after every world.step() (a person carried along by the car they stand on). */
+const afterStep = new WeakMap<PhysicsWorld, Set<() => void>>();
+
+/** Registers fn to run after each step of pw; returns an unsubscribe function. */
+export function onAfterStep(pw: PhysicsWorld, fn: () => void): () => void {
+  const set = afterStep.get(pw)!;
+  set.add(fn);
+  return () => set.delete(fn);
+}
+
 /** Side (m) of the square tiles the city's collision mesh is split into: one trimesh collider per tile. */
 export const COLLISION_TILE = 100;
 
@@ -118,16 +128,18 @@ export async function createPhysicsWorld(c: CollisionAsset, terrain?: TerrainGri
   // (World.updateSceneQueries is declared in the typings but missing at runtime in 0.21.0).
   world.step();
 
-  const hooks = new Set<() => void>();
+  const hooks = new Set<() => void>(), after = new Set<() => void>();
   const pw: PhysicsWorld = {
     rapier: RAPIER,
     world,
     step() {
       for (const fn of hooks) fn();
       world.step();
+      for (const fn of after) fn();
     },
   };
   beforeStep.set(pw, hooks);
+  afterStep.set(pw, after);
   return pw;
 }
 

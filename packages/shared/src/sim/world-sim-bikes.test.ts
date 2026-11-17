@@ -224,3 +224,28 @@ test('bell rings as a positional event while riding; the horn shows on the car w
   sim.step(new Map([[1, N], [2, N]]));
   expect(sim.horning(0)).toBe(false);
 }, 30_000);
+
+test('standing on a car that drives off (and turns): rides along on the roof, not swept off', async () => {
+  const a = withBikes([]);
+  a.manifest.parked[0] = { x: 0, z: -60, heading: 0, color: 0xff0000 };
+  const sim = await WorldSim.create(a);
+  sim.addPlayer(1, { x: 4, z: -60 });
+  sim.addPlayer(2, { x: 1.5, z: -60 });
+  for (let t = 0; t < 10; t++) sim.step(new Map([[1, N], [2, N]]));
+  sim.step(new Map([[1, N], [2, USE]]));
+  expect(sim.player(2).mode).toBe('drive');
+  for (let t = 0; t < 100; t++) sim.step(new Map([[1, N], [2, N]])); // the engine starts
+  // player 1 onto the middle of the roof
+  const car = sim.cars.vehicle(0)!.pose();
+  sim.onFoot().find((p) => p.id === 1)!.char.teleport({ x: car.x, y: car.y + 1.2, z: car.z });
+  for (let t = 0; t < 30; t++) sim.step(new Map([[1, N], [2, N]]));
+  const roof = sim.player(1).pos.y;
+  expect(roof).toBeGreaterThan(1);
+  // 4 s: full throttle, then steering
+  for (let t = 0; t < 240; t++) sim.step(new Map([[1, N], [2, { ...N, forward: 1, right: t > 120 ? 0.6 : 0 }]]));
+  const now = sim.cars.vehicle(0)!.pose(), p = sim.player(1);
+  expect(Math.hypot(now.x - car.x, now.z - car.z)).toBeGreaterThan(15); // the car went somewhere
+  expect(Math.hypot(p.pos.x - now.x, p.pos.z - now.z)).toBeLessThan(1.2); // still on it
+  expect(p.pos.y).toBeGreaterThan(roof - 0.3);
+  expect(Math.hypot(p.vel.x, p.vel.z)).toBeLessThan(1); // standing (relative to the car): no running animation
+}, 30_000);

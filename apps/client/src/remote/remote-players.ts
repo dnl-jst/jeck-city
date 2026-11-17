@@ -21,6 +21,8 @@ const ROOF_H = 1.5;
 const JUMP_M = 3;
 /** A knocked-down walker's car: the fastest one within this distance (m) of them. */
 const KNOCK_CAR_M = 6;
+/** Feet at least this far above a car's body origin are on its roof (m). */
+const ON_ROOF_Y = 0.3;
 /** Upwards throw of a car's hit (m/s; as the sim's collisions.ts). */
 const KNOCK_UP = 3;
 
@@ -165,6 +167,9 @@ export class RemotePlayers {
       if (!w.fresh && dt > 1e-4) {
         const dx = s.x - w.px, dz = s.z - w.pz;
         if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
+        // riding on a car's roof: only the walking on it animates
+        const under = carUnder(sample.cars, s.x, s.y, s.z);
+        if (under) { vx -= under.vx; vz -= under.vz; }
       }
       w.fresh = false;
       // smoothed: the interpolated stream moves in 20 Hz-shaped steps
@@ -341,6 +346,18 @@ export class RemotePlayers {
 
     this.parked.setHidden(new Set());
   }
+}
+
+/** A streamed car whose roof the feet at (x, y, z) are on (within its footprint, above its body), if any. */
+function carUnder(cars: ReadonlyMap<string, SnapshotCar>, x: number, y: number, z: number): SnapshotCar | null {
+  for (const c of cars.values()) {
+    if (y < c.y + ON_ROOF_Y) continue;
+    // into the car's frame: forward = local +z (heading from the quaternion), half length/width generous
+    const h = Math.atan2(2 * (c.qx * c.qz + c.qw * c.qy), 1 - 2 * (c.qx * c.qx + c.qy * c.qy));
+    const dx = x - c.x, dz = z - c.z, along = dx * Math.sin(h) + dz * Math.cos(h), across = dx * Math.cos(h) - dz * Math.sin(h);
+    if (Math.abs(along) < 2.6 && Math.abs(across) < 1.1) return c;
+  }
+  return null;
 }
 
 /** The fastest streamed car within KNOCK_CAR_M of (x, z) (the one that knocked a walker down), if any moves. */

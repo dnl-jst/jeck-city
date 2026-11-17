@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
-import { CHARACTER_GROUPS, type PhysicsWorld } from './world';
+import { CAR_GROUPS, CHARACTER_GROUPS, onAfterStep, type PhysicsWorld } from './world';
 
 /** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z; jump takes off if standing on ground. */
 export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number; jump?: boolean };
@@ -23,6 +23,13 @@ const KNOCK_FRICTION = 7;
 const KNOCK_BOUNCE = 0.3, KNOCK_BOUNCE_GROUND = 0.15;
 /** The thrown ball's query groups: member of bit 0 (so cars, which ignore people, still count), never bikes or people. */
 const KNOCK_QUERY_GROUPS = 0x0001_ffe7;
+/**
+ * A person over a car (standing on it, or jumping up from it: the roof within CARRY_BELOW under the feet) is carried
+ * with it: after every step they are moved and turned exactly as the car moved and turned in that step (as if fixed
+ * to it), their own walking on top. Not quite physics (no inertia when it brakes), but nobody slides off a car that
+ * drives away.
+ */
+const CARRY_BELOW = 1.6;
 /** The thrown ball moves across this far (m) above where it is, clear of the ground under it. */
 const THROWN_LIFT = 0.04;
 /** Ground: a contact normal at least this steep upwards. */
@@ -60,6 +67,9 @@ export class Character {
   private downTicks = 0;
   private kvx = 0;
   private kvz = 0;
+  /** The car carrying this person through the current step and its pose before it (see CARRY_BELOW). */
+  private carrier: { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation } | null = null;
+  private readonly offStep: () => void;
   /** Extra displacement for the next applyInput. */
   private pushX = 0;
   private pushZ = 0;
@@ -78,6 +88,7 @@ export class Character {
     this.kcc.setSlideEnabled(true);
     this.kcc.setMaxSlopeClimbAngle(T.maxSlope);
     this.kcc.setMinSlopeSlideAngle(T.maxSlope);
+    this.offStep = onAfterStep(pw, () => this.carry());
   }
 
   /** Handle of the capsule collider (to map scene-query hits back to the character). */
@@ -106,6 +117,7 @@ export class Character {
       this.grounded = false;
     }
     this.vy += T.gravity * DT;
+    this.carrier = this.carUnder();
 
     this.kcc.computeColliderMovement(
       this.collider,
@@ -119,7 +131,36 @@ export class Character {
     if (this.grounded) this.vy = 0;
     const p = this.body.translation();
     this.body.setNextKinematicTranslation({ x: p.x + m.x, y: p.y + m.y, z: p.z + m.z });
+    // own movement (what the figure animates and turns to; a car carrying it comes on top after the step)
     this.vel = { x: m.x / DT, y: m.y / DT, z: m.z / DT };
+  }
+
+  /** The car under the feet (within CARRY_BELOW) and its pose now, or null (see CARRY_BELOW). */
+  private carUnder(): { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation } | null {
+    const { rapier: R, world } = this.pw;
+    const p = this.body.translation(), feet = p.y - CENTRE;
+    const hit = world.castRay(new R.Ray({ x: p.x, y: feet + 0.1, z: p.z }, { x: 0, y: -1, z: 0 }), CARRY_BELOW + 0.1, true,
+      R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body,
+      (c) => c.collisionGroups() >>> 16 === CAR_GROUPS >>> 16);
+    const b = hit?.collider.parent();
+    return b && !b.isFixed() ? { body: b, t: b.translation(), q: b.rotation() } : null;
+  }
+
+  /** After a step: moved (and the step's own movement with it) as the carrying car moved, turned about its origin. */
+  private carry(): void {
+    const c = this.carrier;
+    this.carrier = null;
+    if (!c || !this.enabled || this.downTicks > 0) return;
+    const t1 = c.body.translation(), q1 = c.body.rotation();
+    // d = q1 · q0⁻¹ applied to (p − t0), plus t1
+    const p = this.body.translation();
+    const [ax, ay, az] = rotate(conj(c.q), [p.x - c.t.x, p.y - c.t.y, p.z - c.t.z]);
+    const [bx, by, bz] = rotate(q1, [ax, ay, az]);
+    const to = { x: t1.x + bx, y: t1.y + by, z: t1.z + bz };
+    if (Math.abs(to.x - p.x) + Math.abs(to.y - p.y) + Math.abs(to.z - p.z) < 1e-6) return;
+    this.body.setTranslation(to, true);
+    this.body.setNextKinematicTranslation(to);
+    this.pw.world.propagateModifiedBodyPositionsToColliders();
   }
 
   /**
@@ -284,6 +325,7 @@ export class Character {
 
   /** Removes the character (controller, body and its collider) from the world. The instance must not be used afterwards. */
   dispose(): void {
+    this.offStep();
     this.pw.world.removeCharacterController(this.kcc);
     this.pw.world.removeRigidBody(this.body);
   }
@@ -315,4 +357,14 @@ export function vaultThrow(
   if (need > VAULT_MAX_RISE) return plain;
   const v = speed * VAULT_KEEP, t = (d + 0.3) / v;
   return { speed: v, up: Math.max(minUp, Math.min(VAULT_MAX_VY, (need - 0.5 * G_THROWN * t * t) / t)), lift: VAULT_LIFT };
+}
+
+type Quat = { x: number; y: number; z: number; w: number };
+const conj = (q: Quat): Quat => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
+/** v rotated by the unit quaternion q. */
+function rotate(q: Quat, v: [number, number, number]): [number, number, number] {
+  const [x, y, z] = v;
+  // t = 2 q.xyz × v; v' = v + w t + q.xyz × t
+  const tx = 2 * (q.y * z - q.z * y), ty = 2 * (q.z * x - q.x * z), tz = 2 * (q.x * y - q.y * x);
+  return [x + q.w * tx + (q.y * tz - q.z * ty), y + q.w * ty + (q.z * tx - q.x * tz), z + q.w * tz + (q.x * ty - q.y * tx)];
 }

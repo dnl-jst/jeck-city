@@ -17,6 +17,8 @@ const KNOCK_UP = 3;
 const CAR_KEEP = 0.97;
 /** Most a slow car shoves a person in one tick (m). */
 const PUSH_MAX = 0.5;
+/** Feet this far below the top of a car's chassis box still count as standing on it (m). */
+const ON_TOP = 0.25;
 /** Cell size of the walker separation grid (m). */
 const CELL = 2;
 
@@ -55,6 +57,8 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
     // the chassis box (its collider sits off the body origin, see chassisLayout), in world space
     const box0 = body.collider(0);
     const riderOf = (c: RAPIER.Collider) => riders.get(c.handle);
+    // someone standing on the car (feet at the roof or above) rides along: neither knocked down nor shoved
+    const roof = box0.translation().y + (V.height - CHASSIS_CLEARANCE) / 2 - ON_TOP;
     world.intersectionsWithShape(box0.translation(), box0.rotation(), box, (c: RAPIER.Collider) => {
       const p = people.get(c.handle);
       if (p) hit.push(p);
@@ -65,7 +69,7 @@ export function carHitsPeople(sim: WorldSim, ev: SimEvent[]): void {
       return true;
     }, undefined, undefined, undefined, body, (c: RAPIER.Collider) => {
       const p = people.get(c.handle);
-      if (p) return !p.char.isDown() && !knocked.has(p.id);
+      if (p) return !p.char.isDown() && !knocked.has(p.id) && p.char.position().y < roof;
       const r = riderOf(c);
       return !!r && !knocked.has(r.id);
     });
