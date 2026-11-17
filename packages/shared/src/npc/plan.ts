@@ -96,6 +96,46 @@ export function planAt(p: Plan, tick: number): NpcPose {
 }
 
 /**
+ * Contiguous speed ramps over consecutive legs (length, cruising speed): from v0 to the first leg's speed, between legs
+ * slowing down before a slower leg (it is entered at its speed) and speeding up after entering a faster one, and to
+ * vEnd at the end, all at `accel` m/s² (steeper where a leg is too short).
+ */
+export function rampsForLegs(legs: readonly { len: number; v: number }[], v0: number, vEnd: number, accel: number): SpeedRamp[] {
+  const L = legs.reduce((s, l) => s + l.len, 0);
+  const dist = (a: number, b: number) => Math.abs(b * b - a * a) / (2 * accel);
+  const knots: [number, number][] = [[0, v0]];
+  let B = 0;
+  legs.forEach((leg, i) => {
+    if (i === 0) knots.push([dist(v0, leg.v), leg.v]);
+    B += leg.len;
+    const next = legs[i + 1];
+    if (!next) return;
+    if (next.v < leg.v) knots.push([B - dist(leg.v, next.v), leg.v], [B, next.v]);
+    else if (next.v > leg.v) knots.push([B, leg.v], [B + dist(leg.v, next.v), next.v]);
+  });
+  const last = legs[legs.length - 1]?.v ?? v0;
+  knots.push([L - dist(last, vEnd), last], [L, vEnd]);
+  // monotone in s, within [0, L]; a knot that collapses onto the next is dropped
+  const clean: [number, number][] = [];
+  for (const [s0, v] of knots) {
+    const s = Math.min(L, Math.max(0, s0, clean.length ? clean[clean.length - 1]![0] : 0));
+    if (clean.length && s - clean[clean.length - 1]![0] < 1e-6) {
+      if (clean.length > 1) clean.pop();
+      else continue;
+    }
+    clean.push([s, v]);
+  }
+  if (clean.length < 2 || clean[clean.length - 1]![0] < L) clean.push([L, vEnd]);
+  const ramps: SpeedRamp[] = [];
+  for (let i = 1; i < clean.length; i++) {
+    const [s0, a] = clean[i - 1]!, [s1, b] = clean[i]!;
+    if (s1 - s0 < 1e-9) continue;
+    ramps.push({ s0, s1, v0: ramps.length ? ramps[ramps.length - 1]!.v1 : a, v1: b });
+  }
+  return ramps;
+}
+
+/**
  * A plan along `path`: starting at startSpeed (default speed), cruising at speed, ending at endSpeed (default speed),
  * changing speed at `accel` m/s². If the path is too short to reach the cruising speed, the peak is lowered.
  */

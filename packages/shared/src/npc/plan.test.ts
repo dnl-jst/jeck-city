@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { buildPlan, planAt, planDuration } from './plan';
+import { buildPlan, planAt, planDuration, rampsForLegs } from './plan';
 import type { NpcLook, Plan } from './types';
 
 const LOOK: NpcLook = { variant: 0, tint: 0, scale: 1, vehicleType: -1, vehicleColor: 0 };
@@ -62,6 +62,34 @@ test('pitch follows the slope', () => {
   const p = buildPlan({ ...base, path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 10 }], speed: 2 });
   expect(planAt(p, 60).pitch).toBeCloseTo(Math.atan2(1, 10), 3);
   expect(planAt(p, 60).y).toBeCloseTo(0.2, 2);
+});
+
+test('rampsForLegs: slows down for a slow leg in time and speeds up after it', () => {
+  // 50 m at 10 m/s, 10 m at 4 m/s, 50 m at 10 m/s; accel 2 m/s²
+  const ramps = rampsForLegs([{ len: 50, v: 10 }, { len: 10, v: 4 }, { len: 50, v: 10 }], 10, 10, 2);
+  const p = { ...base, path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 110 }], ramps };
+  let t = 0;
+  while (planAt(p, t).s < 50) t++;
+  expect(planAt(p, t).speed).toBeLessThanOrEqual(4.05); // at the slow leg's start
+  while (planAt(p, t).s < 60) {
+    expect(planAt(p, t).speed).toBeLessThanOrEqual(4.05);
+    t++;
+  }
+  expect(planAt(p, planDuration(p) - 30).speed).toBeGreaterThan(9);
+  // contiguous ramps from 0 to the end
+  expect(ramps[0]!.s0).toBe(0);
+  for (let i = 1; i < ramps.length; i++) {
+    expect(ramps[i]!.s0).toBeCloseTo(ramps[i - 1]!.s1, 9);
+    expect(ramps[i]!.v0).toBeCloseTo(ramps[i - 1]!.v1, 9);
+  }
+  expect(ramps[ramps.length - 1]!.s1).toBeCloseTo(110, 9);
+});
+
+test('rampsForLegs: a stop at the end of a short leg', () => {
+  const ramps = rampsForLegs([{ len: 3, v: 8 }], 8, 0, 2);
+  const p = { ...base, path: [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 3 }], ramps };
+  expect(Number.isFinite(planDuration(p))).toBe(true);
+  expect(planAt(p, planDuration(p)).z).toBeCloseTo(3, 6);
 });
 
 test('wait and sit stay at the first point', () => {
