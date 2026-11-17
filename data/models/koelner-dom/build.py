@@ -52,7 +52,7 @@ CHAP_R = 23.5                  # chapel ring
 Z_AISLE = 24.5     # aisle walls
 Z_EAVE = 46.5      # clerestory
 Z_RIDGE = 61.1
-Z_S1, Z_S2, Z_S3, Z_OCT, Z_SPIRE, Z_TOP = 27.5, 56.0, 95.0, 108.0, 152.5, 157.4
+Z_S1, Z_S2, Z_S3, Z_S4, Z_OCT, Z_SPIRE, Z_TOP = 27.5, 54.5, 76.0, 100.0, 109.0, 152.5, 157.4
 
 
 def z(h):
@@ -82,10 +82,10 @@ def _arch_mask(xx, yy, x0, x1, ys, thick=None):
     return m & ~inner
 
 
-def panel_texture(name, seed):
+def panel_texture(name, seed, light=1.0):
     """Blind tracery: three recessed lancet panels per 6 m tile on dark ashlar (towers, buttresses, gables)."""
     size = 512
-    base = np.array(ashlar(name + '_base', seed).pixels[:]).reshape(size, size, 4)[..., :3].copy()
+    base = np.array(ashlar(name + '_base', seed, light).pixels[:]).reshape(size, size, 4)[..., :3].copy()
     yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
     img = base
     pw = size / 3
@@ -105,7 +105,7 @@ def panel_texture(name, seed):
     return _img(name, img)
 
 
-def window_texture(name, seed, lights=4, emit=False):
+def window_texture(name, seed, lights=4, emit=False, dark=False):
     """Tracery window for a lancet face with uvs 0..1 (1:4): stone mullions, lancet heads, roses; glass between."""
     rng = np.random.default_rng(seed)
     w, h = 256, 1024
@@ -114,7 +114,9 @@ def window_texture(name, seed, lights=4, emit=False):
                    np.float32)
     cells = pal[rng.integers(0, len(pal), (h // 24 + 1, w // 16 + 1))] * rng.uniform(0.7, 1.2, (h // 24 + 1, w // 16 + 1, 1))
     glass = cells[(yy // 24).astype(int), (xx // 16).astype(int)]
-    glass = glass * 0.55 + 0.45 * np.array([0.08, 0.09, 0.11])
+    lit = glass.copy()
+    # seen from outside by day the glass reads almost black with a hint of colour; the colour glows at night
+    glass = glass * (0.12 if dark else 0.3) + np.array([0.05, 0.055, 0.065])
     stone = np.array([0.40, 0.37, 0.33], np.float32)
     mask = np.zeros((h, w), bool)
     lw = w / lights
@@ -134,7 +136,7 @@ def window_texture(name, seed, lights=4, emit=False):
     img[bars & ~mask] *= 0.35
     img += rng.normal(0, 0.01, img.shape)
     if emit:
-        e = np.where(mask[..., None], 0.0, glass * 1.6)
+        e = np.where(mask[..., None], 0.0, lit * 0.9)
         return _img(name, img), _img(name + '_emit', e)
     return _img(name, img)
 
@@ -142,7 +144,7 @@ def window_texture(name, seed, lights=4, emit=False):
 def openwork_texture(name, seed):
     """Spire tracery: ashlar with quatrefoil and trefoil openings (alpha 0), 6 m tile."""
     size = 512
-    base = np.array(ashlar(name + '_base', seed, 1.05).pixels[:]).reshape(size, size, 4)[..., :3].copy()
+    base = np.array(ashlar(name + '_base', seed, 0.8).pixels[:]).reshape(size, size, 4)[..., :3].copy()
     yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
     alpha = np.ones((size, size), np.float32)
     n = 4
@@ -190,39 +192,69 @@ def lead_texture(name, seed):
     return _img(name, img)
 
 
+BANDS = {'': 1.18, 'Mid': 0.98, 'Dark': 0.78}   # lightness by height (see shade_by_height)
+
+
+def _glow(img, k=(0.55, 0.45, 0.30)):
+    return np.array(img.pixels[:]).reshape(512, 512, 4)[..., :3] * np.array(k)
+
+
 def make_materials():
-    stone = ashlar('tex_dom_ashlar', 21)
-    # floodlit at night: the emission texture is the stone itself, warm
-    glow = np.array(stone.pixels[:]).reshape(512, 512, 4)[..., :3] * np.array([0.55, 0.45, 0.30])
-    stone_emit = _img('tex_dom_ashlar_emit', glow)
-    panel = panel_texture('tex_dom_panel', 22)
-    pglow = np.array(panel.pixels[:]).reshape(512, 512, 4)[..., :3] * np.array([0.55, 0.45, 0.30])
-    panel_emit = _img('tex_dom_panel_emit', pglow)
+    mats = {}
+    for band, light in BANDS.items():
+        # floodlit at night all the way up: the darker bands glow as strongly as the lit base
+        boost = BANDS[''] / light
+        stone = ashlar(f'tex_dom_ashlar{band}', 21, light)
+        panel = panel_texture(f'tex_dom_panel{band}', 22, light)
+        trim = ashlar(f'tex_dom_trim{band}', 28, light * 1.22)
+        k = tuple(c * boost for c in (0.55, 0.45, 0.30))
+        mats['Stone' + band] = material('Stone' + band, image=stone, emit_image=_img(f'tex_dom_ashlar{band}_emit', _glow(stone, k)), rough=0.92)
+        mats['Panel' + band] = material('Panel' + band, image=panel, emit_image=_img(f'tex_dom_panel{band}_emit', _glow(panel, k)), rough=0.92)
+        mats['Trim' + band] = material('Trim' + band, image=trim, emit_image=_img(f'tex_dom_trim{band}_emit', _glow(trim, tuple(c * boost for c in (0.6, 0.5, 0.34)))), rough=0.85)
     win, win_emit = window_texture('tex_dom_window', 23, emit=True)
-    belfry = window_texture('tex_dom_belfry', 24, lights=2)
+    belfry = window_texture('tex_dom_belfry', 24, lights=2, dark=True)
     open_ = openwork_texture('tex_dom_openwork', 25)
     bal = balustrade_texture('tex_dom_balustrade')
     lead = lead_texture('tex_dom_lead', 26)
-    trim = ashlar('tex_dom_trim', 28, 1.3)
-    tglow = np.array(trim.pixels[:]).reshape(512, 512, 4)[..., :3] * np.array([0.60, 0.50, 0.34])
-    trim_emit = _img('tex_dom_trim_emit', tglow)
-    mats = {
-        'Stone': material('Stone', image=stone, emit_image=stone_emit, rough=0.92),
-        'Panel': material('Panel', image=panel, emit_image=panel_emit, rough=0.92),
-        'Trim': material('Trim', image=trim, emit_image=trim_emit, rough=0.85),
+    mats.update({
         'Window': material('Window', image=win, emit_image=win_emit, rough=0.2),
         'Belfry': material('Belfry', image=belfry, rough=0.6),
-        'Openwork': material('Openwork', image=open_, emit_image=stone_emit, rough=0.9, clip=True),
+        'Openwork': material('Openwork', image=open_, emit_image=_img('tex_dom_openwork_emit', _glow(mats['StoneDark'].node_tree.nodes['Image Texture'].image)), rough=0.9, clip=True),
         'Balustrade': material('Balustrade', image=bal, rough=0.9, clip=True),
         'Lead': material('Lead', image=lead, rough=0.55, metal=0.35),
         'Metal': material('Metal', (0.30, 0.36, 0.34), 0.5, 0.6),
         'Gold': material('Gold', (0.80, 0.62, 0.25), 0.35, 1.0),
         'Door': material('Door', (0.16, 0.13, 0.10), 0.7),
         'Steps': material('Steps', (0.66, 0.64, 0.60), 0.85),  # light granite, plain: a texture tile per step reads as noise
-    }
+        'Sculpture': material('Sculpture', (0.46, 0.41, 0.37), 0.9),   # the Kreuzblume replica: brownish cast stone
+        'Bronze': material('Bronze', (0.30, 0.22, 0.14), 0.4, 0.8),
+        'Mosaic': material('Mosaic', (0.72, 0.72, 0.70), 0.7),
+        'Flowers': material('Flowers', (0.62, 0.10, 0.08), 0.9),
+        'Planting': material('Planting', (0.16, 0.30, 0.12), 0.95),
+    })
     for m in mats.values():
         m.use_backface_culling = False
     return mats
+
+
+def shade_by_height(ob, mats):
+    """Stone faces above F+35 m use the 'Mid', above F+72 m the 'Dark' variant: weathered and sooty towards the top."""
+    me = ob.data
+    names = [m.name for m in me.materials]
+    for band in ('Mid', 'Dark'):
+        for base in ('Stone', 'Panel', 'Trim'):
+            if base + band not in names:
+                me.materials.append(mats[base + band])
+                names.append(base + band)
+    idx = {n: i for i, n in enumerate(names)}
+    for p in me.polygons:
+        n = names[p.material_index]
+        if n not in ('Stone', 'Panel', 'Trim'):
+            continue
+        zc = p.center.z
+        band = 'Dark' if zc > F + 72 else 'Mid' if zc > F + 35 else ''
+        if band:
+            p.material_index = idx[n + band]
 
 
 # ---------------------------------------------------------------- primitives
@@ -532,98 +564,143 @@ def chevet(B):
             flyer(B, (a0.x, a0.y), zz - 4.0, (a1.x, a1.y), zz)
 
 
+def shafts(B, a, t, n, positions, z0, z1, w=0.32, d=0.35):
+    """Slender vertical shafts (Dienste) standing in front of a wall frame at the given positions along it."""
+    for x in positions:
+        c0 = a + t * (x - w / 2)
+        c1 = a + t * (x + w / 2)
+        o0, o1 = c0 + n * d, c1 + n * d
+        B.face([(c0.x, c0.y, z0), (o0.x, o0.y, z0), (o0.x, o0.y, z1), (c0.x, c0.y, z1)], 'Trim')
+        B.face([(o0.x, o0.y, z0), (o1.x, o1.y, z0), (o1.x, o1.y, z1), (o0.x, o0.y, z1)], 'Trim', out=(n.x, n.y, 0))
+        B.face([(o1.x, o1.y, z0), (c1.x, c1.y, z0), (c1.x, c1.y, z1), (o1.x, o1.y, z1)], 'Trim')
+
+
+def tower_face(B, a, b, t, n, L, kind, stage):
+    """Windows, gables and shafts on one outer face of a tower stage. kind: 'west', 'side' or 'nave'."""
+    if stage == 1:
+        if kind == 'west':   # side portal under a gable that reaches past the stage top, two windows above
+            lancet(B, a, b, L / 2, 4.8, z(0.0), 11.5, mat='Door', reveal=1.6)
+            wimperg(B, a, b, L / 2, 7.0, z(10.5), 17.0, d=2.2)
+            for s in (L * 0.22, L * 0.78):
+                lancet(B, a, b, s, 3.4, z(5.0), 17.0)
+                wimperg(B, a, b, s, 4.2, z(21.0), 9.0, d=0.6)
+        elif kind == 'side':
+            for s in (L * 0.27, L * 0.73):
+                lancet(B, a, b, s, 4.0, z(4.0), 18.5)
+                wimperg(B, a, b, s, 4.8, z(21.5), 9.5, d=0.6)
+        shafts(B, a, t, n, [1.6, L * 0.5 - 2.9, L * 0.5 + 2.9, L - 1.6], z(0.5), z(Z_S1 - 0.5))
+    elif stage == 2:
+        if kind in ('west', 'side'):
+            for s in (L * 0.27, L * 0.73):
+                lancet(B, a, b, s, 4.4, z(Z_S1 + 2.5), 18.5)
+                wimperg(B, a, b, s, 5.4, z(Z_S1 + 19.0), 13.0, d=0.6)
+            shafts(B, a, t, n, [1.6, L * 0.5 - 2.9, L * 0.5 + 2.9, L - 1.6], z(Z_S1 + 0.5), z(Z_S2 - 0.5))
+        else:
+            lancet(B, a, b, L / 2, 5.0, z(Z_EAVE + 1.5), 6.0, mat='Belfry')
+    elif stage == 3:  # one great window, blind tracery to the sides
+        lancet(B, a, b, L / 2, 6.0, z(Z_S2 + 2.5), 17.0)
+        wimperg(B, a, b, L / 2, 7.4, z(Z_S3 - 4.0), 14.0, d=0.7)
+        shafts(B, a, t, n, [1.4, L * 0.5 - 4.2, L * 0.5 + 4.2, L - 1.4], z(Z_S2 + 0.5), z(Z_S3 - 0.5))
+    else:  # belfry: one very tall window per face
+        lancet(B, a, b, L / 2, 5.4, z(Z_S3 + 2.0), 19.5, mat='Belfry', reveal=0.9)
+        wimperg(B, a, b, L / 2, 6.8, z(Z_S4 - 3.5), 12.0, d=0.7)
+        shafts(B, a, t, n, [0.9, L * 0.5 - 3.6, L * 0.5 + 3.6, L - 0.9], z(Z_S3 + 0.5), z(Z_S4 - 0.5))
+
+
 def west_front(B):
-    """The two towers (square stages, octagon, openwork spires) and the central bay between them."""
+    """The two towers and the central bay between them, after the 2022 photo of the west front.
+
+    Stages: S1 (portals, two window axes) and S2 (two axes) at full width; S3 (one great window) set in; the belfry
+    a narrower square block with four corner turrets of pinnacles; the octagon ringed by pinnacles; the openwork
+    spire. The corner buttresses step back at each stage and end in pinnacle clusters, so the outline tapers.
+    """
     for sgn in (1, -1):
         tc = (TC[0], sgn * TC[1])
         hw = (TV1 - TV0) / 2
         hd = (TU1 - TU0) / 2
-        # square stages: S1, S2 full size; S3 inset
-        for zz0, zz1, ins in ((SINK, z(Z_S1), 0.0), (z(Z_S1), z(Z_S2), 0.3), (z(Z_S2), z(Z_S3), 1.6)):
+        stages = ((1, SINK, z(Z_S1), 0.0, 3.6), (2, z(Z_S1), z(Z_S2), 0.4, 2.8), (3, z(Z_S2), z(Z_S3), 2.2, 2.0))
+        for stage, zz0, zz1, ins, depth in stages:
             poly = [(tc[0] - hd + ins, tc[1] - hw + ins), (tc[0] + hd - ins, tc[1] - hw + ins),
                     (tc[0] + hd - ins, tc[1] + hw - ins), (tc[0] - hd + ins, tc[1] + hw - ins)]
             prism(B, poly, zz0, zz1, 'Panel', top='Stone')
-            P = ccw([V(p) for p in poly])
-            for a, b, t, n in edges(P):
-                facing_nave = (n.y * sgn < -0.5)
+            for a, b, t, n in edges(ccw([V(p) for p in poly])):
+                facing_nave = n.y * sgn < -0.5
                 facing_east = n.x > 0.5
                 L = (b - a).length
-                # the two lower stages have two window axes per face, split by a buttress with pinnacles
-                outer_face = not facing_east and not facing_nave
-                if zz1 != z(Z_S3) and outer_face:
+                kind = 'west' if n.x < -0.5 else 'nave' if facing_nave else 'east' if facing_east else 'side'
+                if kind == 'east' or (kind == 'nave' and stage == 1):
+                    continue
+                tower_face(B, a, b, t, n, L, kind, stage)
+                if stage < 3 and kind != 'nave':  # middle buttress between the two window axes
                     c = a + t * (L / 2)
-                    boxm(B, min(c.x, c.x + n.x * 1.8) - (0.8 if abs(n.x) < 0.5 else 0), max(c.x, c.x + n.x * 1.8) + (0.8 if abs(n.x) < 0.5 else 0),
-                         min(c.y, c.y + n.y * 1.8) - (0.8 if abs(n.y) < 0.5 else 0), max(c.y, c.y + n.y * 1.8) + (0.8 if abs(n.y) < 0.5 else 0),
-                         zz0, zz1 - 1.0, 'Panel', top='Stone')
+                    lo, hi = c - t * 0.8, c + t * 0.8
+                    prism(B, [(lo.x, lo.y), (hi.x, hi.y), (hi.x + n.x * 1.8, hi.y + n.y * 1.8), (lo.x + n.x * 1.8, lo.y + n.y * 1.8)],
+                          zz0, zz1 + 2.0, 'Panel', top='Stone')
                     pc = c + n * 0.9
-                    pinnacle(B, pc.x, pc.y, zz1 - 1.0, 9.0, 1.3)
-                if zz0 == SINK:
-                    if n.x < -0.5:   # west: side portal under a big gable, two windows above
-                        lancet(B, a, b, L / 2, 4.6, z(0.0), 11.0, mat='Door', reveal=1.4)
-                        wimperg(B, a, b, L / 2, 6.6, z(10.0), 11.0, d=2.0)
-                        for s in (L * 0.25, L * 0.75):
-                            lancet(B, a, b, s, 3.6, z(14.0), 11.5)
-                    elif outer_face:
-                        for s in (L * 0.25, L * 0.75):
-                            lancet(B, a, b, s, 3.8, z(5.0), 18.0)
-                            wimperg(B, a, b, s, 4.6, z(21.5), 6.0, d=0.5)
-                elif zz1 == z(Z_S2):
-                    if outer_face:
-                        for s in (L * 0.25, L * 0.75):
-                            lancet(B, a, b, s, 4.2, z(30.5), 20.0)
-                            wimperg(B, a, b, s, 5.2, z(48.5), 8.0, d=0.5)
-                    elif facing_nave:
-                        lancet(B, a, b, L / 2, 5.0, z(Z_EAVE + 1.5), 6.5, mat='Belfry')
-                else:
-                    lancet(B, a, b, L / 2, 5.4, z(62.0), 26.0, mat='Belfry')
-                    wimperg(B, a, b, L / 2, 6.8, z(85.0), 10.0, d=0.5)
+                    pinnacle(B, pc.x, pc.y, zz1 + 2.0, 12.0, 1.4)
                 balustrade(B, a, b, zz1, out=(n.x, n.y), d=0.2)
-            # corner buttresses: stepped back with height, a pinnacle at each step
+            # corner buttresses (one along each face), stepped back per stage, each ending in a tall pinnacle
             for cu in (tc[0] - hd + ins, tc[0] + hd - ins):
                 for cv in (tc[1] - hw + ins, tc[1] + hw - ins):
                     du = -1 if cu < tc[0] else 1
                     dv = -1 if cv < tc[1] else 1
-                    depth = {0.0: 3.4, 0.3: 2.4, 1.6: 1.5}[ins]
-                    # one buttress along u (front/back), one along v (sides)
-                    boxm(B, cu - 1.3, cu + 1.3, cv + dv * 0.0, cv + dv * depth, zz0, zz1 - 1.0, 'Panel', top='Stone')
-                    boxm(B, cu + du * 0.0, cu + du * depth, cv - 1.3, cv + 1.3, zz0, zz1 - 1.0, 'Panel', top='Stone')
-                    pinnacle(B, cu + du * depth * 0.5, cv, zz1 - 1.0, 8.0 if ins < 1 else 12.0, 1.3)
-                    pinnacle(B, cu, cv + dv * depth * 0.5, zz1 - 1.0, 8.0 if ins < 1 else 12.0, 1.3)
-        # octagon with eight pinnacle turrets
-        oc = poly_n(tc[0], tc[1], 7.2, 8)
-        prism(B, oc, z(Z_S3), z(Z_OCT), 'Panel', top='Stone')
-        P = ccw([V(p) for p in oc])
-        for a, b, t, n in edges(P):
-            lancet(B, a, b, (b - a).length / 2, 2.6, z(Z_S3 + 2.0), 10.0, mat='Belfry', reveal=0.5)
-            wimperg(B, a, b, (b - a).length / 2, 3.6, z(Z_OCT - 1.5), 5.5, d=0.4)
-            balustrade(B, a, b, z(Z_OCT), out=(n.x, n.y), d=0.1)
-        for p in poly_n(tc[0], tc[1], 9.0, 8, 0):
-            pinnacle(B, p[0], p[1], z(Z_S3), 18.0, 1.6)
-        # openwork spire: eight faces with tracery holes, crockets along the ribs, the Kreuzblume on top
-        base = poly_n(tc[0], tc[1], 6.4, 8)
-        apex = (tc[0], tc[1], z(Z_SPIRE))
-        pyramid(B, base, z(Z_OCT), apex, 'Openwork')
+                    top = zz1 + (3.0 if stage < 3 else 6.0)
+                    inner = abs(cv) < abs(tc[1])  # the corner next to the central bay: no buttress into the bay
+                    if not inner:
+                        boxm(B, cu - 1.3, cu + 1.3, cv, cv + dv * depth, zz0, top, 'Panel', top='Stone')
+                        pinnacle(B, cu, cv + dv * depth * 0.5, top, 12.0 if stage < 3 else 18.0, 1.5)
+                    boxm(B, cu, cu + du * depth, cv - 1.3, cv + 1.3, zz0, top, 'Panel', top='Stone')
+                    h = 12.0 if stage < 3 else 18.0
+                    pinnacle(B, cu + du * depth * 0.5, cv, top, h, 1.5)
+                    pinnacle(B, cu + du * 0.6, cv + dv * 0.6, top + 2.0, h + 4.0, 1.8)
+        # belfry: a narrower square block, four corner turrets rising past it as pinnacle clusters
+        bw = 7.8
+        bel = [(tc[0] - bw, tc[1] - bw), (tc[0] + bw, tc[1] - bw), (tc[0] + bw, tc[1] + bw), (tc[0] - bw, tc[1] + bw)]
+        prism(B, bel, z(Z_S3), z(Z_S4), 'Panel', top='Stone')
+        for a, b, t, n in edges(ccw([V(p) for p in bel])):
+            tower_face(B, a, b, t, n, (b - a).length, 'belfry', 4)
+            balustrade(B, a, b, z(Z_S4), out=(n.x, n.y), d=0.2)
+        for du in (-1, 1):
+            for dv in (-1, 1):
+                cu, cv = tc[0] + du * (bw + 0.6), tc[1] + dv * (bw + 0.6)
+                prism(B, poly_n(cu, cv, 1.5, 8), z(Z_S3), z(Z_S4 + 3.0), 'Panel', top='Stone')
+                pinnacle(B, cu, cv, z(Z_S4 + 3.0), 15.0, 2.4)
+                for ox, oy in ((du * 2.6, 0), (0, dv * 2.6)):
+                    pinnacle(B, cu + ox - du * 0.6, cv + oy - dv * 0.6, z(Z_S3 + 4.0), 16.0, 1.4)
+        # octagon, ringed by pinnacles
+        oc = poly_n(tc[0], tc[1], 7.0, 8)
+        prism(B, oc, z(Z_S4), z(Z_OCT), 'Panel', top='Stone')
+        for a, b, t, n in edges(ccw([V(p) for p in oc])):
+            lancet(B, a, b, (b - a).length / 2, 2.4, z(Z_S4 + 1.0), 7.5, mat='Belfry', reveal=0.5)
+            wimperg(B, a, b, (b - a).length / 2, 3.6, z(Z_OCT - 2.0), 6.5, d=0.4)
+        for p in poly_n(tc[0], tc[1], 8.6, 8, 0):
+            pinnacle(B, p[0], p[1], z(Z_S4), 15.0, 1.5)
+        # openwork spire: eight faces with tracery, ribs with dense crockets, the Kreuzblume on top
+        base = poly_n(tc[0], tc[1], 6.6, 8)
+        pyramid(B, base, z(Z_OCT), (tc[0], tc[1], z(Z_SPIRE)), 'Openwork')
+        n_c = 22
         for p in base:
-            for k in range(1, 15):
-                f = k / 15
+            for k in range(1, n_c):
+                f = k / n_c
                 x = p[0] + (tc[0] - p[0]) * f
                 y = p[1] + (tc[1] - p[1]) * f
                 zz = z(Z_OCT) + (z(Z_SPIRE) - z(Z_OCT)) * f
                 d = V((x - tc[0], y - tc[1]))
-                d = d.normalized() * 0.55 if d.length > 1e-6 else V((0, 0))
-                pyramid(B, poly_n(x + d.x, y + d.y, 0.32, 4, 45), zz, (x + d.x * 2.2, y + d.y * 2.2, zz + 0.9), 'Stone')
-            # rib
-            B.face([(p[0], p[1], z(Z_OCT)), (tc[0], tc[1], z(Z_SPIRE)), (tc[0], tc[1], z(Z_SPIRE) - 0.5),
-                    (p[0], p[1], z(Z_OCT) - 0.5)], 'Stone')
+                d = d.normalized() if d.length > 1e-6 else V((0, 0))
+                sz = 0.42 * (1 - 0.5 * f)
+                pyramid(B, poly_n(x + d.x * 0.5, y + d.y * 0.5, sz, 4, 45), zz, (x + d.x * 1.9, y + d.y * 1.9, zz + 1.0), 'Trim')
+            B.face([(p[0], p[1], z(Z_OCT)), (tc[0], tc[1], z(Z_SPIRE)), (tc[0], tc[1], z(Z_SPIRE) - 0.6),
+                    (p[0], p[1], z(Z_OCT) - 0.6)], 'Trim')
         finial(B, tc[0], tc[1], z(Z_SPIRE) - 0.4, 2.6)
-        boxm(B, tc[0] - 0.4, tc[0] + 0.4, tc[1] - 0.4, tc[1] + 0.4, z(Z_SPIRE) - 1.0, z(Z_TOP) - 1.2, 'Stone')
+        boxm(B, tc[0] - 0.45, tc[0] + 0.45, tc[1] - 0.45, tc[1] + 0.45, z(Z_SPIRE) - 1.0, z(Z_TOP) - 1.4, 'Trim')
     # central bay between the towers: wall, main portal, great window, gable
     a, b = (TU0, TV0), (TU0, -TV0)
     quad(B, a, b, SINK, z(Z_EAVE + 1.5), 'Panel', (-1, 0))
     L = 2 * TV0
-    lancet(B, a, b, L / 2, 6.4, z(0.0), 15.0, mat='Door', reveal=2.0)
-    wimperg(B, a, b, L / 2, 8.0, z(14.0), 15.0, d=0.8)
-    lancet(B, a, b, L / 2, 9.0, z(30.0), 16.0)
+    lancet(B, a, b, L / 2, 6.6, z(0.0), 15.0, mat='Door', reveal=2.4)
+    wimperg(B, a, b, L / 2, 9.0, z(13.5), 18.0, d=1.0)
+    lancet(B, a, b, L / 2, 9.4, z(23.0), 20.0)
+    wimperg(B, a, b, L / 2, 10.6, z(41.0), 14.0, d=0.8)
     aa, t, n = wall_frame(a, b)
     ap = on_wall(aa, t, n, L / 2, z(71.0), 0)
     B.face([on_wall(aa, t, n, 0, z(Z_EAVE + 1.5), 0), on_wall(aa, t, n, L, z(Z_EAVE + 1.5), 0), ap], 'Panel', out=(-1, 0, 0))
@@ -668,6 +745,95 @@ def domtreppe(B):
         prism(B, [(u, v_top - 2.0), (u + 1.2, v_top - 2.0), (u + 1.2, v_bot), (u, v_bot)], SINK, F + 0.6, 'Stone', top='Stone')
 
 
+# ---------------------------------------------------------------- Domplatte west: stairs, Kreuzblume, Taubenbrunnen
+# positions from OSM (Kreuzblume node 1094776262, Taubenbrunnen way 530671643), levels from DGM1, shapes after photos
+# ("Kreuzblume Nachbildung vor Kölner Dom 2", "Kardinal-Höffner-Platz mit Nachbildung Kreuzblume und Taubenbrunnen")
+
+KHP_STAIRS = (-123.8, -119.0, -20.0, 21.0)  # u foot, u top, v south, v north
+KHP_LOW, KHP_HIGH = 4.0, 4.85               # Kardinal-Höffner-Platz and the Domplatte above the stairs
+KREUZBLUME = (-127.5, 1.7, 3.95)            # u, v, ground
+TAUBENBRUNNEN = (-130.2, -8.3, 4.2)  # DGM1 rises to 4.24 under the disc: it stands just proud of the paving
+
+
+def khp_stairs(B):
+    """Five broad steps from the Kardinal-Höffner-Platz up to the Domplatte, along the plaza's west edge."""
+    u0, u1, v0, v1 = KHP_STAIRS
+    n = 5
+    rise, tread = (KHP_HIGH - KHP_LOW) / n, (u1 - u0) / n
+    for k in range(n):
+        top = KHP_LOW + (k + 1) * rise
+        boxm(B, u0 + k * tread, u1 + 1.0, v0, v1, SINK, top, 'Steps')
+
+
+def kreuzblume(B, cu, cv, zg):
+    """Full-size replica of the finial of the towers: 9.5 m high, 4.6 m across the lower crockets."""
+    S = 'Sculpture'
+    # flower bed with a kerb of setts
+    prism(B, poly_n(cu, cv, 2.55, 16), zg - 0.1, zg + 0.18, 'Stone', top='Planting')
+    for p in poly_n(cu, cv, 2.0, 12):
+        pyramid(B, poly_n(p[0], p[1], 0.22, 6), zg + 0.18, (p[0], p[1], zg + 0.42), 'Flowers')
+    # plinth with pointed niches, moulded cap, tapering pedestal with the inscription plaques
+    prism(B, poly_n(cu, cv, 1.0, 8), zg, zg + 1.9, S, top=S)
+    for a, b, t, nn in edges(ccw([V(p) for p in poly_n(cu, cv, 1.0, 8)])):
+        lancet(B, a, b, (b - a).length / 2, 0.55, zg + 0.15, 1.0, mat='Door', frame=S, reveal=0.08)
+    prism(B, poly_n(cu, cv, 1.25, 8), zg + 1.9, zg + 2.25, S, top=S, bottom=True)
+    lo, hi = poly_n(cu, cv, 1.15, 8), poly_n(cu, cv, 0.75, 8)
+    for i in range(8):
+        a0, a1, b0, b1 = lo[i], lo[(i + 1) % 8], hi[i], hi[(i + 1) % 8]
+        B.face([(a0[0], a0[1], zg + 2.25), (a1[0], a1[1], zg + 2.25), (b1[0], b1[1], zg + 3.7), (b0[0], b0[1], zg + 3.7)], S)
+    # shaft
+    sh = poly_n(cu, cv, 0.55, 8)
+    prism(B, sh, zg + 3.7, zg + 8.6, S)
+    # crocket rings: four arms each, every arm a slab with knobs on top and a leaf hanging below
+    for z_arm, reach, th in ((zg + 5.2, 2.3, 0.55), (zg + 7.2, 1.45, 0.42)):
+        for ang in (0, 90, 180, 270):
+            d = V((math.cos(math.radians(ang)), math.sin(math.radians(ang))))
+            s_ = V((-d.y, d.x))
+            w = 0.5
+            r0 = V((cu, cv)) + d * 0.4
+            r1 = V((cu, cv)) + d * reach
+            q = [r0 - s_ * w, r1 - s_ * w * 0.8, r1 + s_ * w * 0.8, r0 + s_ * w]
+            prism(B, [(p.x, p.y) for p in q], z_arm, z_arm + th, S, top=S, bottom=True)
+            k = 4 if reach > 2 else 3
+            for i in range(k):
+                c = r0 + d * ((reach - 0.4) * (i + 0.6) / k)
+                for o in (-0.25, 0.25):
+                    cc = c + s_ * o
+                    pyramid(B, poly_n(cc.x, cc.y, 0.14, 4, 45), z_arm + th, (cc.x + d.x * 0.15, cc.y + d.y * 0.15, z_arm + th + 0.45), S)
+            # curled tip and the leaf below
+            pyramid(B, poly_n(r1.x, r1.y, 0.25, 4, 45), z_arm + th, (r1.x + d.x * 0.2, r1.y + d.y * 0.2, z_arm + th + 0.5), S)
+            l0, l1 = V((cu, cv)) + d * 0.5, V((cu, cv)) + d * (reach * 0.6)
+            B.face([(l0.x - s_.x * 0.35, l0.y - s_.y * 0.35, z_arm - 1.4), (l0.x + s_.x * 0.35, l0.y + s_.y * 0.35, z_arm - 1.4),
+                    (l1.x + s_.x * 0.4, l1.y + s_.y * 0.4, z_arm), (l1.x - s_.x * 0.4, l1.y - s_.y * 0.4, z_arm)], S)
+    # knob on top
+    prism(B, poly_n(cu, cv, 0.7, 8), zg + 8.6, zg + 9.0, S)
+    pyramid(B, poly_n(cu, cv, 0.7, 8), zg + 9.0, (cu, cv, zg + 9.5), S)
+    pyramid(B, poly_n(cu, cv, 0.55, 8), zg + 8.6, (cu, cv, zg + 8.25), S)
+
+
+def taubenbrunnen(B, cu, cv, zg):
+    """Ewald Mataré's dove fountain: a flat round mosaic with a bronze spiral, a ring of little dove spouts."""
+    prism(B, poly_n(cu, cv, 4.2, 32), zg - 0.1, zg + 0.08, 'Stone', top='Mosaic')
+    prism(B, poly_n(cu, cv, 2.0, 24), zg + 0.08, zg + 0.12, 'Bronze', top='Bronze')
+    # the spiral: a thin raised band winding out
+    pts = []
+    for k in range(80):
+        a = k * 0.32
+        r = 0.15 + a * 0.11
+        if r > 1.9:
+            break
+        pts.append((cu + r * math.cos(a), cv + r * math.sin(a)))
+    for p, q in zip(pts, pts[1:]):
+        B.face([(p[0], p[1], zg + 0.12), (q[0], q[1], zg + 0.12), (q[0], q[1], zg + 0.2), (p[0], p[1], zg + 0.2)], 'Bronze')
+    for k in range(12):
+        a = 2 * math.pi * k / 12
+        d = V((math.cos(a), math.sin(a)))
+        b = V((cu, cv)) + d * 4.0
+        h = V((cu, cv)) + d * 3.55
+        boxm(B, b.x - 0.04, b.x + 0.04, b.y - 0.04, b.y + 0.04, zg, zg + 0.55, 'Bronze')
+        pyramid(B, poly_n(b.x, b.y, 0.09, 4, 45), zg + 0.5, (h.x, h.y, zg + 0.45), 'Bronze')
+
+
 def build(B):
     # aisles and clerestory: nave (towers to the transept) and choir (transept to the apse), both sides
     for sgn in (1, -1):
@@ -680,6 +846,9 @@ def build(B):
     west_front(B)
     crossing_spire(B)
     domtreppe(B)
+    khp_stairs(B)
+    kreuzblume(B, *KREUZBLUME)
+    taubenbrunnen(B, *TAUBENBRUNNEN)
 
 
 def build_collision(C):
@@ -691,7 +860,8 @@ def build_collision(C):
               for k in range(15)], SINK, z(20.0), x)
     for sgn in (1, -1):
         boxm(C, TU0 - 3.4, TU1, sgn * TV0 if sgn > 0 else -TV1 - 3.4, sgn * TV1 + 3.4 if sgn > 0 else -TV0, SINK, z(Z_S2), x)
-        prism(C, poly_n(TC[0], sgn * TC[1], 9.0, 8), z(Z_S2), z(Z_OCT), x)
+        boxm(C, TC[0] - 9.8, TC[0] + 9.8, sgn * TC[1] - 9.8, sgn * TC[1] + 9.8, z(Z_S2), z(Z_S3), x)
+        prism(C, poly_n(TC[0], sgn * TC[1], 8.4, 8), z(Z_S3), z(Z_OCT), x)
         pyramid(C, poly_n(TC[0], sgn * TC[1], 6.4, 8), z(Z_OCT), (TC[0], sgn * TC[1], z(Z_SPIRE)), x)
         for u in NAVE_PIERS + [TU1] + CHOIR_PIERS:
             boxm(C, u - 1.0, u + 1.0, sgn * VO if sgn > 0 else -VO - 3.2, sgn * VO + 3.2 if sgn > 0 else -VO, SINK, z(31.0), x)
@@ -703,13 +873,24 @@ def build_collision(C):
     C.face([(u0, v_top - 0.5, F), (u1, v_top - 0.5, F), (u1, v_bot, 1.1 + rise), (u0, v_bot, 1.1 + rise)], x, out=(0, 0, 1))
     for u in (u0 - 1.2, u1):
         boxm(C, u, u + 1.2, v_top - 2.0, v_bot, SINK, F + 0.6, x)
+    # stairs to the Kardinal-Höffner-Platz: a ramp through the nosings; the Kreuzblume; the fountain's low disc
+    a0, a1, b0, b1 = KHP_STAIRS
+    rise = (KHP_HIGH - KHP_LOW) / 5
+    C.face([(a0, b0, KHP_LOW + rise), (a1, b0, KHP_HIGH), (a1, b1, KHP_HIGH), (a0, b1, KHP_LOW + rise)], x, out=(0, 0, 1))
+    cu, cv, zg = KREUZBLUME
+    prism(C, poly_n(cu, cv, 1.25, 8), zg - 0.3, zg + 2.25, x)
+    prism(C, poly_n(cu, cv, 0.75, 8), zg + 2.25, zg + 9.5, x)
+    cu, cv, zg = TAUBENBRUNNEN
+    prism(C, poly_n(cu, cv, 4.2, 16), zg - 0.3, zg + 0.08, x)
 
 
 def main():
     coll = reset_collection('KOELNER_DOM')
-    B = Builder(make_materials(), tex_m=TEX_M)
+    mats = make_materials()
+    B = Builder(mats, tex_m=TEX_M)
     build(B)
     dom = B.to_object(NAME, coll, ORIGIN, 0.0)
+    shade_by_height(dom, mats)
     C = Builder()
     build_collision(C)
     col = C.to_object(f'{NAME}_col', coll, ORIGIN, 0.0)

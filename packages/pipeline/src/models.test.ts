@@ -19,6 +19,7 @@ async function glb(meshes: { name: string; tx: number; tz: number }[]): Promise<
 test('prepareModel splits *_col nodes into world-space collision and drops them from the model', async () => {
   const m = await prepareModel(await glb([{ name: 'church', tx: 100, tz: 50 }, { name: 'church_col', tx: 10, tz: 20 }]));
   expect(Array.from(m.collision)).toEqual([10, 0, 20, 11, 0, 20, 10, 1, 20]);
+  expect(m.bounds).toEqual({ minX: 100, maxX: 101, minZ: 50, maxZ: 50 });
   expect(m.centre).toEqual({ x: 100.5, z: 50 });
   const { MeshoptDecoder } = await import('meshoptimizer');
   const { EXTMeshoptCompression } = await import('@gltf-transform/extensions');

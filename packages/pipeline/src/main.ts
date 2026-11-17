@@ -165,8 +165,10 @@ async function main() {
     const lift = Math.min(...parts.map((p) => p.base));
     const m = await prepareModel(await readFile(path), lift);
     const off = Math.min(...parts.map((p) => Math.hypot(m.centre.x - p.centroid.x, m.centre.z - p.centroid.z)));
-    // a model far from its building was exported in the wrong frame (local origin, Z up, …)
-    if (off > 25) throw new Error(`override ${ids.join(', ')}: model centre is ${off.toFixed(1)} m from the building (${path})`);
+    // a model far from its building was exported in the wrong frame (local origin, Z up, …); a large model that
+    // reaches out (the Dom with the Domtreppe and the Kreuzblume) passes as long as its building lies inside it
+    const inside = parts.some((p) => p.centroid.x >= m.bounds.minX && p.centroid.x <= m.bounds.maxX && p.centroid.z >= m.bounds.minZ && p.centroid.z <= m.bounds.maxZ);
+    if (off > 25 && !inside) throw new Error(`override ${ids.join(', ')}: model centre is ${off.toFixed(1)} m from the building (${path})`);
     const chunk = chunkKey(b.centroid.x, b.centroid.z);
     if (!chunks.some((c) => c.key === chunk)) throw new Error(`override ${id}: chunk ${chunk} does not exist`);
     const file = `model_${basename(path, '.glb')}.glb`;

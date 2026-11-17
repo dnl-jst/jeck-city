@@ -12,6 +12,8 @@ export type PreparedModel = {
   collision: Float32Array;
   /** Bounding-box centre (x, z) of the rendered geometry, world space. */
   centre: { x: number; z: number };
+  /** Bounding box (x, z) of the rendered geometry, world space. */
+  bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
 };
 
 const io = async () => {
@@ -94,7 +96,7 @@ export async function prepareModel(glb: Uint8Array, lift = 0): Promise<PreparedM
     }
   }
   doc.createExtension(EXTMeshoptCompression).setRequired(true).setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.QUANTIZE });
-  return { glb: await nio.writeBinary(doc), collision, centre: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 } };
+  return { glb: await nio.writeBinary(doc), collision, centre: { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 }, bounds: { minX, maxX, minZ, maxZ } };
 }
 
 /**
