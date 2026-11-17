@@ -4,7 +4,8 @@
 
 Nippes soll sich anfühlen wie Nippes gerade jetzt. Die Sonne steht schon heute dort, wo sie draußen steht
 (`packages/shared/src/sun.ts`). Jetzt kommt das Wetter dazu: Regnet es draußen in Köln, regnet es auch im Spiel,
-und zwar für alle Spieler gleich. Das Wetter ist rein optisch und akustisch. Es ändert nichts am Spiel selbst.
+und zwar für alle Spieler gleich. Es ist **ein Wetter für ganz Köln**, nicht für Nippes: Die Spielwelt wird in einem
+anderen PR deutlich größer, und das Wetter soll dafür nicht angepasst werden müssen. Das Wetter ist rein optisch und akustisch. Es ändert nichts am Spiel selbst.
 
 ## Ziele
 
@@ -26,6 +27,7 @@ und zwar für alle Spieler gleich. Das Wetter ist rein optisch und akustisch. Es
 - Keine nassen oder spiegelnden Straßen, keine Pfützen, kein Gewitter mit Blitz und Donner. Das ist ein mögliches
   späteres Feature.
 - Keine Vorhersage, nur das aktuelle Wetter.
+- Kein ortsabhängiges Wetter (z. B. Regen im Norden, trocken im Süden). Die ganze Welt hat Kölns Wetter.
 - Kein HUD-Redesign. Das kommt danach in einer eigenen Runde.
 
 ## Anti-Ziele
@@ -68,7 +70,9 @@ Der Nutzer hat A gewählt.
 ### Quelle und Abruf (Server)
 
 - **Quelle: Open-Meteo** (`api.open-meteo.com/v1/forecast`), kostenlos und ohne Schlüssel. Abgefragt werden die
-  `current`-Werte für den Wilhelmplatz (`SUN_LAT`/`SUN_LNG` aus `sun.ts`): `temperature_2m`, `weather_code`,
+  `current`-Werte für einen festen Punkt in der Kölner Innenstadt (etwa 50.94 N, 6.96 O), als eigene Konstante
+`WEATHER_LAT`/`WEATHER_LNG` in `packages/shared`. Bewusst nicht `SUN_LAT`/`SUN_LNG` (Nippes) und nicht abhängig von
+der Ausdehnung der Spielwelt. Es gibt kein ortsabhängiges Wetter innerhalb der Welt. Abgefragt werden: `temperature_2m`, `weather_code`,
   `cloud_cover`, `precipitation`, `rain`, `showers`, `snowfall`, `visibility`, `wind_speed_10m`,
   `wind_direction_10m`.
 - **Takt:** Der erste Abruf läuft beim Serverstart, ohne den Start zu blockieren, danach alle 15 Minuten. Zeitlimit
