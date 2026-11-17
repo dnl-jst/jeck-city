@@ -13,11 +13,11 @@ declare const TextDecoder: new () => { decode(input: ArrayBuffer): string };
  */
 export type WorldAssets = { manifest: WorldManifest; collision: CollisionAsset; terrain: TerrainGrid; npc?: NpcNet | null; signals?: SignalJunction[] | null };
 
-/** Reads manifest.json, collision.bin and terrain.bin through `read` (fetch in the browser, fs on the server). */
-export async function loadWorldAssets(read: (file: string) => Promise<ArrayBuffer>): Promise<WorldAssets> {
+/** Reads manifest.json, collision.bin, terrain.bin, signals.json and (unless opts.npc is false) npc.json through `read`. */
+export async function loadWorldAssets(read: (file: string) => Promise<ArrayBuffer>, opts: { npc?: boolean } = {}): Promise<WorldAssets> {
   const [m, c, t] = await Promise.all([read('manifest.json'), read('collision.bin'), read('terrain.bin')]);
   const manifest = parseManifest(JSON.parse(new TextDecoder().decode(m)));
-  const npc = manifest.npc ? parseNpcNet(JSON.parse(new TextDecoder().decode(await read(manifest.npc.file)))) : null;
+  const npc = manifest.npc && opts.npc !== false ? parseNpcNet(JSON.parse(new TextDecoder().decode(await read(manifest.npc.file)))) : null;
   const signals = manifest.signals ? parseSignals(JSON.parse(new TextDecoder().decode(await read(manifest.signals.file)))) : null;
   return { manifest, collision: decodeCollision(c), terrain: decodeTerrain(t), npc, signals };
 }

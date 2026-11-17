@@ -67,6 +67,7 @@ export function readWorldFile(file: string): ArrayBuffer {
 let real: Promise<WorldAssets> | null = null;
 /** The real world assets (memoised; decoded once per test file). */
 export function realAssets(): Promise<WorldAssets> {
-  real ??= loadWorldAssets(async (f) => readWorldFile(f));
+  // without the NPC network: physics tests do not need it, and its 22 MB of JSON slow every test in the file (GC)
+  real ??= loadWorldAssets(async (f) => readWorldFile(f), { npc: false });
   return real;
 }
