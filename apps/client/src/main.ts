@@ -14,6 +14,7 @@ import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
+import { WeatherBadge } from './weather/badge';
 import { Props } from './props';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
@@ -230,6 +231,7 @@ let sunAge = 0;
 /** Dev override from `?weather=` (set once the dev permissions are known). */
 let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
+const weatherBadge = new WeatherBadge(document.body);
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -294,6 +296,7 @@ renderer.setAnimationLoop((t: number) => {
     nightFactor = sun.nightFactor;
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
+    weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5);
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
