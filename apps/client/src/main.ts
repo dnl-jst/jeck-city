@@ -13,6 +13,7 @@ import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { CLEAR_LOOK, WeatherBlend } from './weather/look';
+import { Precipitation } from './weather/precip';
 import { Props } from './props';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
@@ -210,11 +211,13 @@ if (debug) {
 }
 
 let lighting: Lighting | null = null;
-/** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees and cars (all live but MSAA). */
+let precip: Precipitation | null = null;
+/** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees, cars and rain/snow (all live but MSAA). */
 function applyQuality(): void {
   const q = QUALITY[qualityLevel];
   resize();
   lighting?.setQuality(q);
+  precip?.setQuality(q);
   props?.setTreeRadii(q.treeRadius, q.treeShadowRadius);
   world.setRadii(q.loadRadius, q.unloadRadius);
   game?.setQuality(q);
@@ -293,6 +296,7 @@ renderer.setAnimationLoop((t: number) => {
     weatherBlend.offer(wx);
     look = weatherBlend.update(dt);
     lighting.update(sun, camera.position, look);
+    precip?.update(dt, camera.position, look);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
     const far = lighting.viewFar + 5;
     if (Math.abs(camera.far - far) > 0.5) {
@@ -398,6 +402,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
+  precip = new Precipitation(scene);
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
   const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug, import.meta.env.DEV);
   const devCam = allowed.cam ? devCamParam : null;
