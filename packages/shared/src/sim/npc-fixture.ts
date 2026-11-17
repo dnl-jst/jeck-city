@@ -15,7 +15,7 @@ export function gridNet(size = 600, block = 50): NpcNet {
   const seg = (a: number, b: number) => [nodes[a]!, nodes[b]!] as [number, number][];
   for (let i = 0; i < n; i++) {
     for (let k = 0; k < n; k++) {
-      for (const [di, dk] of [[1, 0], [0, 1]]) {
+      for (const [di, dk] of [[1, 0], [0, 1]] as const) {
         if (i + di >= n || k + dk >= n) continue;
         const a = id(i, k), b = id(i + di, k + dk);
         two.edges.push({ a, b, pts: seg(a, b), width: 3, oneway: false });
