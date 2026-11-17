@@ -142,6 +142,7 @@ export function parseOsm(json: unknown): OsmFeatures {
           else borderWays.set(key, { pts: toPts(m.geometry), count: 1 });
         });
       } else if (GREEN(t)) f.greens.push(...joinRings(outers));
+      else if (t.highway === 'pedestrian' || t.place === 'square') f.squares.push(...joinRings(outers).map((outline) => ({ name: t.name ?? '', outline })));
     } else if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
       const pos = wgs84ToLocal(el.lat, el.lon);
       if (t.natural === 'tree') f.trees.push(pos);
