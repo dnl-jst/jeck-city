@@ -1,4 +1,5 @@
 import { schema, t, type SchemaType } from '@colyseus/schema';
+import { UNKNOWN_WEATHER } from '@nn/shared';
 
 /**
  * Slow, reliable room state (Colyseus schema). Fast-changing poses travel in the binary snapshot (@nn/shared/net)
@@ -51,10 +52,34 @@ export const BikeSlowState = schema({
 }, 'BikeSlowState');
 export type BikeSlowState = SchemaType<typeof BikeSlowState>;
 
+/** The one weather for all of Cologne (fields as @nn/shared Weather). kind: WeatherKind. */
+export const WeatherState = schema({
+  known: t.boolean(),
+  kind: t.string(),
+  cloud: t.float32(),
+  precip: t.float32(),
+  snow: t.boolean(),
+  visibility: t.float32(),
+  windSpeed: t.float32(),
+  windDir: t.float32(),
+  temperature: t.float32(),
+  label: t.string(),
+  updatedAt: t.float64(),
+}, 'WeatherState');
+export type WeatherState = SchemaType<typeof WeatherState>;
+
+/** A fresh WeatherState holding the UNKNOWN_WEATHER values (the shared object is never handed out). */
+function unknownWeatherState(): WeatherState {
+  const w = new WeatherState();
+  Object.assign(w, UNKNOWN_WEATHER);
+  return w;
+}
+
 export const NippesState = schema({
   players: t.map(PlayerState),
   cars: t.map(CarState),
   bikes: t.map(BikeSlowState),
   lamps: t.map(LampState),
+  weather: t.ref(WeatherState).default(unknownWeatherState),
 }, 'NippesState');
 export type NippesState = SchemaType<typeof NippesState>;

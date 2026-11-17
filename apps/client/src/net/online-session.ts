@@ -2,7 +2,7 @@ import {
   CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, predictionMatches, STATION_IDS, TICK_HZ, TUNING,
   type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PlayerSnapshot, type PropPose, type SimEvent,
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
-  type WorldSim,
+  type Weather, type WorldSim,
 } from '@nn/shared';
 import type { RenderOffset, Session } from '../session';
 import type { ServerClock } from './clock';
@@ -197,6 +197,12 @@ export class OnlineSession implements Session {
   /** Names and car occupancy from the slow state, as of this frame. */
   roster(): Roster {
     return this.rosterNow;
+  }
+
+  /** The city's weather as synced through the room state; null until it is known. */
+  weather(): Weather | null {
+    const w = this.link.state.weather;
+    return w?.known ? w : null;
   }
 
   stats(): NetStats {

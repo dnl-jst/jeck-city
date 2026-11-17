@@ -51,6 +51,9 @@ export class GameAudio {
   private readonly hornState = new HornState();
   private hornVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
+  /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
+  private rainVoice: LoopVoice | null = null;
+  private rain = 0;
   private unlocking: Promise<void> | null = null;
   private unlocked = false;
   private loaded = false;
@@ -259,6 +262,12 @@ export class GameAudio {
     this.d.mixer.oneShot('impact1', { gain: 0.5 * MIX.impact, at: { x, z } });
   }
 
+  /** Rain intensity 0..1 (0 when dry or snowing); remembered until the loops start. */
+  weather(rain: number): void {
+    this.rain = rain;
+    this.rainVoice?.setGain(MIX.rain * rain);
+  }
+
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
@@ -295,6 +304,10 @@ export class GameAudio {
     if (!this.ambience) {
       this.ambience = this.d.mixer.loop('ambience', 'ambience');
       this.ambience.setGain(MIX.ambience);
+    }
+    if (!this.rainVoice) {
+      this.rainVoice = this.d.mixer.loop('rain', 'ambience');
+      this.rainVoice.setGain(MIX.rain * this.rain);
     }
     if (this.inCar && this.engineOn) this.vehicle.start();
     if (this.riding) this.bike.start();

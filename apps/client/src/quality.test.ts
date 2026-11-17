@@ -4,7 +4,7 @@ import { DEFAULT_QUALITY, MAX_LAMP_LIGHTS, nextQuality, QUALITY, spreadIndices, 
 test('high is the original look, low is the default', () => {
   expect(QUALITY.high).toEqual({
     pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
-    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150,
+    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000,
   });
   expect(DEFAULT_QUALITY).toBe('low');
   expect(MAX_LAMP_LIGHTS).toBe(8);
@@ -16,6 +16,11 @@ test('each lower level costs no more than the one above', () => {
     expect(low[k]).toBeLessThanOrEqual(mid[k]);
     expect(mid[k]).toBeLessThanOrEqual(high[k]);
   }
+});
+
+test('each level draws more rain and snow than the one below', () => {
+  expect(QUALITY.low.precipDrops).toBeLessThan(QUALITY.medium.precipDrops);
+  expect(QUALITY.medium.precipDrops).toBeLessThan(QUALITY.high.precipDrops);
 });
 
 test('every level loads the world a little short of its fog end and the shadows inside it', () => {

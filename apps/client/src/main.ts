@@ -2,8 +2,8 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, worldHash, WorldSim,
-  type MapData, type SunState, type TerrainGrid, type WorldManifest,
+  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
+  type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { bootErrorMessage, Hud } from './hud';
@@ -12,6 +12,9 @@ import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
+import { CLEAR_LOOK, WeatherBlend } from './weather/look';
+import { Precipitation } from './weather/precip';
+import { WeatherBadge } from './weather/badge';
 import { Props } from './props';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
@@ -209,11 +212,13 @@ if (debug) {
 }
 
 let lighting: Lighting | null = null;
-/** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees and cars (all live but MSAA). */
+let precip: Precipitation | null = null;
+/** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees, cars and rain/snow (all live but MSAA). */
 function applyQuality(): void {
   const q = QUALITY[qualityLevel];
   resize();
   lighting?.setQuality(q);
+  precip?.setQuality(q);
   props?.setTreeRadii(q.treeRadius, q.treeShadowRadius);
   world.setRadii(q.loadRadius, q.unloadRadius);
   game?.setQuality(q);
@@ -223,6 +228,12 @@ let propsRevision = -1;
 let sun = currentSun();
 let nightFactor = sun.nightFactor;
 let sunAge = 0;
+/** Dev override from `?weather=` (set once the dev permissions are known). */
+let weatherOverride: Weather | null = null;
+const weatherBlend = new WeatherBlend();
+const weatherBadge = new WeatherBadge(document.body);
+/** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
+let look = CLEAR_LOOK;
 const timer = new Timer();
 /** Frame cap: high-refresh displays (120/144 Hz) render at most 60 fps. */
 const FRAME_MS = 1000 / 60;
@@ -283,7 +294,13 @@ renderer.setAnimationLoop((t: number) => {
       sun = currentSun();
     }
     nightFactor = sun.nightFactor;
-    lighting.update(sun, camera.position);
+    const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
+    weatherBlend.offer(wx);
+    weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5);
+    look = weatherBlend.update(dt);
+    gameAudio.weather(look.rain);
+    lighting.update(sun, camera.position, look);
+    precip?.update(dt, camera.position, look);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
     const far = lighting.viewFar + 5;
     if (Math.abs(camera.far - far) > 0.5) {
@@ -389,9 +406,11 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
     (x, z) => heightAt(terrain, x, z),
   );
+  precip = new Precipitation(scene);
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
   const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug, import.meta.env.DEV);
   const devCam = allowed.cam ? devCamParam : null;
+  if (allowed.weather) weatherOverride = weatherPreset(params.get('weather'), Date.now());
   let session: Session;
   if (conn) {
     // online, ?cam / fly / write hooks need a dev-mode server (?cam then teleports once)

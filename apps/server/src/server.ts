@@ -6,6 +6,7 @@ import { loadWorldAssets, worldHash } from '@nn/shared';
 import type { Config } from './config';
 import { log, setLogLevel } from './log';
 import { staticHandler } from './static';
+import { WeatherService } from './weather';
 import { nippesRoom, type NippesRoom } from './room';
 
 export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<void> };
@@ -43,6 +44,16 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
   const port = (transport.server!.address() as AddressInfo).port;
   const listing = await matchMaker.createRoom('nippes', {});
   room = matchMaker.getLocalRoomById(listing.roomId) as NippesRoom;
+  let weather: WeatherService | undefined;
+  if (cfg.weather === 'live') {
+    weather = new WeatherService({ onUpdate: (w) => room!.setWeather(w) });
+    weather.start();
+  } else if (cfg.weather !== 'off') {
+    room.setWeather(cfg.weather.fixed);
+  }
   log('info', 'listening', { port, worldHash: hash, dev: cfg.dev });
-  return { port, room, stop: () => server.gracefullyShutdown(false) };
+  return { port, room, stop: () => {
+    weather?.stop();
+    return server.gracefullyShutdown(false);
+  } };
 }

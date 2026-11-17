@@ -24,4 +24,13 @@ describe('loadConfig', () => {
     expect(loadConfig({ NODE_ENV: 'production', NN_JOIN_PER_MIN: '200' }).joinPerMin).toBe(JOIN_PER_IP_PER_MIN);
     expect(() => loadConfig({ NN_JOIN_PER_MIN: 'x' })).toThrow();
   });
+
+  it('NN_WEATHER: live by default, off anywhere, presets in dev only, junk throws', () => {
+    expect(loadConfig({}).weather).toBe('live');
+    expect(loadConfig({ NN_WEATHER: 'off' }).weather).toBe('off');
+    expect(loadConfig({ NN_WEATHER: 'off', NODE_ENV: 'production' }).weather).toBe('off');
+    expect(loadConfig({ NN_WEATHER: 'rain' }).weather).toMatchObject({ fixed: { kind: 'rain', known: true } });
+    expect(loadConfig({ NN_WEATHER: 'rain', NODE_ENV: 'production' }).weather).toBe('live');
+    expect(() => loadConfig({ NN_WEATHER: 'banana' })).toThrow(/live.*off.*heavyrain/);
+  });
 });

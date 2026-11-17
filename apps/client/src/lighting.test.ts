@@ -1,5 +1,6 @@
+import { Color } from 'three';
 import { describe, expect, it } from 'vitest';
-import { bodyDirection, moodAt, nearestLamps } from './lighting';
+import { bodyDirection, moodAt, nearestLamps, skyClearness, weatherFog, weatherMood } from './lighting';
 
 describe('nearestLamps', () => {
   it('returns the n nearest lamp indices, nearest first', () => {
@@ -42,5 +43,99 @@ describe('bodyDirection', () => {
     expect(d.x).toBeCloseTo(1);
     expect(d.z).toBeCloseTo(0);
     expect(bodyDirection(Math.PI / 2, 0).y).toBeCloseTo(1);
+  });
+});
+
+describe('weatherMood', () => {
+  const sat = (c: Color) => c.getHSL({ h: 0, s: 0, l: 0 }).s;
+  const maxDiff = (a: Color, b: Color) => Math.max(Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
+  it('leaves the mood unchanged without clouds', () => {
+    const m = moodAt(30);
+    expect(weatherMood(m, 0, 0.3)).toEqual(m);
+  });
+  it('dims the sun, greys the horizon and raises the ambient light at overcast noon', () => {
+    const clear = moodAt(60);
+    const w = weatherMood(moodAt(60), 1, 0);
+    expect(w.sunI).toBeLessThanOrEqual(clear.sunI * 0.25);
+    expect(sat(w.horizon)).toBeLessThan(sat(clear.horizon));
+    expect(w.hemiI).toBeGreaterThanOrEqual(clear.hemiI);
+  });
+  it('does not touch the input mood', () => {
+    const m = moodAt(60);
+    const before = m.horizon.clone();
+    weatherMood(m, 1, 0);
+    expect(m.horizon.equals(before)).toBe(true);
+  });
+  it('keeps the deep night sky as it is', () => {
+    const clear = moodAt(-18);
+    const w = weatherMood(moodAt(-18), 1, 1);
+    expect(maxDiff(w.zenith, clear.zenith)).toBeLessThan(0.02);
+    expect(maxDiff(w.horizon, clear.horizon)).toBeLessThan(0.02);
+  });
+  it('fades the sky effect out with night', () => {
+    const clear = moodAt(10);
+    const d = (night: number) => maxDiff(weatherMood(moodAt(10), 1, night).horizon, clear.horizon);
+    expect(d(0.5)).toBeLessThan(d(0));
+    expect(d(1)).toBeLessThan(d(0.5));
+  });
+});
+
+describe('weatherFog', () => {
+  it('keeps the fog unchanged at clear visibility', () => {
+    expect(weatherFog(150, 650, 50000)).toEqual({ near: 150, far: 650 });
+  });
+  it('pulls the fog in to the visibility', () => {
+    const f = weatherFog(150, 650, 200);
+    expect(f.far).toBeLessThanOrEqual(200);
+    expect(f.near).toBeLessThan(f.far);
+  });
+  it('closes real fog in even at the short view distance of quality low', () => {
+    const f = weatherFog(69, 300, 800);
+    expect(f.far).toBeLessThan(300);
+    expect(f.far).toBeLessThan(800 * 0.4);
+    expect(f.near).toBeLessThan(f.far);
+    const night = weatherFog(28, 208, 700);
+    expect(night.far).toBeLessThan(208);
+  });
+  it('pulls near in a little for haze, more for thicker haze', () => {
+    const haze = weatherFog(69, 300, 3000);
+    expect(haze.near).toBeLessThan(69);
+    expect(haze.near).toBeGreaterThan(69 * 0.4);
+    expect(haze.far).toBeLessThanOrEqual(300);
+    expect(weatherFog(69, 300, 1500).near).toBeLessThan(haze.near);
+  });
+  it('is monotonic in visibility and keeps near < far', () => {
+    let prev = { near: 0, far: 0 };
+    for (const v of [0, 100, 300, 700, 1500, 3000, 4999, 5000, 20000, 50000]) {
+      const f = weatherFog(150, 650, v);
+      expect(f.near).toBeLessThan(f.far);
+      expect(f.far).toBeGreaterThanOrEqual(prev.far);
+      expect(f.near).toBeGreaterThanOrEqual(prev.near);
+      prev = f;
+    }
+  });
+  it('writes into the given object', () => {
+    const out = { near: 1, far: 2 };
+    expect(weatherFog(150, 650, 700, out)).toBe(out);
+    expect(out.far).toBeLessThan(650);
+  });
+  it('never brings far below 60 m', () => {
+    for (const v of [0, 10, 59, 60, 61]) {
+      const f = weatherFog(150, 650, v);
+      expect(f.far).toBeGreaterThanOrEqual(60);
+      expect(f.near).toBeLessThan(f.far);
+    }
+  });
+});
+
+describe('skyClearness', () => {
+  it('shows sun glow, moon and stars fully when clear and hides them under heavy cloud', () => {
+    expect(skyClearness(0)).toBe(1);
+    expect(skyClearness(0.9)).toBe(0);
+    expect(skyClearness(1)).toBe(0);
+  });
+  it('fades monotonically with cloud cover', () => {
+    const v = [0, 0.2, 0.4, 0.6, 0.8].map(skyClearness);
+    for (let i = 1; i < v.length; i++) expect(v[i]).toBeLessThan(v[i - 1]!);
   });
 });
