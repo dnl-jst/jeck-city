@@ -38,6 +38,7 @@ const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
 const BIKE_MODELS = 'data/models/bikes';
+const SIGNAL_MODELS = 'data/models/signals';
 const CAR_MODELS = 'data/models/cars';
 /** Frame colour of the cargo bike at the spawn. */
 const SPAWN_BIKE_COLOR = 0x2f5d3a;
@@ -229,6 +230,12 @@ async function main() {
     await writeFile(join(OUT_DIR, `${name}.glb`), glb);
     rackModels.push({ kind, file: `${name}.glb`, bytes: glb.byteLength });
   }
+  const signalModels: WorldManifest['signalModels'] = [];
+  for (const [kind, name] of [['car', 'signal_car'], ['ped', 'signal_ped'], ['car+ped', 'signal_carped']] as const) {
+    const glb = await prepareProp(await readFile(join(SIGNAL_MODELS, `${name}.glb`)));
+    await writeFile(join(OUT_DIR, `${name}.glb`), glb);
+    signalModels.push({ kind, file: `${name}.glb`, bytes: glb.byteLength });
+  }
   const characterModels = await shipCharacterModels(OUT_DIR);
 
   // car models (data/models/cars, built by their build.py): full detail and the distance version
@@ -290,6 +297,7 @@ async function main() {
     models,
     bikeModels,
     rackModels,
+    signalModels,
     carModels,
     characterModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),

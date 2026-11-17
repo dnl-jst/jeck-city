@@ -22,6 +22,7 @@ const valid = (): WorldManifest => ({
   carModels: [],
   npc: { file: 'npc.json', bytes: 77 },
   signals: { file: 'signals.json', bytes: 12 },
+  signalModels: [{ kind: 'car', file: 'signal_car.glb', bytes: 9 }, { kind: 'car+ped', file: 'signal_carped.glb', bytes: 9 }],
   terrain: { file: 'terrain.bin', bytes: 4321 },
   datum: 47.3,
   farGroundY: -9.4,
@@ -78,6 +79,12 @@ test('manifest parse: bikes and racks', () => {
   const m = parseManifest(JSON.parse(JSON.stringify(valid())));
   expect(m.bikeRacks).toEqual([{ x: 4, z: 5, heading: 1.2, kind: 0 }]);
   expect(m.bikes).toEqual([{ x: 4.5, z: 5, heading: 1.2, type: 3, color: 0x336699 }]);
+});
+
+test('manifest parse: signalModels default to [] and are validated', () => {
+  const { signalModels: _s, ...old } = valid();
+  expect(parseManifest(old).signalModels).toEqual([]);
+  expect(() => parseManifest({ ...valid(), signalModels: [{ kind: 'tram', file: 'x.glb', bytes: 1 }] as never })).toThrow();
 });
 
 test('manifest parse: npc is optional and validated', () => {

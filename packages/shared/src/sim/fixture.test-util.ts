@@ -40,6 +40,7 @@ export function fixtureAssets(): WorldAssets {
     bikes: [{ x: -6, z: -30, heading: 0, type: 0, color: 0x3366cc }],
     bikeModels: [],
     rackModels: [],
+    signalModels: [],
     characterModels: [],
     terrain: { file: 'terrain.bin', bytes: 0 },
     datum: 0,

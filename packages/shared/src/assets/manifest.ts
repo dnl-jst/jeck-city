@@ -78,6 +78,8 @@ export type WorldManifest = {
   bikes: { x: number; z: number; heading: number; type: number; color: number }[];
   /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */
   bikeModels: { type: BikeType; file: string; bytes: number }[];
+  /** Traffic light models by pole kind (data/models/signals: signal_car/ped/carped.glb). Missing in older manifests → []. */
+  signalModels: { kind: 'car' | 'ped' | 'car+ped'; file: string; bytes: number }[];
   /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
   rackModels: { kind: 0 | 1; file: string; bytes: number }[];
   /**
@@ -211,6 +213,12 @@ export function parseManifest(json: unknown): WorldManifest {
       const type = str(b.type, `${p}.type`);
       if (!(BIKE_TYPES as readonly string[]).includes(type)) fail(`${p}.type`, `must be one of ${BIKE_TYPES.join(', ')}`);
       return { type: type as BikeType, file: str(b.file, `${p}.file`), bytes: num(b.bytes, `${p}.bytes`) };
+    }),
+    signalModels: o.signalModels === undefined ? [] : arr(o.signalModels, 'signalModels', (v, p) => {
+      const r = obj(v, p);
+      const kind = str(r.kind, `${p}.kind`);
+      if (kind !== 'car' && kind !== 'ped' && kind !== 'car+ped') fail(`${p}.kind`, "must be 'car', 'ped' or 'car+ped'");
+      return { kind: kind as 'car' | 'ped' | 'car+ped', file: str(r.file, `${p}.file`), bytes: num(r.bytes, `${p}.bytes`) };
     }),
     rackModels: o.rackModels === undefined ? [] : arr(o.rackModels, 'rackModels', (v, p) => {
       const r = obj(v, p);
