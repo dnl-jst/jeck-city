@@ -1,6 +1,6 @@
-# Nippes Nights
+# Jeck City
 
-Open-world-Spiel in Köln-Nippes: Alle Besucher sind gleichzeitig auf der Neusser Straße, zu Fuß, mit dem Rad oder im Auto.
+Open-World-Spiel in Köln (Repository-Name noch `nippes-nights`): Alle Besucher sind gleichzeitig in derselben Stadt, zu Fuß, mit dem Rad oder im Auto. Vor dem Laden erklärt ein Intro-Screen das Spiel und warnt vor der Download-Größe (beim Build aus der erzeugten Welt gemessen).
 TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ## Entwickeln

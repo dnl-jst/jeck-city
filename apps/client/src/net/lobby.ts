@@ -65,7 +65,7 @@ export class Lobby {
     document.head.append(style);
     this.root = div('nn-lobby nn-hidden', parent);
     const box = div('nn-lobby-box', this.root);
-    div('nn-lobby-title', box).textContent = 'Nippes Nights';
+    div('nn-lobby-title', box).textContent = 'Jeck City';
     this.chosen = Math.min(Math.max(chosen, 0), Math.max(portraits.length - 1, 0));
     if (portraits.length > 1) {
       const row = div('nn-lobby-avatars', box);
