@@ -12,6 +12,7 @@ export const MIX = {
   skid: 0.6,
   impact: 0.9,
   ambience: 0.4,
+  rain: 0.5,
   tramBell: 0.7,
   static: 0.25,
   bikeTick: 0.8,

@@ -26,4 +26,5 @@ loops were made seamless with a short tail-into-head crossfade (sample-continuou
 | impact-3.ogg | [Car Crash (with Glass)](https://freesound.org/s/592388/) | magnuswaker | CC0 | heavy crash |
 | ambience.ogg | [Cologne at night, Quiet street with cars passing by in the distance (Surround)](https://freesound.org/s/384476/) | Pfannkuchn | CC0 | stereo, 198.5 s loop |
 | tram-bell.ogg | [11-3 Tram bell](https://freesound.org/s/497561/) | 16HPanskaWillheimova_Sara | CC0 | Prague tram electric bell |
+| rain.ogg | [rain medium on street pavement.flac](https://freesound.org/s/454143/) | kyles | CC0 | stereo, 33.5 s loop (whole 35.5 s take, 2 s tail-into-head crossfade) |
 | static.ogg | [Radio static](https://freesound.org/s/110739/) | clesquir | CC0 | steady section 26–46 s |
