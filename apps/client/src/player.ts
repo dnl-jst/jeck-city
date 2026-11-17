@@ -378,6 +378,7 @@ export class PlayerFigure {
    * moves up fast while the feet are on the ground. During a fall (fall()) it tips over, lies, and gets up again.
    */
   update(x: number, y: number, z: number, v: { x: number; y: number; z: number }, dt: number, airborne = false): void {
+    this.sitting = false;
     this.torso.rotation.set(0, 0, 0);
     this.headNode.rotation.set(0, 0, 0);
     if (this.fallT >= 0) {
@@ -446,6 +447,44 @@ export class PlayerFigure {
     this.group.position.set(x, y + 0.12 * lie, z);
     this.group.rotation.set(-(Math.PI / 2) * lie, this.heading, 0, 'YXZ');
     this.model?.apply();
+  }
+
+  /** Sitting (sit() was the last pose call). */
+  sitting = false;
+
+  /**
+   * Sitting pose (NPCs in parks): hips seatH above y (a bench 0.45 m, the lawn about 0.1 m), thighs forward, shins down
+   * (on the lawn stretched out), facing `heading`. talk (any phase, rad) moves the forearms and head as in a
+   * conversation; lookYaw turns the head (rad, + = left).
+   */
+  sit(x: number, y: number, z: number, heading: number, seatH: number, talk: number, lookYaw = 0): void {
+    this.sitting = true;
+    this.heading = heading;
+    const p = this.p;
+    const lawn = seatH < 0.3;
+    for (let i = 0; i < 2; i++) {
+      this.legs[i]!.rotation.set(-Math.PI / 2 + (lawn ? 0.15 : 0), 0, (i === 0 ? -1 : 1) * (lawn ? 0.12 : 0.05));
+      this.shins[i]!.rotation.set(lawn ? 0.25 : Math.PI / 2, 0, 0);
+      this.feet[i]!.rotation.set(lawn ? -0.4 : 0, 0, 0);
+      const s = i === 0 ? 1 : -1;
+      const gesture = 0.25 + 0.2 * Math.sin(talk + i * 1.7);
+      this.arms[i]!.quaternion.setFromEuler(new Euler(-0.35 - 0.15 * Math.max(0, Math.sin(talk * 0.7 + i)), 0, s * 0.12, 'YXZ'));
+      this.forearms[i]!.quaternion.setFromEuler(new Euler(-0.9 - gesture, 0, 0));
+      this.hands[i]!.quaternion.identity();
+      this.curlFingers(i, 0.4);
+    }
+    this.body.position.set(0, seatH - p.hip.y, 0);
+    this.body.rotation.set(0, 0, 0);
+    this.torso.rotation.set(-0.08 + 0.04 * Math.sin(talk * 0.5), 0, 0);
+    this.headNode.rotation.set(0.05 * Math.sin(talk * 1.3), lookYaw + 0.15 * Math.sin(talk * 0.4), 0, 'YXZ');
+    this.group.position.set(x, y, z);
+    this.group.rotation.set(0, heading, 0, 'YXZ');
+    this.model?.apply();
+  }
+
+  /** Height of the hips above the figure's origin (tests: sitting heights). */
+  hipY(): number {
+    return this.body.position.y + this.p.hip.y;
   }
 
   /** Knocked down (1) or standing (0); the whole figure tips over backwards / gets up within DOWN_IN_S / DOWN_OUT_S. */
@@ -598,6 +637,7 @@ export class PlayerFigure {
 
   /** Standing at once: no fall in progress, not knocked down (a pooled figure handed to another player). */
   reset(): void {
+    this.sitting = false;
     this.fallT = -1;
     this.upAt = Infinity;
     this.down = this.downTarget = 0;

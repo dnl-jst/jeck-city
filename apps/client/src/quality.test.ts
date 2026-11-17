@@ -4,7 +4,7 @@ import { DEFAULT_QUALITY, MAX_LAMP_LIGHTS, nextQuality, QUALITY, spreadIndices, 
 test('high is the original look, low is the default', () => {
   expect(QUALITY.high).toEqual({
     pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
-    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000,
+    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000, npcShadows: true,
   });
   expect(DEFAULT_QUALITY).toBe('low');
   expect(MAX_LAMP_LIGHTS).toBe(8);

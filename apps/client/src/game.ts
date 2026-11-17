@@ -18,6 +18,7 @@ import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
+import { NpcView } from './npc/npc-view';
 import { RemoteCarFeed } from './audio/remote-audio';
 import type { Quality } from './quality';
 
@@ -61,6 +62,8 @@ export class Game {
   readonly follow: FollowCamera;
   /** Other players (online only). */
   private readonly remotes: RemotePlayers | null;
+  private readonly npcView: NpcView;
+  private npcShadows = false;
   readonly fly: FreeFly;
   /** Hold R in the car: radio wheel (tap R = next station). */
   readonly wheel = new WheelControl();
@@ -125,6 +128,11 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
     }) : null;
+    this.npcView = new NpcView(scene, {
+      occluded: (a, b) => this.occluded(a, b), carModels: ctx.carModels, figureModel: ctx.character ?? null, figureFor: (v) => this.figureFor(v),
+      bikeModels: ctx.bikeModels?.bikes, bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
+      quality: () => (this.npcShadows ? 'medium' : 'low'),
+    });
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
     session.onStep = () => this.sample();
@@ -136,6 +144,7 @@ export class Game {
     this.driven.setQuality(q);
     this.bikeLights.setDiscoDots(q.discoDots);
     this.cars.setRadius(q.carRadius);
+    this.npcShadows = q.npcShadows;
   }
 
   /** Fixed steps run so far (tests wait on simulation time, not on the wall clock). */
@@ -522,6 +531,7 @@ export class Game {
       audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt), dt);
 
     }
+    this.npcView.update(this.session.npcs(), this.ctx.camera, night, dt);
     if (audio) {
       const f = this.focus();
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);

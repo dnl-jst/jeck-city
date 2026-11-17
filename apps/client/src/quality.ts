@@ -44,20 +44,22 @@ export type Quality = {
   carRadius: number;
   /** Rain streaks / snow flakes around the camera at full intensity. */
   precipDrops: number;
+  /** NPC figures cast shadows. */
+  npcShadows: boolean;
 };
 
 export const QUALITY: Record<QualityLevel, Quality> = {
   high: {
     pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
-    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000,
+    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000, npcShadows: true,
   },
   medium: {
     pixelRatio: 1.5, antialias: true, lampLights: 5, discoDots: 4, tailLights: false, beamShadow: 512, sunShadow: 2048, shadowRadius: 100, treeShadowRadius: 50,
-    viewDistance: 450, loadRadius: 420, unloadRadius: 600, treeRadius: 190, carRadius: 120, precipDrops: 12000,
+    viewDistance: 450, loadRadius: 420, unloadRadius: 600, treeRadius: 190, carRadius: 120, precipDrops: 12000, npcShadows: true,
   },
   low: {
     pixelRatio: 1, antialias: false, lampLights: 3, discoDots: 2, tailLights: false, beamShadow: 0, sunShadow: 1024, shadowRadius: 70, treeShadowRadius: 30,
-    viewDistance: 300, loadRadius: 280, unloadRadius: 450, treeRadius: 140, carRadius: 90, precipDrops: 6000,
+    viewDistance: 300, loadRadius: 280, unloadRadius: 450, treeRadius: 140, carRadius: 90, precipDrops: 6000, npcShadows: false,
   },
 };
 

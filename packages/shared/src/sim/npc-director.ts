@@ -1147,6 +1147,7 @@ export class NpcDirector {
       const seat = ring.seats[k]!;
       const id = this.nextId++;
       const look = this.lookFor('sitter');
+      look.vehicleType = ring.bench ? 1 : 0; // sitters: 1 on a bench, 0 on the lawn (the client sits them at that height)
       const y = this.heightAt(seat.x, seat.z, 'walk');
       const path = [{ x: seat.x, y, z: seat.z }, { x: seat.x + Math.sin(seat.heading) * 0.5, y, z: seat.z + Math.cos(seat.heading) * 0.5 }];
       const st: NpcState = {
