@@ -550,8 +550,13 @@ export class Game {
   }
 
   /** The radio can be tuned: in a car with the engine running, or on the sound Long John. */
-  private get radioOn(): boolean {
+  get radioOn(): boolean {
     return (this.mode === 'drive' && this.engine === 'running') || (this.mode === 'ride' && this.bikeType() === 'soundjohn');
+  }
+
+  /** On the sound Long John with its disco ball (L). */
+  get discoAvailable(): boolean {
+    return this.mode === 'ride' && this.rig?.hasDisco === true;
   }
 
   private closeWheel(): void {

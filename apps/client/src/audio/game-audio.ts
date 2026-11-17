@@ -95,6 +95,11 @@ export class GameAudio {
     this.d.radio.unlocked();
   }
 
+  /** Sound switched off (N). */
+  get isMuted(): boolean {
+    return this.muted;
+  }
+
   toggleMute(): void {
     this.muted = !this.muted;
     this.d.mixer.setMuted(this.muted);
