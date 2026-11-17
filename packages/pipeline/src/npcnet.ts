@@ -22,6 +22,35 @@ const SNAP = 0.05;
 
 const key = (p: Pt): string => `${Math.round(p.x / SNAP)},${Math.round(p.z / SNAP)}`;
 const d2 = (a: Pt, b: Pt): number => Math.hypot(a.x - b.x, a.z - b.z);
+/** Spatial grid cell (m). */
+const CELL = 50;
+
+/** Items with a bounding box, by the CELL cells it touches. */
+export class BoxGrid<T> {
+  private readonly cells = new Map<string, T[]>();
+  add(item: T, minX: number, minZ: number, maxX: number, maxZ: number): void {
+    for (let cx = Math.floor(minX / CELL); cx <= Math.floor(maxX / CELL); cx++) {
+      for (let cz = Math.floor(minZ / CELL); cz <= Math.floor(maxZ / CELL); cz++) {
+        const c = `${cx},${cz}`;
+        (this.cells.get(c) ?? this.cells.set(c, []).get(c)!).push(item);
+      }
+    }
+  }
+  /** Items whose cells overlap the square of half-size r around (x, z). */
+  near(x: number, z: number, r: number): Set<T> {
+    const out = new Set<T>();
+    for (let cx = Math.floor((x - r) / CELL); cx <= Math.floor((x + r) / CELL); cx++) {
+      for (let cz = Math.floor((z - r) / CELL); cz <= Math.floor((z + r) / CELL); cz++) for (const t of this.cells.get(`${cx},${cz}`) ?? []) out.add(t);
+    }
+    return out;
+  }
+}
+
+const bboxOf = (pts: Pt[]): [number, number, number, number] => {
+  let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+  for (const p of pts) { a = Math.min(a, p.x); b = Math.min(b, p.z); c = Math.max(c, p.x); d = Math.max(d, p.z); }
+  return [a, b, c, d];
+};
 
 type Line = { pts: Pt[]; width: number; crossing: boolean; oneway: boolean };
 
@@ -31,19 +60,49 @@ type Line = { pts: Pt[]; width: number; crossing: boolean; oneway: boolean };
  */
 export class NetBuilder {
   readonly lines: Line[] = [];
+  /** Lines by the 50 m cells their segments touch. */
+  private readonly cells = new Map<string, Set<Line>>();
+  /** Lines by the positions (key) of their points. */
+  private readonly atKey = new Map<string, Set<Line>>();
 
   add(pts: Pt[], width: number, crossing = false, oneway = false): Line | null {
     const clean = dedupeSnap(pts);
     if (clean.length < 2) return null;
     const l = { pts: clean, width, crossing, oneway };
     this.lines.push(l);
+    this.index(l);
     return l;
+  }
+
+  private index(l: Line): void {
+    for (let i = 0; i < l.pts.length; i++) {
+      const k = key(l.pts[i]!);
+      (this.atKey.get(k) ?? this.atKey.set(k, new Set()).get(k)!).add(l);
+      if (i === 0) continue;
+      const a = l.pts[i - 1]!, b = l.pts[i]!;
+      for (let cx = Math.floor(Math.min(a.x, b.x) / CELL); cx <= Math.floor(Math.max(a.x, b.x) / CELL); cx++) {
+        for (let cz = Math.floor(Math.min(a.z, b.z) / CELL); cz <= Math.floor(Math.max(a.z, b.z) / CELL); cz++) {
+          const c = `${cx},${cz}`;
+          (this.cells.get(c) ?? this.cells.set(c, new Set()).get(c)!).add(l);
+        }
+      }
+    }
+  }
+
+  /** Whether another line than `l` has a point at p. */
+  shared(p: Pt, l: Line): boolean {
+    for (const o of this.atKey.get(key(p)) ?? []) if (o !== l) return true;
+    return false;
   }
 
   /** Joins p to the nearest point of another line within maxD (that point becomes a vertex there); false if none. */
   attach(p: Pt, maxD: number, skip?: Line, width = CROSSING_WIDTH, isCrossing?: (a: Pt, b: Pt) => boolean): boolean {
     let best: { l: Line; i: number; q: Pt; d: number } | null = null;
-    for (const l of this.lines) {
+    const cand = new Set<Line>();
+    for (let cx = Math.floor((p.x - maxD) / CELL); cx <= Math.floor((p.x + maxD) / CELL); cx++) {
+      for (let cz = Math.floor((p.z - maxD) / CELL); cz <= Math.floor((p.z + maxD) / CELL); cz++) for (const l of this.cells.get(`${cx},${cz}`) ?? []) cand.add(l);
+    }
+    for (const l of cand) {
       if (l === skip) continue;
       for (let i = 1; i < l.pts.length; i++) {
         const a = l.pts[i - 1]!, b = l.pts[i]!;
@@ -56,7 +115,10 @@ export class NetBuilder {
     }
     if (!best) return false;
     const { l, i, q } = best;
-    if (key(q) !== key(l.pts[i - 1]!) && key(q) !== key(l.pts[i]!)) l.pts.splice(i, 0, q);
+    if (key(q) !== key(l.pts[i - 1]!) && key(q) !== key(l.pts[i]!)) {
+      l.pts.splice(i, 0, q);
+      (this.atKey.get(key(q)) ?? this.atKey.set(key(q), new Set()).get(key(q))!).add(l);
+    }
     if (key(q) !== key(p)) this.add([p, q], width, isCrossing?.(p, q) ?? false);
     return true;
   }
@@ -151,7 +213,11 @@ export function buildWalkGraph(roads: Road[], sidewalks: Map<Road, SidewalkWidth
   const drivable = roads.filter((r) => DRIVABLE.has(r.kind) && sidewalks.has(r) && dedupe(r.points).length >= 2);
   const grid = buildingGrid(buildings);
   const inBuilding = (p: Pt): boolean => grid.near(p, 0.5).some((b) => footprintContains(b, p.x, p.z));
-  const onAnyCarriageway = (p: Pt): boolean => drivable.some((r) => distToPolyline(p, r.points) < 20 && onCarriageway(r, p));
+  const roadGrid = new BoxGrid<Road>();
+  for (const r of drivable) roadGrid.add(r, ...bboxOf(r.points));
+  const onAnyCarriageway = (p: Pt): boolean => [...roadGrid.near(p.x, p.z, 25)].some((r) => onCarriageway(r, p));
+  const crossingGrid = new BoxGrid<Pt>();
+  for (const c of crossings) crossingGrid.add(c, c.x, c.z, c.x, c.z);
 
   // nodes: vertices shared by two or more drivable ways (or appearing twice in one)
   const uses = new Map<string, number>();
@@ -212,7 +278,8 @@ export function buildWalkGraph(roads: Road[], sidewalks: Map<Road, SidewalkWidth
     const a0 = armAt(pc, true), a1 = armAt(pc, false);
     const cut0 = a0 ? cutOf.get(a0)! : 0, cut1 = a1 ? cutOf.get(a1)! : 0;
     // OSM crossings on this piece: arc lengths
-    const crossAt = crossings
+    const [bx0, bz0, bx1, bz1] = bboxOf(pc.pts);
+    const crossAt = [...crossingGrid.near((bx0 + bx1) / 2, (bz0 + bz1) / 2, Math.max(bx1 - bx0, bz1 - bz0) / 2 + 30)]
       .map((c) => ({ c, n: nearestArc(pc.pts, cumP, c) }))
       .filter(({ n }) => n.dist < edgeAt(pc.road, 1, 'kerb', pc.s[0]! + n.s) + 1 && n.s > cut0 + 1 && n.s < total - cut1 - 1)
       .map(({ n }) => n.s);
@@ -301,8 +368,7 @@ export function buildWalkGraph(roads: Road[], sidewalks: Map<Road, SidewalkWidth
   const crossesRoad = (p: Pt, q: Pt): boolean => onAnyCarriageway(mid(p, q));
   for (const l of walkLines) {
     for (const p of [l.pts[0]!, l.pts[l.pts.length - 1]!]) {
-      const shared = b.lines.some((o) => o !== l && o.pts.some((q) => key(q) === key(p)));
-      if (!shared) b.attach(p, ATTACH_MAX, l, CROSSING_WIDTH, crossesRoad);
+      if (!b.shared(p, l)) b.attach(p, ATTACH_MAX, l, CROSSING_WIDTH, crossesRoad);
     }
   }
   const g = b.build();
@@ -417,20 +483,20 @@ function buildLanes(roads: Road[], offset: LaneOffset, b: NetBuilder): LaneJunct
   }
   const arms = new Map<string, LArm[]>();
   const armOf = new Map<string, LArm>();
-  for (const pc of pieces) {
+  pieces.forEach((pc, pieceIx) => {
     for (const atStart of [true, false]) {
       const end = atStart ? pc.pts[0]! : pc.pts[pc.pts.length - 1]!;
       const next = atStart ? pc.pts[1]! : pc.pts[pc.pts.length - 2]!;
       const s = atStart ? pc.s[0]! : pc.s[pc.s.length - 1]!;
       const kerb = Math.max(edgeAt(pc.r, 1, 'kerb', s), edgeAt(pc.r, -1, 'kerb', s));
       const arm: LArm = { pc, atStart, dir: unitOf(end, next), kerb, inEnd: null, outStart: null, inLine: null, outLine: null, rightKerb: 0 };
-      armOf.set(`${pieces.indexOf(pc)}:${atStart}`, arm);
+      armOf.set(`${pieceIx}:${atStart}`, arm);
       if (!isNode(end)) continue;
       const list = arms.get(key(end)) ?? [];
       list.push(arm);
       arms.set(key(end), list);
     }
-  }
+  });
   const cutOf = (a: LArm): number => {
     const list = arms.get(key(a.atStart ? a.pc.pts[0]! : a.pc.pts[a.pc.pts.length - 1]!));
     if (!list) return 0;
@@ -548,8 +614,7 @@ function cycleNet(roads: Road[]): { graph: NetGraph; b: NetBuilder; junctions: L
   }
   for (const l of ways) {
     for (const p of [l.pts[0]!, l.pts[l.pts.length - 1]!]) {
-      const shared = b.lines.some((o) => o !== l && o.pts.some((q) => key(q) === key(p)));
-      if (!shared) b.attach(p, ATTACH_MAX, l, 2);
+      if (!b.shared(p, l)) b.attach(p, ATTACH_MAX, l, 2);
     }
   }
   return { graph: b.build(), b, junctions };
@@ -586,9 +651,12 @@ const r2Seat = (c: Pt, q: Pt) => ({ x: r2(q.x), z: r2(q.z), heading: Math.round(
 export function buildSeats(greens: Pt[][], squares: Pt[][], benches: Pt[], trees: Pt[], walk: NetGraph, seed: number): SeatRing[] {
   const out: SeatRing[] = [];
   const ix = new GraphIndex(walk);
-  const areas = [...greens, ...squares];
+  const areas = new BoxGrid<Pt[]>();
+  for (const a of [...greens, ...squares]) areas.add(a, ...bboxOf(a));
+  const treeGrid = new BoxGrid<Pt>();
+  for (const t of trees) treeGrid.add(t, t.x, t.z, t.x, t.z);
   for (const bp of benches) {
-    if (!areas.some((a) => pointInPolygon(bp, a))) continue;
+    if (![...areas.near(bp.x, bp.z, 0)].some((a) => pointInPolygon(bp, a))) continue;
     const n = ix.nearestEdge(bp.x, bp.z, 15);
     let f = { x: 0, z: 1 };
     if (n) {
@@ -622,7 +690,7 @@ export function buildSeats(greens: Pt[][], squares: Pt[][], benches: Pt[], trees
     for (let tries = 0; tries < 200 * want && placed < want; tries++) {
       const c = { x: minX + rng() * (maxX - minX), z: minZ + rng() * (maxZ - minZ) };
       if (!pointInPolygon(c, g) || distToPolyline(c, [...g, g[0]!]) < 2) continue;
-      if (trees.some((t) => d2Of(t, c) < TREE_CLEAR)) continue;
+      if ([...treeGrid.near(c.x, c.z, TREE_CLEAR)].some((t) => d2Of(t, c) < TREE_CLEAR)) continue;
       if (ix.nearestEdge(c.x, c.z, PATH_CLEAR)) continue;
       if (taken.some((t) => d2Of(t, c) < RING_CLEAR)) continue;
       const n = 3 + Math.floor(rng() * 2);

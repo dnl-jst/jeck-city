@@ -255,10 +255,12 @@ async function main() {
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
 
   // NPC network: sidewalks, lanes, cycle lanes, seat rings, junctions with traffic lights
+  const npcT0 = Date.now();
   const npcNet: NpcNet = buildNpcNet({
     roads: f.roads, sidewalks, buildings, crossings: f.crossings, greens: f.greens, squares: f.squares.map((s) => s.outline),
     benches: f.benches, trees, signals: f.signals, giveWay: f.giveWay, stops: f.stops, seed: PARK_SEED,
   });
+  console.log(`npc network built in ${((Date.now() - npcT0) / 1000).toFixed(1)} s`);
   const npcJson = JSON.stringify(npcNet);
   await writeFile(join(OUT_DIR, 'npc.json'), npcJson);
   const signalled = npcNet.junctions.filter((j) => j.signal);

@@ -66,6 +66,8 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
   const usedSignals = new Set<number>();
   const out: JunctionInfo[] = [];
   const cycleByKey = new Map(cycle.junctions.map((j) => [j.key, j]));
+  const cycleIx = new GraphIndex(cycle.graph);
+  const turnEdges = new Set(drive.junctions.flatMap((lj) => lj.turns.flatMap((l) => drive.b.edgesOf.get(l) ?? [])));
   const rng = prng(seed);
 
   const rankOf = (road: Road, j: Pt): number => {
@@ -92,7 +94,6 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
     const cycleApproaches: Approach[] = [];
     const cycleTurns: number[] = [];
     if (cj) {
-      const cycleIx = new GraphIndex(cycle.graph);
       cj.arms.forEach((a) => {
         const e = a.inLine ? lastEdge(cycle.b, a.inLine) : undefined;
         if (e === undefined) return;
@@ -151,7 +152,7 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
     const approaches: Approach[] = [];
     for (const ei of driveIx.near(s.x, s.z, 12)) {
       const e = drive.graph.edges[ei]!;
-      if (drive.junctions.some((lj) => lj.turns.some((l) => drive.b.edgesOf.get(l)?.includes(ei)))) continue;
+      if (turnEdges.has(ei)) continue;
       const n = nearestOn(e.pts, driveIx.cum[ei]!, s);
       if (n.d > e.width + 1.5 || n.s < STOP_BACK + 1) continue;
       approaches.push({ edge: ei, group: 0, stopS: r2(n.s - STOP_BACK), rank: 2 });
@@ -161,7 +162,6 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
       x: r2(s.x), z: r2(s.z), signal: { id: out.length, offsetTicks: Math.floor(rng() * MIDBLOCK_CYCLE_S * 60), midblock: true },
       approaches, turns: [], cycleApproaches: [], cycleTurns: [], peds: [], poles: [], stopLines: [],
     };
-    const cycleIx = new GraphIndex(cycle.graph);
     for (const ei of cycleIx.near(s.x, s.z, 10)) {
       const e = cycle.graph.edges[ei]!;
       const n = nearestOn(e.pts, cycleIx.cum[ei]!, s);
