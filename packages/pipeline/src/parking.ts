@@ -5,7 +5,7 @@ import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt, pointInPolygon } from './polyline.js';
 import { placeRand } from './placerand.js';
-import { edgeAt, inRamp, nearestOn, onCarriageway } from './roadprofile.js';
+import { edgeAt, inRamp, onCarriageway } from './roadprofile.js';
 
 const KERB_SPACING = 6; // roads without parking-strip tags: cars along the kerb
 const KERB_OCCUPANCY = 0.4;
@@ -117,67 +117,4 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
   const key = spots.map((sp) => placeRand(seed, sp.pos, 1));
   const keep = spots.map((_, i) => i).sort((a, b) => key[a]! - key[b]! || a - b);
   return keep.slice(0, MAX_SPOTS).sort((a, b) => a - b).map((i) => spots[i]!);
-}
-
-const SPAWN_ROAD = 'Neusser Straße';
-const SPAWN_CAR_AHEAD = 1.2; // metres in front of the player, along the spawn heading
-const ENTER_REACH = 2.7; // car centre at most this far from the spawn (enter radius 3 m)
-const PLAYER_CLEARANCE = 0.8; // car body at least this far from the spawn point
-const CAR_HALF_WIDTH = 0.9;
-const CAR_CLEAR_ALONG = 6;
-const CAR_CLEAR_ACROSS = 2.5;
-
-/** Distance from p to the outline of a car (oriented box 1.8 m × vehicle length) standing at `car`. */
-export function carContourDistance(car: Spot, p: Pt): number {
-  const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
-  const dx = p.x - car.pos.x, dz = p.z - car.pos.z;
-  const along = Math.max(0, Math.abs(dx * fx + dz * fz) - TUNING.vehicle.length / 2);
-  const across = Math.max(0, Math.abs(dx * fz - dz * fx) - CAR_HALF_WIDTH);
-  return Math.hypot(along, across);
-}
-
-/**
- * The car next to the spawn: on the spawn's side of Neusser Straße, in the middle of the parking strip there (or
- * 1 m inside the kerb / cycle lane without a strip), oriented like the other cars of that side, 1.2 m ahead of
- * the player along the spawn heading. Throws when the spot is out of reach (> 2.7 m) or crowds the player (body
- * < 0.8 m away), outside the play area, on the tracks or in a building.
- */
-export function spawnCarSpot(f: OsmFeatures, spawn: Pt & { heading: number }, buildings: BuildingMesh[]): Spot {
-  let best: { road: Road; n: ReturnType<typeof nearestOn> } | undefined;
-  for (const r of f.roads) {
-    if (r.name !== SPAWN_ROAD || dedupe(r.points).length < 2) continue;
-    const n = nearestOn(r, spawn);
-    if (!best || n.dist < best.n.dist) best = { road: r, n };
-  }
-  if (!best) throw new Error(`spawnCarSpot: no road named ${SPAWN_ROAD}`);
-  const { road, n } = best;
-  const side = n.d >= 0 ? 1 : -1; // the spawn's side of the road, relative to the way direction
-  const c = road.cross;
-  const park = side > 0 ? c.parkRight : c.parkLeft;
-  const o = (side > 0 ? c.parkRightOrientation : c.parkLeftOrientation) ?? 'parallel';
-  const ahead = { x: Math.sin(spawn.heading), z: Math.cos(spawn.heading) };
-  const s = n.s + (ahead.x * n.dir.x + ahead.z * n.dir.z >= 0 ? 1 : -1) * SPAWN_CAR_AHEAD; // ahead, along the road
-  const pts = dedupe(road.points);
-  const { p, dir } = pointAt(pts, cumulative(pts), s);
-  const off = (park > 0 ? stripCentre(road, side) : kerbRow(road, side))(s);
-  const pos = { x: p.x - dir.z * off, z: p.z + dir.x * off };
-  const spot = { pos, heading: parkHeading(dir, side, road.oneway, park > 0 ? STRIP_ANGLE[o] : 0) };
-  const reach = dist(pos, spawn), body = carContourDistance(spot, spawn);
-  if (reach > ENTER_REACH) throw new Error(`spawnCarSpot: car ${reach.toFixed(2)} m from the spawn (> ${ENTER_REACH})`);
-  if (body < PLAYER_CLEARANCE) throw new Error(`spawnCarSpot: car body ${body.toFixed(2)} m from the spawn (< ${PLAYER_CLEARANCE})`);
-  const ring = [...f.boundary, f.boundary[0]!];
-  if (!pointInPolygon(pos, f.boundary) || distToPolyline(pos, ring) < BOUNDARY_CLEARANCE) throw new Error('spawnCarSpot: outside the play area');
-  if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) throw new Error('spawnCarSpot: on the tracks');
-  if (insideAnyFootprint(pos, buildings)) throw new Error('spawnCarSpot: inside a building');
-  return spot;
-}
-
-/** `spot` first, followed by those `spots` that do not overlap it (< 6 m along or < 2.5 m across its axis). */
-export function withSpawnCar(spot: Spot, spots: Spot[]): Spot[] {
-  const fx = Math.sin(spot.heading), fz = Math.cos(spot.heading);
-  const overlaps = (s: Spot) => {
-    const dx = s.pos.x - spot.pos.x, dz = s.pos.z - spot.pos.z;
-    return Math.abs(dx * fx + dz * fz) < CAR_CLEAR_ALONG && Math.abs(dx * fz - dz * fx) < CAR_CLEAR_ACROSS;
-  };
-  return [spot, ...spots.filter((s) => !overlaps(s))];
 }

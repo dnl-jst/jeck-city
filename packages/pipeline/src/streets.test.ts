@@ -4,7 +4,7 @@ import { crossSectionFromTags, type CrossSection } from './crosssection.js';
 import type { Road } from './osm.js';
 import { distToPolyline } from './polyline.js';
 import { allSidewalkWidths } from './sidewalkwidth.js';
-import { buildStreetGeometry, type Mesh } from './streets.js';
+import { buildStreetGeometry, runsOutsideSquares, type Mesh } from './streets.js';
 import { wgs84ToLocal } from '@nn/shared';
 
 const f = loadFixture();
@@ -198,4 +198,25 @@ test('an overridden building still bounds the sidewalk: an override drops its me
   expect(chunk.buildings).toBeUndefined(); // the model replaces the LoD2 mesh …
   const sw = chunk.streets.sidewalk!;
   for (let i = 0; i < sw.positions.length; i += 3) expect(sw.positions[i + 2]!).toBeLessThanOrEqual(16 + 1e-4); // … the sidewalk still ends at its facade
+});
+
+test('footways get no ribbon across a paved square, only outside it', () => {
+  const sq = [{ x: 10, z: -10 }, { x: 30, z: -10 }, { x: 30, z: 10 }, { x: 10, z: 10 }];
+  const pts = [0, 5, 15, 25, 35, 40].map((x) => ({ x, z: 0 }));
+  // segments 0-5, 5-15 (midpoint 10: on the edge counts as outside or inside, either is fine), 15-25 inside, 25-35, 35-40
+  const runs = runsOutsideSquares(pts, [sq]);
+  expect(runs[0]![0]).toBe(0);
+  expect(runs.at(-1)![1]).toBe(5);
+  expect(runs.every(([a, b]) => b > a)).toBe(true);
+  expect(runs.some(([a, b]) => a <= 2 && b >= 3)).toBe(false); // the segment 15–25 inside the square is left out
+  expect(runsOutsideSquares(pts, [])).toEqual([[0, 5]]);
+});
+
+test('a pedestrian way is paved like a square, not drawn as asphalt', () => {
+  const f = loadFixture();
+  const cross = crossSectionFromTags({}, 'pedestrian');
+  const ped: Road = { id: 9, kind: 'pedestrian', points: [{ x: 0, z: 0 }, { x: 50, z: 0 }], width: cross.carriageway, oneway: false, lanes: 0, cross };
+  const geo = buildStreetGeometry({ ...f, roads: [ped], greens: [], squares: [], tramTracks: [] });
+  expect(geo.road.indices.length).toBe(0);
+  expect(geo.squares.indices.length).toBeGreaterThan(0);
 });

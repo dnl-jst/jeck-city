@@ -1,7 +1,6 @@
 import type { BuildingMesh } from './buildings.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { carContourDistance } from './parking.js';
 import { placeRand } from './placerand.js';
 import { DRIVABLE, distToPolyline, pointInPolygon } from './polyline.js';
 import { edgeAt, nearestOn } from './roadprofile.js';
@@ -191,19 +190,16 @@ export function dropCarsAtRacks<S extends { pos: Pt }>(spots: S[], rows: RackRow
 }
 
 const SPAWN_BIKE_BEHIND = [2.2, 1.8, 2.6];
-const SPAWN_CAR_CLEARANCE = 1;
 
 /**
- * The Long John at the spawn: parallel to the spawn heading, ~2.2 m from the player on the side away from the spawn
- * car, on the sidewalk the player stands on. Throws if no spot clears buildings, the car and the play-area edge.
+ * The Long John at the spawn: parallel to the spawn heading, ~2.2 m behind the player. Throws if no spot clears
+ * buildings and the play-area edge.
  */
-export function spawnBikeSpot(f: OsmFeatures, spawn: Pt & { heading: number }, car: { pos: Pt; heading: number }, buildings: BuildingMesh[]): { x: number; z: number; heading: number } {
+export function spawnBikeSpot(f: OsmFeatures, spawn: Pt & { heading: number }, buildings: BuildingMesh[]): { x: number; z: number; heading: number } {
   const fx = Math.sin(spawn.heading), fz = Math.cos(spawn.heading);
-  const away = (car.pos.x - spawn.x) * fx + (car.pos.z - spawn.z) * fz >= 0 ? -1 : 1;
   for (const d of SPAWN_BIKE_BEHIND) {
-    const p = { x: spawn.x + away * fx * d, z: spawn.z + away * fz * d };
+    const p = { x: spawn.x - fx * d, z: spawn.z - fz * d };
     if (insideAnyFootprint(p, buildings)) continue;
-    if (carContourDistance(car, p) < SPAWN_CAR_CLEARANCE) continue;
     if (f.boundary.length && !pointInPolygon(p, f.boundary)) continue;
     return { ...p, heading: spawn.heading };
   }

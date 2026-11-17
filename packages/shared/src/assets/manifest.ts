@@ -56,7 +56,7 @@ export type WorldManifest = {
    * (the side it is read from), width in m.
    */
   shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
-  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen); parked[0] stands at the spawn. */
+  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen). */
   parked: { x: number; z: number; heading: number; color: number; type?: number }[];
   /** Car models (car_<type>.glb and its distance version car_<type>_lod.glb, nodes per data/models/cars/README.md). Missing in older manifests → []. */
   carModels: { type: CarType; file: string; lod: string; bytes: number }[];

@@ -137,6 +137,6 @@ export const PARKED_PALETTE = [0xf2f2ee, 0x161616, 0xb9bdc1, 0x6a6d71, 0x1d2a45,
 export function parkedCars(spots: { pos: Pt; heading: number }[], seed: number): WorldManifest['parked'] {
   return spots.map((s, i) => ({
     x: s.pos.x, z: s.pos.z, heading: s.heading, color: PARKED_PALETTE[Math.floor(placeRand(seed, s.pos, 2) * PARKED_PALETTE.length)]!,
-    type: i === 0 ? 0 : carTypeFor(placeRand(seed, s.pos, 3)),
+    type: carTypeFor(placeRand(seed, s.pos, 3)),
   }));
 }

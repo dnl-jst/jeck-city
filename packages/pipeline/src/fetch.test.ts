@@ -50,9 +50,9 @@ test('tiles cover Nippes plus 150 m backdrop', () => {
   expect(t).toContain('LoD2_32_357_5649_1_NW.gml');
 });
 
-test('LOD2_TILES covers Nippes and Neustadt-Nord (36 tiles)', () => {
-  expect(LOD2_TILES).toHaveLength(36);
-  expect(new Set(LOD2_TILES).size).toBe(36);
-  expect(LOD2_TILES).toContain('LoD2_32_353_5644_1_NW.gml');
+test('LOD2_TILES covers Nippes, Neustadt-Nord, Altstadt-Nord/-Süd and Neustadt-Süd (48 tiles)', () => {
+  expect(LOD2_TILES).toHaveLength(48);
+  expect(new Set(LOD2_TILES).size).toBe(48);
+  expect(LOD2_TILES).toContain('LoD2_32_353_5642_1_NW.gml');
   expect(LOD2_TILES).toContain('LoD2_32_358_5649_1_NW.gml');
 });
