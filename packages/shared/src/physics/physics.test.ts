@@ -544,7 +544,8 @@ test.skipIf(!haveReal)(
     const terrain = decodeTerrain(tf.buffer.slice(tf.byteOffset, tf.byteOffset + tf.byteLength));
     const spawn = JSON.parse(readFileSync(MANIFEST, 'utf8')).spawn as { x: number; y: number; z: number };
     const t0 = performance.now();
-    const pw = await createPhysicsWorld(asset, terrain);
+    // as the browser builds it: only the city around the spawn (both flights below are within CITY_NEED of it)
+    const pw = await createPhysicsWorld(asset, terrain, { stream: [spawn] });
     // a generous bound: the budget (< 3 s) is measured in the browser; a loaded CI box must not flake here
     expect(performance.now() - t0).toBeLessThan(15_000);
     const c = new Character(pw, spawn);
@@ -566,7 +567,7 @@ test.skipIf(!haveReal)(
       w.dispose();
     }
   },
-  // decoding and building the whole city in a full parallel test run can take longer than the build bound alone
+  // decoding and building the city in a full parallel test run can take longer than the build bound alone
   30_000,
 );
 
