@@ -46,6 +46,20 @@ test('a signalled cross gets two groups by axis', () => {
   }
 });
 
+test('no forest of poles: never two poles of a junction within 2.5 m, at most two per crossing and one per approach', () => {
+  // OSM often has crossing nodes a few metres out on every arm besides the junction's own crossings
+  const crossings = [{ x: 0, z: 12 }, { x: 0, z: -12 }, { x: 12, z: 0 }, { x: -12, z: 0 }];
+  const n = net(cross4(), { signals: [o, { x: 3, z: 3 }, { x: -3, z: -3 }], crossings });
+  const j = centre(n.junctions);
+  for (let a = 0; a < j.poles.length; a++) {
+    for (let b = a + 1; b < j.poles.length; b++) {
+      expect(Math.hypot(j.poles[a]!.x - j.poles[b]!.x, j.poles[a]!.z - j.poles[b]!.z)).toBeGreaterThanOrEqual(2.5);
+    }
+  }
+  expect(j.poles.length).toBeLessThanOrEqual(j.approaches.length + 2 * 4);
+  expect(n.junctions.filter((x) => x.signal).length).toBe(1);
+});
+
 test('an unsignalled junction has no signal and no poles', () => {
   const j = centre(net(cross4()).junctions);
   expect(j.signal).toBeNull();

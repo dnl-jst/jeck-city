@@ -122,18 +122,23 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
     if (signalled) {
       j.signal = { id: out.length, offsetTicks: Math.floor(rng() * CYCLE_S * 60), midblock: false };
       // pedestrian crossings around the junction: crossing arm k walks across it, parallel to the other axis
+      // one signalled crossing per arm: the one nearest to the centre (OSM often maps more crossing nodes nearby)
       const reach = Math.max(...lj.arms.map((a) => a.kerb)) * 2 + 10;
+      const perArm = new Map<number, { ei: number; d: number }>();
       for (const ei of walkIx.near(lj.x, lj.z, reach)) {
         const e = walk.edges[ei]!;
         if (!e.crossing) continue;
         const m = e.pts[Math.floor(e.pts.length / 2)]!;
         const mid = { x: (e.pts[0]![0] + e.pts[e.pts.length - 1]![0]) / 2, z: (e.pts[0]![1] + e.pts[e.pts.length - 1]![1]) / 2 };
-        if (dist(mid, centre) > reach || dist({ x: m[0], z: m[1] }, centre) > reach) continue;
+        const d = dist(mid, centre);
+        if (d > reach || dist({ x: m[0], z: m[1] }, centre) > reach) continue;
         const to = { x: mid.x - lj.x, z: mid.z - lj.z };
         const l = Math.hypot(to.x, to.z) || 1;
         const k = lj.arms.reduce((best, a, i) => ((a.dir.x * to.x + a.dir.z * to.z) / l > (lj.arms[best]!.dir.x * to.x + lj.arms[best]!.dir.z * to.z) / l ? i : best), 0);
-        j.peds.push({ walkEdge: ei, group: (1 - groups[k]!) as 0 | 1 });
+        const cur = perArm.get(k);
+        if (!cur || d < cur.d) perArm.set(k, { ei, d });
       }
+      for (const [k, { ei }] of [...perArm].sort((a, b) => a[0] - b[0])) j.peds.push({ walkEdge: ei, group: (1 - groups[k]!) as 0 | 1 });
       approaches.forEach((ap, i) => {
         const a = lj.arms[armOfApproach[i]!]!;
         const e = drive.graph.edges[ap.edge]!;
@@ -142,7 +147,10 @@ export function buildJunctions(input: JunctionInput): JunctionInfo[] {
         const half = a.laneWidth / 2;
         j.stopLines.push({ x0: r2(p.x - right.x * (half + 0.2)), z0: r2(p.z - right.z * (half + 0.2)), x1: r2(p.x + right.x * half), z1: r2(p.z + right.z * half) });
         const off = a.rightKerb + 0.5;
-        j.poles.push({ x: r2(p.x + right.x * off), z: r2(p.z + right.z * off), heading: r3(headingOf({ x: -p.dir.x, z: -p.dir.z })), kind: 'car', approach: i });
+        const at = { x: p.x + right.x * off, z: p.z + right.z * off };
+        // two lanes of one arm (or two close nodes of one junction) share a pole
+        if (j.poles.some((q) => dist(q, at) < POLE_MERGE)) return;
+        j.poles.push({ x: r2(at.x), z: r2(at.z), heading: r3(headingOf({ x: -p.dir.x, z: -p.dir.z })), kind: 'car', approach: i });
       });
       addPedPoles(j, walk);
     }
@@ -205,11 +213,11 @@ function addPedPoles(j: JunctionInfo, walk: NetGraph): void {
       const l = Math.hypot(d.x, d.z) || 1;
       // 0.6 m back from the crossing's end, onto the sidewalk
       const at = { x: p.x - (d.x / l) * 0.6, z: p.z - (d.z / l) * 0.6 };
-      const car = j.poles.find((c: Pole) => c.kind === 'car' && dist(c, at) < POLE_MERGE);
-      if (car) {
-        car.kind = 'car+ped';
-        car.ped = i;
-      } else j.poles.push({ x: r2(at.x), z: r2(at.z), heading: r3(headingOf(d)), kind: 'ped', ped: i });
+      const near = j.poles.find((c: Pole) => dist(c, at) < POLE_MERGE);
+      if (near?.kind === 'car') {
+        near.kind = 'car+ped';
+        near.ped = i;
+      } else if (!near) j.poles.push({ x: r2(at.x), z: r2(at.z), heading: r3(headingOf(d)), kind: 'ped', ped: i });
     }
   });
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { Group, Mesh, PerspectiveCamera, Scene, Vector3 } from 'three';
+import { BoxGeometry, Group, Mesh, MeshStandardMaterial, PerspectiveCamera, Scene, Vector3 } from 'three';
 import type { BikeType, NpcKind } from '@nn/shared';
 import type { CarView, RiderRig } from '../remote/remote-players';
 import type { NpcDraw } from './npc-feed';
@@ -71,6 +71,17 @@ test('a sitter on a bench sits with the hips at bench height', () => {
   const f = view.figureOf(1)!;
   expect(f.sitting).toBe(true);
   expect(f.hipY()).toBeCloseTo(0.45, 1);
+});
+
+test('two cyclists on the same bike type each get their own bike (the model is cloned)', () => {
+  const scene = new Scene();
+  const model = new Group();
+  model.add(new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial({ name: 'paint' })));
+  const view = new NpcView(scene, { occluded: () => false, figureFor: () => null, bikeModels: new Map([['dutch', model]]) });
+  view.update([draw(1, 'cyclist', 3), draw(2, 'cyclist', 6)], new PerspectiveCamera(), 0, 0.016);
+  const a = view.figureOf(1)!.group.parent!, b = view.figureOf(2)!.group.parent!;
+  expect(a).not.toBe(b);
+  expect(model.parent).toBeNull(); // the template itself stays out of the scene
 });
 
 test('low quality: npc figures cast no shadows', () => {

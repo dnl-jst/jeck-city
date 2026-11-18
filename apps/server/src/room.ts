@@ -49,6 +49,8 @@ type Seat = {
 
 /** Seed of the NPC director (spawns, routes, looks). */
 const NPC_SEED = 1766132;
+/** A client's NPC area is looked at every this many of its snapshot rounds (0.2 s). */
+const NPC_AREA_EVERY = 4;
 
 /** Byte size of a raw ws 'message' payload (Buffer, ArrayBuffer or fragments). */
 function rawSize(data: unknown): number {
@@ -87,6 +89,8 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   npcs: NpcDirector | null = null;
   private readonly recentNpc: NpcMsg[][] = Array.from({ length: SNAPSHOT_EVERY }, () => []);
   private readonly brake = new LoadBrake();
+  /** The players' states of this tick (NPC director input), by slot. */
+  private readonly playerNow = new Map<PlayerId, ReturnType<WorldSim['player']>>();
 
   async onCreate(): Promise<void> {
     const { cfg, assets } = this.deps;
@@ -184,7 +188,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const lag = this.deps.cfg.fakeLag;
     const seat: Seat = {
       slot, name, ipHash: auth.ipHash, queue: new InputQueue(this.sim.player(slot).yaw), kicked: false, client,
-      interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag), npcFeed: new NpcFeed(),
+      interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag), npcFeed: new NpcFeed(NPC_AREA_EVERY),
     };
     this.seats.set(client.sessionId, seat);
     this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant }));
@@ -210,7 +214,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     seat.client = client; // a new Client object for the new connection
     seat.away = false;
     seat.interest = new Interest(); // the new connection knows nothing yet
-    seat.npcFeed = new NpcFeed();
+    seat.npcFeed = new NpcFeed(NPC_AREA_EVERY);
     this.watchMessageSize(client);
     this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick }));
     log('info', 'reconnect', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash });
@@ -333,6 +337,9 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const phase = this.sim.tick % SNAPSHOT_EVERY;
     this.recentEvents[phase] = events;
     if (this.npcs) {
+      // once per tick: where the players are (sim.player builds a full snapshot)
+      this.playerNow.clear();
+      for (const seat of this.seats.values()) this.playerNow.set(seat.slot, this.sim.player(seat.slot));
       this.npcs.setPlayers(this.playersNear());
       this.recentNpc[phase] = this.npcs.update(this.sim.tick, this.foci());
     }
@@ -360,7 +367,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const bytes = encodeSnapshot(snap);
       this.outbound(seat, () => seat.client.sendBytes('s', bytes));
       if (this.npcs) {
-        const p = this.sim.player(seat.slot).pos;
+        const p = (this.playerNow.get(seat.slot) ?? this.sim.player(seat.slot)).pos;
         const batch = seat.npcFeed.collect(this.npcs, this.sim.tick, p, this.npcSince(phase));
         if (batch) {
           const nb = encodeNpcBatch(batch);
@@ -380,19 +387,15 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   /** Where the players are and look (the NPCs spawn around them, out of their view). */
   private foci(): { x: number; z: number; heading: number }[] {
     const out: { x: number; z: number; heading: number }[] = [];
-    for (const seat of this.seats.values()) {
-      const p = this.sim.player(seat.slot);
-      out.push({ x: p.pos.x, z: p.pos.z, heading: p.yaw });
-    }
+    for (const p of this.playerNow.values()) out.push({ x: p.pos.x, z: p.pos.z, heading: p.yaw });
     return out;
   }
 
   /** The players as NPC traffic sees them. */
   private playersNear(): PlayerNear[] {
     const out: PlayerNear[] = [];
-    for (const seat of this.seats.values()) {
-      const p = this.sim.player(seat.slot);
-      out.push({ id: seat.slot, x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, mode: p.mode === 'drive' ? 'drive' : p.mode === 'ride' ? 'ride' : 'walk' });
+    for (const [slot, p] of this.playerNow) {
+      out.push({ id: slot, x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, mode: p.mode === 'drive' ? 'drive' : p.mode === 'ride' ? 'ride' : 'walk' });
     }
     return out;
   }

@@ -218,7 +218,7 @@ export class NpcView {
       return pooled;
     }
     const model = this.opts.bikeModels?.get(type);
-    const rig = this.opts.makeRig?.(type) ?? (model ? new BikeRig(model, type) : null);
+    const rig = this.opts.makeRig?.(type) ?? (model ? new BikeRig(model.clone(true), type) : null);
     if (rig && !rig.root.parent) this.scene.add(rig.root);
     return rig;
   }

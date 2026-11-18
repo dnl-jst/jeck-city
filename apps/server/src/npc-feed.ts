@@ -8,11 +8,15 @@ import { INTEREST_RELEASE, NPC_INTEREST_RADIUS, type NpcBatch, type NpcDirector,
  */
 export class NpcFeed {
   private readonly known = new Set<number>();
+  private calls = 0;
+
+  /** areaEvery: the area is looked at on every areaEvery-th call (the first one always). */
+  constructor(private readonly areaEvery = 1) {}
 
   collect(dir: NpcDirector, tick: number, at: { x: number; z: number } | null, msgs: readonly NpcMsg[]): NpcBatch | null {
     const out: NpcMsg[] = [];
     const fresh = new Set<number>();
-    if (at) {
+    if (at && this.calls++ % this.areaEvery === 0) {
       const keep = new Set(dir.idsNear(at.x, at.z, INTEREST_RELEASE));
       for (const id of [...this.known]) {
         if (keep.has(id) && dir.get(id)) continue;

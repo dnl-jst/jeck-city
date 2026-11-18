@@ -452,10 +452,18 @@ export class NpcDirector {
     return out;
   }
 
+  /** NPC obstacles in the square of half-size r around (x, z) (a large r scans the list instead of many cells). */
   private nearNpcObstacles(x: number, z: number, r: number): Obstacle[] {
     const out: Obstacle[] = [];
+    if (r > 3 * OBST_CELL) {
+      for (const o of this.obstacles) if (Math.abs(o.x - x) <= r && Math.abs(o.z - z) <= r) out.push(o);
+      return out;
+    }
     for (let cx = Math.floor((x - r) / OBST_CELL); cx <= Math.floor((x + r) / OBST_CELL); cx++) {
-      for (let cz = Math.floor((z - r) / OBST_CELL); cz <= Math.floor((z + r) / OBST_CELL); cz++) out.push(...(this.obstacleGrid.get(`${cx},${cz}`) ?? []));
+      for (let cz = Math.floor((z - r) / OBST_CELL); cz <= Math.floor((z + r) / OBST_CELL); cz++) {
+        const cell = this.obstacleGrid.get(`${cx},${cz}`);
+        if (cell) for (const o of cell) out.push(o);
+      }
     }
     return out;
   }
@@ -544,8 +552,9 @@ export class NpcDirector {
     const look = Math.max(25, (v * v) / (2 * STOP_DECEL_T) + 15 + me.len);
     const legs = this.legsFrom(n, pose.s);
     const overtaking = n.overtakeUntil > tick;
-    const pts = overtaking ? n.plan.path.slice(0) : this.routePoints(layer, legs, look);
-    const ahead = NpcDirector.samples(overtaking ? trimPath(pts, pose.s) : pts, look);
+    // what lies ahead: the plan's own path while it moves (it runs along the legs), the legs while holding (the hold
+    // plan ends at the stop: what made it stop lies beyond)
+    const ahead = NpcDirector.samples(n.hold ? this.routePoints(layer, legs, look) : trimPath(n.plan.path, pose.s), look);
     const hx = Math.sin(pose.heading), hz = Math.cos(pose.heading);
 
     let stop = Infinity, leader: Obstacle | null = null, leaderD = Infinity;
