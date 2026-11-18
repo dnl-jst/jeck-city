@@ -1,8 +1,8 @@
 // Usage: node scripts/precompress.mjs [dir] [--cache <dir>] [--cache-only] [--prune]   (default dir apps/client/dist)
-// Writes <file>.br (Brotli quality 9) and <file>.gz (gzip level 6) next to every js/css/html/json/bin/glb file; the game
+// Writes <file>.br (Brotli quality 5) and <file>.gz (gzip level 6) next to every js/css/html/json/bin/glb file; the game
 // server serves them when the browser accepts them. A variant that is not smaller than the original is not kept.
 //
-// Brotli 9, not 11: ~14x faster (7 vs 0.5 MB/s per core) for ~10 % larger files. The world is over a GB, though, and
+// Brotli 5, not 11: ~80x faster (41 vs 0.5 MB/s per core) for ~15 % larger files. The world is over a GB, though, and
 // the pipeline is deterministic: between two builds almost every file is byte-identical. With --cache (or
 // NN_PRECOMPRESS_CACHE) the compressed variants are kept in that directory under the SHA-256 of their source and
 // reused instead of compressed again.
@@ -23,7 +23,7 @@ const THREADS = availableParallelism();
 process.env.UV_THREADPOOL_SIZE ??= String(THREADS);
 
 const EXT = new Set(['.js', '.css', '.html', '.json', '.bin', '.glb']);
-const BR_QUALITY = 9;
+const BR_QUALITY = 5;
 // level 9 is 3x slower than 6 for 0.3 % smaller files (measured on the world's glb/bin files)
 const GZ_LEVEL = 6;
 /** Part of every cache key: a change of the settings must not reuse variants made with the old ones. */
