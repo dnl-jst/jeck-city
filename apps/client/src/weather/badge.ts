@@ -4,13 +4,18 @@ const ICON: Record<Weather['kind'], string> = {
   clear: '☀', cloudy: '☁', fog: '≋', drizzle: '☂', rain: '☂', snow: '❄',
 };
 
-/** "☂ 7 °C · leichter Regen"; null while the weather is unknown. */
-export function badgeText(w: Weather | null, night: boolean): string | null {
-  if (!w || !w.known) return null;
+/**
+ * "☂ 7 °C · leichter Regen · 3 online"; players: the room's player count (null offline). Null while there is
+ * neither known weather nor a player count.
+ */
+export function badgeText(w: Weather | null, night: boolean, players: number | null = null): string | null {
+  const online = players === null ? null : `${players} online`;
+  if (!w || !w.known) return online;
   const icon = w.kind === 'clear' && night ? '☾' : ICON[w.kind];
   const t = Math.round(w.temperature);
   const temp = t < 0 ? `−${-t}` : `${t === 0 ? 0 : t}`;
-  return `${icon} ${temp} °C · ${w.label}`;
+  const weather = `${icon} ${temp} °C · ${w.label}`;
+  return online === null ? weather : `${weather} · ${online}`;
 }
 
 const CSS = `
@@ -34,8 +39,8 @@ export class WeatherBadge {
     root.append(style, this.el);
   }
 
-  set(w: Weather | null, night: boolean): void {
-    const text = badgeText(w, night);
+  set(w: Weather | null, night: boolean, players: number | null = null): void {
+    const text = badgeText(w, night, players);
     if (text === this.text) return;
     this.text = text;
     this.el.hidden = text === null;
