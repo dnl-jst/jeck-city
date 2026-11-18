@@ -18,6 +18,7 @@ import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
 import { Props } from './props';
+import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
@@ -226,6 +227,7 @@ if (debug) {
 
 let lighting: Lighting | null = null;
 let precip: Precipitation | null = null;
+let boundaryGlow: BoundaryGlow | null = null;
 /** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees, cars and rain/snow (all live but MSAA). */
 function applyQuality(): void {
   const q = QUALITY[qualityLevel];
@@ -320,6 +322,8 @@ renderer.setAnimationLoop((t: number) => {
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
     precip?.update(dt, camera.position, look);
+    const f = game.flying ? camera.position : game.focus();
+    boundaryGlow?.update(dt, f.x, f.z, nightFactor);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
     const far = lighting.viewFar + 5;
     if (Math.abs(camera.far - far) > 0.5) {
@@ -341,7 +345,7 @@ const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseMani
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
-async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
+async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundary: Float32Array }> {
   // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain] = await Promise.all([
@@ -353,7 +357,7 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
   const sim = await WorldSim.create({ manifest, collision, terrain }, { sliceMs: 12, streamCity: start ? [start] : [] });
   physicsLoading = false; // only once the world is built
   showStatus();
-  return { sim, terrain };
+  return { sim, terrain, boundary: collision.boundary };
 }
 
 /** map.json → minimap and big map; a failure only means no map. */
@@ -399,7 +403,7 @@ async function connect(): Promise<Connection | null> {
 }
 
 const start = devCamParam ? { x: devCamParam.x, z: devCamParam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain }, mapData, conn]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain, boundary }, mapData, conn]) => {
   connection = conn;
   // bikes still ride without their models (unseen), so a failed model download is not fatal
   const characters = world.characterModels(m);
@@ -427,6 +431,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     (x, z) => heightAt(terrain, x, z),
   );
   precip = new Precipitation(scene);
+  boundaryGlow = new BoundaryGlow(scene, boundary, (x, z) => heightAt(terrain, x, z));
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
   const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug, import.meta.env.DEV);
   const devCam = allowed.cam ? devCamParam : null;
