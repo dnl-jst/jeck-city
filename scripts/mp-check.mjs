@@ -62,6 +62,9 @@ async function join(browser, name) {
   url.searchParams.set('time', '14:00');
   url.searchParams.set('date', '2026-06-15');
   await page.goto(url.href);
+  // the start screen (it starts the title song with the click) covers the intro until clicked
+  const start = page.locator('.nn-intro-start');
+  if (await start.isVisible().catch(() => false)) await start.click();
   await page.locator('.nn-intro-go').click();
   await page.locator('.nn-lobby-input').fill(name);
   await page.keyboard.press('Enter');
