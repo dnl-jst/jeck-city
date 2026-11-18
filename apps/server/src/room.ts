@@ -13,6 +13,9 @@ import { JoinLimiter } from './join-limit';
 import { ipHash, log } from './log';
 import { BikeSlowState, CarState, LampState, NippesState, PlayerState } from './state';
 
+/** Metres a player moves before the coarse map position in the slow state is rewritten. */
+const MAP_POS_STEP = 4;
+
 /** What the room is built from; the world is loaded once at server start. */
 export type RoomDeps = { cfg: Config; assets: WorldAssets; worldHash: string };
 
@@ -159,7 +162,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
     };
     this.seats.set(client.sessionId, seat);
-    this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant }));
+    const start = this.sim.player(slot).pos;
+    this.state.players.set(String(slot), new PlayerState({
+      slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
+    }));
     this.watchMessageSize(client);
     client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
@@ -342,6 +348,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       if (e.carId !== carId) e.carId = carId;
       const bikeId = p.bikeId ?? -1;
       if (e.bikeId !== bikeId) e.bikeId = bikeId;
+      if (Math.abs(p.pos.x - e.mapX) >= MAP_POS_STEP || Math.abs(p.pos.z - e.mapZ) >= MAP_POS_STEP) {
+        e.mapX = Math.round(p.pos.x);
+        e.mapZ = Math.round(p.pos.z);
+      }
     }
 
     const cars = sim.cars;

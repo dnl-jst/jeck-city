@@ -1,5 +1,6 @@
 import type { MapData } from '@nn/shared';
-import { drawArrow, drawMap } from './draw';
+import { drawArrow, drawMap, drawPlayerDot, playerColor } from './draw';
+import type { MapPlayer } from './others';
 import type { MapGrid } from './grid';
 import { clampView, panBy, worldToScreen, zoomBy, type MapView } from './view';
 
@@ -12,7 +13,7 @@ export class BigMap {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private view: MapView = { cx: 0, cz: 0, scale: 1, rot: 0, w: 1, h: 1 };
-  private drawn: { view: MapView; x: number; z: number; yaw: number } | null = null;
+  private drawn: { view: MapView; x: number; z: number; yaw: number; others: string } | null = null;
   private isOpen = false;
 
   constructor(root: HTMLElement, private readonly data: MapData, private readonly grid: MapGrid) {
@@ -51,7 +52,7 @@ export class BigMap {
     this.box.classList.add('nn-hidden');
   }
 
-  update(input: { dx: number; dy: number; notches: number }, player: { x: number; z: number; yaw: number }): void {
+  update(input: { dx: number; dy: number; notches: number }, player: { x: number; z: number; yaw: number }, others: readonly MapPlayer[] = []): void {
     if (!this.isOpen) return;
     if (window.innerWidth !== this.view.w || window.innerHeight !== this.view.h) this.resize();
     let v = this.view;
@@ -60,15 +61,21 @@ export class BigMap {
     v = clampView(v, this.data.bounds);
     this.view = v;
 
+    // others, quantised to a few metres so they only trigger a redraw when they visibly moved
+    const otherKey = others.map((o) => `${o.slot}:${Math.round(o.x / 2)}:${Math.round(o.z / 2)}:${o.name}`).join('|');
     const d = this.drawn;
-    const same = d !== null && d.view.cx === v.cx && d.view.cz === v.cz && d.view.scale === v.scale;
+    const same = d !== null && d.view.cx === v.cx && d.view.cz === v.cz && d.view.scale === v.scale && d.others === otherKey;
     if (same && Math.hypot(player.x - d.x, player.z - d.z) <= MOVED_M && Math.abs(angleDiff(player.yaw, d.yaw)) <= TURNED_RAD) return;
-    this.drawn = { view: v, x: player.x, z: player.z, yaw: player.yaw };
+    this.drawn = { view: v, x: player.x, z: player.z, yaw: player.yaw, others: otherKey };
 
     const dpr = this.canvas.width / v.w;
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawMap(ctx, this.data, this.grid, v, { minimap: false });
+    for (const o of others) {
+      const q = worldToScreen(v, o.x, o.z);
+      drawPlayerDot(ctx, q.sx, q.sy, 6, playerColor(o.slot), o.name || undefined);
+    }
     const p = worldToScreen(v, player.x, player.z);
     drawArrow(ctx, p.sx, p.sy, Math.PI - player.yaw, 11);
   }

@@ -26,7 +26,7 @@ import { TouchControls, touchPreferred } from './touch';
 import { Game } from './game';
 import { storeCharacter, storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
-import { OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
+import { mapPlayers, OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
 import { Lobby } from './net/lobby';
 import { Connection, connectRoom, JoinRejected, STATUS_TEXTS } from './net/connection';
 import { AudioMixer } from './audio/mixer';
@@ -296,8 +296,9 @@ renderer.setAnimationLoop((t: number) => {
         else maps.bigMap.close();
         maps.minimap.setVisible(!open);
       }
-      maps.minimap.update(p.x, p.z, yaw, maps.tracker.update(p.x, p.z));
-      if (open) maps.bigMap.update(game.mapInput, { x: p.x, z: p.z, yaw });
+      const others = onlineSession ? mapPlayers(onlineSession.remote(), onlineSession.roster(), onlineSession.me) : [];
+      maps.minimap.update(p.x, p.z, yaw, maps.tracker.update(p.x, p.z), others);
+      if (open) maps.bigMap.update(game.mapInput, { x: p.x, z: p.z, yaw }, others);
     }
     world.update(camera.position);
     if (world.revision !== propsRevision) {

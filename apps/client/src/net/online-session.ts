@@ -37,7 +37,10 @@ export type RemoteSample = {
 };
 
 /** Slow-state facts the renderer needs: names and character variants by slot, and per car its driver (slot) and lamp level. */
-export type Roster = { names: Map<number, string>; variants: Map<number, number>; cars: Map<number, RemoteCarInfo> };
+/** mapPos: every player's coarse position from the slow state (for the maps; snapshots only cover the interest radius). */
+export type Roster = {
+  names: Map<number, string>; variants: Map<number, number>; cars: Map<number, RemoteCarInfo>; mapPos: Map<number, { x: number; z: number }>;
+};
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
@@ -119,7 +122,7 @@ export class OnlineSession implements Session {
   private readonly riderDraw = new CatchUp<SnapshotRider>('heading');
   private readonly bikeBuf = new SnapshotBuffer<SnapshotBike>(bikeOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), riders: new Map(), bikes: new Map(), lamps: new Map() };
-  private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
+  private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map(), mapPos: new Map() };
   /** Resting car poses of the slow state last seen, by car ("x,y,z,qx,qy,qz,qw"; see placeRestingCars). */
   private readonly carRest = new Map<number, string>();
   /** Resting bike poses of the slow state last seen, by bike ("x,y,z,heading"; see placeRestingBikes). */
@@ -405,13 +408,15 @@ export class OnlineSession implements Session {
     const poses = new Map<number, CarPose>();
     for (const c of cars.values()) poses.set(c.id, poseOf(c));
     const drivers = new Map<number, PlayerId>();
-    const { names, variants, cars: info } = this.rosterNow;
+    const { names, variants, cars: info, mapPos } = this.rosterNow;
     names.clear();
     variants.clear();
     info.clear();
+    mapPos.clear();
     state.players.forEach((p) => {
       names.set(p.slot, p.name);
       variants.set(p.slot, p.variant ?? 0);
+      mapPos.set(p.slot, { x: p.mapX ?? 0, z: p.mapZ ?? 0 });
     });
     state.cars.forEach((c, key) => {
       if (c.driver < 0) return;
@@ -553,6 +558,24 @@ export function remoteList(
   for (const c of sample.cars.values()) {
     const driver = cars.get(c.id)?.driver ?? -1;
     if (driver >= 0) add(driver, c.x, c.z, 'drive');
+  }
+  return out;
+}
+
+/**
+ * Every other player for the maps: the streamed position where the snapshot has one (smooth, within the interest
+ * radius), else the coarse one of the slow state.
+ */
+export function mapPlayers(
+  sample: RemoteSample, roster: Pick<Roster, 'names' | 'cars' | 'mapPos'>, me: PlayerId,
+): { slot: number; name: string; x: number; z: number }[] {
+  const streamed = new Map<number, RemotePlayerInfo>();
+  for (const r of remoteList(sample, roster.names, roster.cars, me)) streamed.set(r.slot, r);
+  const out: { slot: number; name: string; x: number; z: number }[] = [];
+  for (const [slot, pos] of roster.mapPos) {
+    if (slot === me) continue;
+    const s = streamed.get(slot) ?? pos;
+    out.push({ slot, name: roster.names.get(slot) ?? '', x: s.x, z: s.z });
   }
   return out;
 }
