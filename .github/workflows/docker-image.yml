@@ -75,7 +75,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # Brotli 11 over the >1 GB world takes most of the image build. The pipeline is deterministic, so between runs
+      # Compressing the >1 GB world takes most of the image build. The pipeline is deterministic, so between runs
       # nearly every world file is unchanged: the compressed variants are kept in .precompress-cache (by content
       # hash), which the image build copies in and reuses. Only new or changed files are compressed here; the cache is
       # pruned to this world and saved under its hash (an unchanged world skips the save).
