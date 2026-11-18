@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { NPC_MAX, NPC_SPAWN_FIRST_MIN, NPC_SPAWN_MAX, NPC_SPAWN_MIN, TICK_HZ } from '../net/constants';
 import { linesFor } from '../npc/lines';
-import type { NpcMsg } from '../npc/net';
+import { decodeNpcBatch, encodeNpcBatch, type NpcMsg } from '../npc/net';
 import { planAt, planDuration } from '../npc/plan';
 import { NPC_TARGETS, NpcDirector, type Focus } from './npc-director';
 import { gridNet } from './npc-fixture';
@@ -175,6 +175,35 @@ test('a lowered cap dissolves NPCs over it, out of sight and away from the playe
     }
   }
   expect(d.count).toBeLessThanOrEqual(46);
+});
+
+test('a car stuck at a one-way dead end is dissolved once nobody looks, so it does not block the lane for ever', () => {
+  // a one-way street of 300 m that ends nowhere, and a player looking the other way
+  const g = { nodes: [[0, 0], [300, 0]] as [number, number][], edges: [{ a: 0, b: 1, pts: [[0, 0], [300, 0]] as [number, number][], width: 3, oneway: true }] };
+  const net = { version: 1 as const, walk: g, cycle: g, drive: g, seats: [], junctions: [] };
+  const d = new NpcDirector(net, flat, 17);
+  d.density = 0;
+  const car = d.spawnAt('driver', [{ edge: 0, from: 200 }], 0);
+  const f: Focus = { x: 150, z: 0, heading: -Math.PI / 2 }; // looking west, the dead end is east
+  let gone = false;
+  for (let t = 0; t < 120 * TICK_HZ && !gone; t++) for (const m of d.update(t, [f])) if (m.t === 'gone' && m.id === car.id) gone = true;
+  expect(gone).toBe(true);
+});
+
+test('plans stay within what the wire carries (≤ 255 points) even on very long edges', () => {
+  const pts: [number, number][] = [[0, 0], [2000, 0]];
+  const g = { nodes: pts, edges: [{ a: 0, b: 1, pts, width: 3, oneway: false }] };
+  const d = new NpcDirector({ version: 1, walk: g, cycle: g, drive: g, seats: [], junctions: [] }, flat, 18);
+  d.density = 0;
+  const w = d.spawnAt('walker', [{ edge: 0, from: 0 }], 0);
+  expect(w.plan.path.length).toBeLessThanOrEqual(255);
+  const back = decodeNpcBatch(encodeNpcBatch({ tick: 0, msgs: [{ t: 'plan', plan: w.plan }] }))!.msgs[0]!;
+  if (back.t !== 'plan') throw new Error('plan expected');
+  expect(back.plan.path.length).toBe(w.plan.path.length);
+  // keeps walking past the first plan's end
+  const end = planDuration(w.plan);
+  for (let t = 0; t < end + 600; t++) d.update(t, [{ x: 0, z: 0, heading: 0 }]);
+  expect(planAt(w.plan, end + 600).x).toBeGreaterThan(planAt(w.plan, 0).x);
 });
 
 test('density 0.5 halves the targets', () => {

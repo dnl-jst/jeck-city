@@ -46,6 +46,21 @@ describe('ClientNpcFeed', () => {
     expect(f.draws(60, 1000 + NPC_BLEND_S * 1000 + 1)[0]!.pose.x).toBeCloseTo(1.2, 6);
   });
 
+  test('a seamless follow-up plan of a fast car does not lurch', () => {
+    const f = new ClientNpcFeed();
+    const car = (seq: number, start: number, from: number) => ({ ...walk(seq, start, from, from + 200, 13.9), kind: 'driver' as const });
+    f.push({ tick: 0, msgs: [{ t: 'plan', plan: car(0, 0, 0) }] }, 0, 0);
+    // at tick 120 the server sends the next plan, starting exactly where the car is then (2 s × 13.9 m/s)
+    const at = 120, x0 = 13.9 * 2;
+    f.push({ tick: at, msgs: [{ t: 'plan', plan: car(1, at, x0) }] }, 2000, at);
+    let last = f.draws(at, 2000)[0]!.pose.x;
+    for (let ms = 2016; ms < 2400; ms += 16) {
+      const x = f.draws(at + ((ms - 2000) * TICK_HZ) / 1000, ms)[0]!.pose.x;
+      expect(Math.abs(x - last - 13.9 * 0.016)).toBeLessThan(0.03); // steady speed, no catch-up
+      last = x;
+    }
+  });
+
   test('a stale plan (older seq) is ignored', () => {
     const f = new ClientNpcFeed();
     f.push({ tick: 0, msgs: [{ t: 'plan', plan: walk(3, 0, 0, 30) }] }, 0, 0);

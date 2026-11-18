@@ -153,6 +153,22 @@ test('a player car at 30 km/h knocks a walker down; it gets up and says "Bes do 
   if (landed?.t === 'plan') expect(landed.plan.path[landed.plan.path.length - 1]!.x).toBeGreaterThan(landed.plan.path[0]!.x + 1);
 });
 
+test('after being knocked down a walker goes on from where it landed, never back along its old route', () => {
+  const { d, walker } = setup(3);
+  const w = walker(20); // x = -80, walking east
+  let knockX = NaN, minAfter = Infinity;
+  run(d, 0, 24 * TICK_HZ, (t) => {
+    const p = pos(w, t);
+    if (Number.isNaN(knockX) && w.plan.action === 'down') knockX = p.x;
+    if (!Number.isNaN(knockX)) minAfter = Math.min(minAfter, p.x);
+    // after 10 s (the walker's plan started some 14 m back) a car along the sidewalk catches it up
+    const x = -100 + (t / TICK_HZ - 10) * 8.3;
+    return t > 10 * TICK_HZ && x < -40 ? [P(x, 5, 'drive', 8.3, 0)] : [];
+  });
+  expect(Number.isNaN(knockX)).toBe(false);
+  expect(minAfter).toBeGreaterThan(knockX - 1);
+});
+
 test('bodiesNear lists only NPCs within the radius of a point', () => {
   const { d, walker } = setup(3);
   walker(40); // x = -60

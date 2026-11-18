@@ -57,6 +57,8 @@ export type NpcState = {
   ring?: number; seat?: number;
   /** Holding (stopping or standing) for traffic; since when it stands (tick) or null. */
   hold: boolean; waitingSince: number | null;
+  /** Reached a dead end with no way on (dissolved once out of sight). */
+  deadEnd?: boolean;
   /** Speed cap (m/s) while following a slower vehicle (Infinity: none). */
   cap: number;
   /** Tick of the last plan change made by traffic (rate limit). */
@@ -80,6 +82,10 @@ const LAYER_OF: Record<'walker' | 'cyclist' | 'driver', NetLayer> = { walker: 'w
 const TRAFFIC_EVERY = 6, TRAFFIC_FAR = 12;
 /** "Far from every player" (m, per axis). */
 const FAR_FROM_PLAYERS = 100;
+/** A plan covers at most this much way (m): 4 m points, the wire carries 255. */
+const PLAN_MAX_LEN = 600;
+/** An NPC waiting this long (s) is stuck and is dissolved once nobody sees it. */
+const STUCK_S = 30;
 /** With the density lowered, surplus NPCs this far (m) from every player and out of their view are dissolved. */
 const SURPLUS_FROM = 120;
 /** Plan changes by traffic that are not needed for safety (resume, speed cap) at most this often (ticks). */
@@ -349,6 +355,13 @@ export class NpcDirector {
     const layer = n.layer as NetLayer;
     const pose = planAt(n.plan, tick);
     const legs = this.legsFrom(n, pose.s);
+    // a leg cut short (a long edge split over plans) goes on along its own edge first
+    const lastLeg = legs[legs.length - 1];
+    if (lastLeg) {
+      const len = this.ix[layer].length(lastLeg.edge);
+      const end = lastLeg.to >= lastLeg.from ? len : 0;
+      if (Math.abs(end - lastLeg.to) > 1e-3) legs.push({ ...lastLeg, from: lastLeg.to, to: end });
+    }
     let total = legs.reduce((a, l) => a + Math.abs(l.to - l.from), 0);
     let dead = false;
     while (total < PLAN_MIN[kind] || legs.length < 2) {
@@ -362,7 +375,9 @@ export class NpcDirector {
       total += Math.abs(next.to - next.from);
     }
     // drop zero-length legs (a route starting exactly at a node)
-    const route = legs.filter((l) => Math.abs(l.to - l.from) > 1e-3);
+    // at most PLAN_MAX_LEN m per plan (the wire carries 255 points; a very long edge continues in the next plan)
+    const route = this.trimLegs(legs, Math.min(total, PLAN_MAX_LEN)).filter((l) => Math.abs(l.to - l.from) > 1e-3);
+    if (total > PLAN_MAX_LEN) dead = false;
     if (!route.length) {
       this.remove(n, msgs);
       return;
@@ -374,7 +389,10 @@ export class NpcDirector {
     const ramps = rampsForLegs(lens, Math.max(pose.speed, n.plan.ramps.length ? 0.3 : vOf(route[0]!)), dead ? 0 : vOf(route[route.length - 1]!), accel ?? ACCEL[kind]);
     msgs.push(this.replan(n, tick, path, ramps, 'move', route));
     this.setShift(n, path, extra);
-    if (dead) n.nextPlanAt = Infinity;
+    if (dead) {
+      n.nextPlanAt = Infinity;
+      n.deadEnd = true;
+    }
   }
 
   /**
@@ -957,7 +975,7 @@ export class NpcDirector {
     ];
     let len = 0;
     for (let i = 1; i < path.length; i++) len += Math.hypot(path[i]!.x - path[i - 1]!.x, path[i]!.y - path[i - 1]!.y, path[i]!.z - path[i - 1]!.z);
-    msgs.push(this.replan(n, tick, path, [{ s0: 0, s1: len, v0: len / t, v1: len / t }], 'down', n.legs));
+    msgs.push(this.replan(n, tick, path, [{ s0: 0, s1: len, v0: len / t, v1: len / t }], 'down', this.legsFrom(n, p.s)));
     n.hold = true;
     n.nextPlanAt = Infinity;
     n.downUntil = tick + Math.round((t + KNOCKDOWN_S) * TICK_HZ);
@@ -971,7 +989,7 @@ export class NpcDirector {
     if (tick - n.lastTraffic < 10) return;
     const to = { x: p.x + sx * 0.8, z: p.z + sz * 0.8 };
     const path = [{ x: p.x, y: p.y, z: p.z }, { x: to.x, y: this.heightAt(to.x, to.z, n.layer as NetLayer), z: to.z }];
-    msgs.push(this.replan(n, tick, path, rampsForLegs([{ len: 0.8, v: 2 }], 2, 0, 6), 'move', n.legs));
+    msgs.push(this.replan(n, tick, path, rampsForLegs([{ len: 0.8, v: 2 }], 2, 0, 6), 'move', this.legsFrom(n, p.s)));
     n.hold = true;
     n.nextPlanAt = Infinity;
     n.lastTraffic = tick;
@@ -1074,6 +1092,15 @@ export class NpcDirector {
     if (!foci.length) return;
     if (this.density < 1) this.dissolveSurplus(tick, foci, pos, msgs);
     if (this.npcs.size > this.cap) this.dissolveOverCap(foci, pos, msgs);
+    // stuck: at a dead end, or waiting for STUCK_S (behind someone stuck): gone once nobody looks
+    for (const p of [...pos.values()]) {
+      const n = p.n;
+      const stuck = (n.deadEnd && planAt(n.plan, tick).done) || (n.waitingSince !== null && tick - n.waitingSince > STUCK_S * TICK_HZ);
+      if (stuck && this.unseen(p.x, p.z, foci)) {
+        this.remove(n, msgs);
+        pos.delete(n.id);
+      }
+    }
 
     let budget = SPAWN_PER_CENSUS;
     const start = Math.floor(tick / CENSUS_EVERY) % foci.length;
@@ -1142,6 +1169,18 @@ export class NpcDirector {
       pos.delete(p.n.id);
       over--;
     }
+  }
+
+  /** Whether no player sees (x, z): farther than 15 m from each and out of ±60° of where they look (within 250 m). */
+  private unseen(x: number, z: number, foci: readonly Focus[]): boolean {
+    for (const g of foci) {
+      const d = Math.hypot(x - g.x, z - g.z);
+      if (d < 15) return false;
+      if (d > NPC_SPAWN_MAX) continue;
+      const a = Math.atan2(x - g.x, z - g.z) - g.heading;
+      if (Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) < VIEW_HALF) return false;
+    }
+    return true;
   }
 
   /** Whether (x, z) is a fair spawn spot for all foci: far enough away and, in populated areas, out of view. */

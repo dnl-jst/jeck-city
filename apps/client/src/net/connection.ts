@@ -4,6 +4,7 @@ import {
   type InputPacket, type NpcBatch, type Snapshot, type StationId, type Weather,
 } from '@nn/shared';
 import { ServerClock } from './clock';
+import { NpcBacklog } from '../npc/npc-backlog';
 
 export const CONNECT_TEXTS = {
   unreachable: 'Jeck City ist gerade nicht erreichbar – versuch es später nochmal.',
@@ -100,8 +101,8 @@ export class Connection {
   private readonly statusListeners = new Set<(s: NetStatus) => void>();
   private readonly welcomeListeners = new Set<(w: Welcome) => void>();
   private readonly npcListeners = new Set<(b: NpcBatch) => void>();
-  /** NPC batches that came before anyone listened (delivered to the first listener). */
-  private pendingNpc: NpcBatch[] = [];
+  /** NPC batches that came before anyone listened, folded (delivered to the first listener). */
+  private readonly pendingNpc = new NpcBacklog();
   private resolveWelcome!: (w: Welcome) => void;
   private readonly firstWelcome = new Promise<Welcome>((r) => { this.resolveWelcome = r; });
   private deadline = 0;
@@ -119,8 +120,7 @@ export class Connection {
       const b = decodeNpcBatch(bytes);
       if (!b) return;
       if (!this.npcListeners.size) {
-        this.pendingNpc.push(b);
-        if (this.pendingNpc.length > MAX_PENDING_SNAPSHOTS * 4) this.pendingNpc.shift();
+        this.pendingNpc.add(b);
         return;
       }
       for (const cb of this.npcListeners) cb(b);
@@ -164,7 +164,8 @@ export class Connection {
   /** NPC batches; the first listener also gets those that arrived before it. */
   onNpc(cb: (b: NpcBatch) => void): () => void {
     this.npcListeners.add(cb);
-    for (const b of this.pendingNpc.splice(0)) cb(b);
+    const pending = this.pendingNpc.drain();
+    if (pending) cb(pending);
     return () => this.npcListeners.delete(cb);
   }
 

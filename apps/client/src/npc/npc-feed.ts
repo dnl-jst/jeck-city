@@ -16,13 +16,15 @@ const SAY_S = 3, HONK_MS = 500, GONE_MS = 300;
 
 type Entry = {
   plan: Plan;
-  /** The pose shown when the current plan arrived (blended from over NPC_BLEND_S), or null. */
+  /**
+   * Where the NPC was shown when the current plan arrived, minus where that plan puts it then: this offset fades out
+   * over NPC_BLEND_S (a seamless follow-up plan has none, so a moving NPC does not lurch). null: none.
+   */
   from: { x: number; y: number; z: number; heading: number } | null;
   planMs: number; bornMs: number; goneMs: number | null;
   say: { line: number; atMs: number } | null; honkMs: number;
 };
 
-const lerpAngle = (a: number, b: number, k: number): number => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k;
 
 /**
  * The client's NPCs, from the server's 'n' batches (or the offline director's messages): each one's newest plan,
@@ -47,7 +49,8 @@ export class ClientNpcFeed implements NpcSource {
         }
         if (seqOlder(m.plan.seq, e.plan.seq)) continue;
         const shown = this.pose(e, tick, nowMs);
-        e.from = { x: shown.x, y: shown.y, z: shown.z, heading: shown.heading };
+        const next = planAt(m.plan, tick);
+        e.from = { x: shown.x - next.x, y: shown.y - next.y, z: shown.z - next.z, heading: Math.atan2(Math.sin(shown.heading - next.heading), Math.cos(shown.heading - next.heading)) };
         e.plan = m.plan;
         e.planMs = nowMs;
       } else {
@@ -68,10 +71,8 @@ export class ClientNpcFeed implements NpcSource {
       e.from = null;
       return p;
     }
-    return {
-      ...p, x: e.from.x + (p.x - e.from.x) * k, y: e.from.y + (p.y - e.from.y) * k, z: e.from.z + (p.z - e.from.z) * k,
-      heading: lerpAngle(e.from.heading, p.heading, k),
-    };
+    const r = 1 - k;
+    return { ...p, x: p.x + e.from.x * r, y: p.y + e.from.y * r, z: p.z + e.from.z * r, heading: p.heading + e.from.heading * r };
   }
 
   /** Every NPC as shown at `tick` (fractional ticks are fine) and nowMs. */
