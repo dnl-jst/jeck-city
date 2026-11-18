@@ -318,7 +318,7 @@ renderer.setAnimationLoop((t: number) => {
     nightFactor = sun.nightFactor;
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
-    weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5);
+    weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5, onlineSession ? onlineSession.stats().players : null);
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);

@@ -30,3 +30,9 @@ test('icons by kind', () => {
   expect(badgeText(wx('rain', 10), false)).toContain('☂');
   expect(badgeText(wx('snow', 10), false)).toContain('❄');
 });
+
+test('player count appended when online', () => {
+  expect(badgeText(wx('rain', 7.2, 'leichter Regen'), false, 3)).toBe('☂ 7 °C · leichter Regen · 3 online');
+  expect(badgeText(null, false, 1)).toBe('1 online');
+  expect(badgeText(null, false, null)).toBeNull();
+});
