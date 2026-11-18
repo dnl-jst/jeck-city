@@ -9,6 +9,8 @@ import { UNKNOWN_WEATHER } from '@nn/shared';
 /**
  * A player, keyed by slot. mode: 0 walk, 1 drive, 2 down, 3 ride (as OwnMode). carId: the driven car, −1 otherwise.
  * bikeId: the ridden bike, −1 otherwise. variant: the character model (index into CHARACTER_VARIANTS).
+ * mapX/mapZ: coarse position (whole metres, only rewritten after MAP_POS_STEP m) for the maps, which show every player,
+ * also those outside a client's snapshot interest.
  */
 export const PlayerState = schema({
   slot: t.uint8(),
@@ -17,6 +19,8 @@ export const PlayerState = schema({
   carId: t.int16().default(-1),
   bikeId: t.int16().default(-1),
   variant: t.uint8(),
+  mapX: t.int16(),
+  mapZ: t.int16(),
 }, 'PlayerState');
 export type PlayerState = SchemaType<typeof PlayerState>;
 
