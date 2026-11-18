@@ -111,6 +111,7 @@ export class OfflineSession implements Session {
       if (this.director) {
         const p = this.sim.player(this.me);
         this.director.setPlayers([{ id: this.me, x: p.pos.x, z: p.pos.z, vx: p.vel.x, vz: p.vel.z, mode: p.mode === 'drive' ? 'drive' : p.mode === 'ride' ? 'ride' : 'walk' }]);
+        if (this.sim.tick % 15 === 0) this.director.setLeftVehicles(this.sim.leftVehicles());
       }
       for (const e of this.sim.step(new Map([[this.me, i]]))) ev.push(e);
       if (this.director) {

@@ -133,6 +133,21 @@ test('npc car stops for a player who appears in its corridor in the same tick', 
   }
 });
 
+test('npc car stops for a car a player left across its lane, and never drives into it', () => {
+  const c = crossNet({ len: 200 });
+  const d = new NpcDirector(c.net, () => 0, 1);
+  d.density = 0;
+  const car = d.spawnAt('driver', [{ edge: c.inLane.W, from: 20 }], 0);
+  const at = pos(car, 0).x + 60;
+  // left standing diagonally in the lane, nobody in it, the player gone
+  d.setLeftVehicles([{ x: at, z: 1.5, heading: Math.PI / 4, kind: 'car' }]);
+  for (let t = 0; t < 20 * TICK_HZ; t++) {
+    d.update(t, [{ x: -100, z: 0, heading: 0 }]);
+    const q = pos(car, t);
+    if (Math.abs(q.z - 1.5) < 1) expect(at - q.x).toBeGreaterThan(3.4); // own half 2.25 + the left car's reach ~1.2
+  }
+});
+
 test('a player car at 30 km/h knocks a walker down; it gets up and says "Bes do jeck?!"', () => {
   const { d, walker } = setup(3);
   const w = walker(40);

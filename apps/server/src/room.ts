@@ -341,6 +341,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       this.playerNow.clear();
       for (const seat of this.seats.values()) this.playerNow.set(seat.slot, this.sim.player(seat.slot));
       this.npcs.setPlayers(this.playersNear());
+      if (this.sim.tick % 15 === 0) this.npcs.setLeftVehicles(this.sim.leftVehicles());
       this.recentNpc[phase] = this.npcs.update(this.sim.tick, this.foci());
     }
     if (phase === 0) this.syncState();

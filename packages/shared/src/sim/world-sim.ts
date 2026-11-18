@@ -20,6 +20,7 @@ import { pickVehicle } from './pick';
 import { Proxies } from './proxies';
 import { restoreDynamicBodies, saveDynamicBodies, type OwnState } from './replay';
 import { ResetTimers } from './resets';
+import type { LeftVehicle } from './npc-director';
 import { canGetOut, exitFree, exitSpot, headingOf, nearestEnterableCar, type CarPose } from './rules';
 import { findSpawn } from './spawn';
 
@@ -390,6 +391,24 @@ export class WorldSim {
     const out: { id: PlayerId; char: Character }[] = [];
     for (const [id, pl] of this.list) if (pl.car === null && pl.bike === null) out.push({ id, char: pl.char });
     return out.sort((a, b) => a.id - b.id);
+  }
+
+  /** Cars and bikes players moved and left empty: NPC traffic stops for them. */
+  leftVehicles(): LeftVehicle[] {
+    const out: LeftVehicle[] = [];
+    const { cars, bikes } = this;
+    for (let i = 0; i < cars.count; i++) {
+      if (cars.driver[i] !== null || !cars.isMoved(i)) continue;
+      const v = cars.vehicle(i);
+      const p = v ? v.pose() : cars.poses[i]!;
+      out.push({ x: p.x, z: p.z, heading: headingOf(p), kind: 'car' });
+    }
+    for (let i = 0; i < bikes.poses.length; i++) {
+      if (bikes.rider[i] != null || !bikes.isMoved(i)) continue;
+      const p = bikes.poses[i]!;
+      out.push({ x: p.x, z: p.z, heading: p.heading, kind: 'bike' });
+    }
+    return out;
   }
 
   /** Players on a bike in id order, with their bikes: what collisions.ts checks cars against. */

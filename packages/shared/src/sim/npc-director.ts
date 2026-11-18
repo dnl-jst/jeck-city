@@ -43,6 +43,8 @@ const PAINT = [0xf2f2f2, 0x1c1c1e, 0x8c9198, 0x2a4a7a, 0x7a1f1f, 0x3d5c3a, 0xc9b
 export type Focus = { x: number; z: number; heading: number };
 /** A player as traffic sees it: position, velocity, on foot / in a car / on a bike. */
 export type PlayerNear = { id: number; x: number; z: number; vx: number; vz: number; mode: 'walk' | 'drive' | 'ride' };
+/** A car or bike players moved and left (nobody in it): traffic stops for it like for a standing player. */
+export type LeftVehicle = { x: number; z: number; heading: number; kind: 'car' | 'bike' };
 /** One edge (part) of a route: from distance `from` to `to` along the edge's points (to < from: against them). */
 export type Leg = { edge: number; from: number; to: number; v: number };
 export type NpcState = {
@@ -157,6 +159,7 @@ export class NpcDirector {
   private readonly slowEdges: Record<NetLayer, Set<number>>;
   readonly tables: JunctionTables;
   private players: PlayerNear[] = [];
+  private left: Obstacle[] = [];
   /** Positions of the moving NPCs and players, refreshed every TRAFFIC_EVERY ticks. */
   private obstacles: Obstacle[] = [];
   private obstacleGrid = new Map<string, Obstacle[]>();
@@ -181,6 +184,23 @@ export class NpcDirector {
   /** The players traffic reacts to (set before update). */
   setPlayers(players: PlayerNear[]): void {
     this.players = players;
+  }
+
+  /** Cars and bikes players moved and left (set before update; a car is three circles along its length). */
+  setLeftVehicles(list: readonly LeftVehicle[]): void {
+    const out: Obstacle[] = [];
+    let id = -1_000_000;
+    for (const v of list) {
+      const sx = Math.sin(v.heading), cz = Math.cos(v.heading);
+      const offs = v.kind === 'car' ? [-1.5, 0, 1.5] : [0];
+      for (const o of offs) {
+        out.push({
+          id: id--, x: v.x + sx * o, z: v.z + cz * o, vx: 0, vz: 0, len: v.kind === 'car' ? 1.5 : SIZE.bike.len,
+          half: v.kind === 'car' ? SIZE.car.half : SIZE.bike.half, npc: null, mode: v.kind === 'car' ? 'drive' : 'ride',
+        });
+      }
+    }
+    this.left = out;
   }
 
   /** Conflicting turn edge pairs of junction j (drive layer). */
@@ -481,6 +501,7 @@ export class NpcDirector {
   private nearObstacles(x: number, z: number, r: number): Obstacle[] {
     const out = this.nearNpcObstacles(x, z, r);
     for (const pl of this.players) if (Math.abs(pl.x - x) <= r + 5 && Math.abs(pl.z - z) <= r + 5) out.push(this.playerObstacle(pl));
+    for (const o of this.left) if (Math.abs(o.x - x) <= r + 5 && Math.abs(o.z - z) <= r + 5) out.push(o);
     return out;
   }
 
