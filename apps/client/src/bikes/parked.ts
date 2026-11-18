@@ -21,6 +21,8 @@ export type BikeSource = {
 const LIE_ROLL = -Math.PI / 2 + 0.23;
 const LIE_LIFT = 0.07;
 
+/** Rack hoops are drawn within this distance of the camera (m): the city has thousands (millions of triangles). */
+export const RACK_RENDER_RADIUS = 150;
 /** Parked bikes are drawn within this distance of the camera (m)… */
 export const BIKE_RENDER_RADIUS = 120;
 /** …the set rebuilt after the camera moved this far (m). */
@@ -51,8 +53,8 @@ function instanceMaterial(m: Material): Material {
 
 /**
  * Parked bikes and rack hoops as instanced meshes: one per model part and type. Bikes within BIKE_RENDER_RADIUS of the
- * camera, without the ridden ones; bikes with a physics body (pushed around) are re-placed every update. Racks are
- * all drawn (static, frustum-culled per part).
+ * camera, without the ridden ones; bikes with a physics body (pushed around) are re-placed every update. Racks within
+ * RACK_RENDER_RADIUS, rebuilt with the bikes.
  */
 export class BikeView {
   private readonly byType = new Map<BikeType, { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[] }>();
@@ -68,6 +70,7 @@ export class BikeView {
   private readonly up = new Vector3(0, 1, 0);
   private readonly fwd = new Vector3(0, 0, 1);
   private readonly qr = new Quaternion();
+  private readonly rackMeshes: { im: InstancedMesh; list: { x: number; z: number; m: Matrix4 }[] }[] = [];
 
   constructor(
     scene: Scene, models: ReadonlyMap<BikeType, Object3D>, racks: ReadonlyMap<0 | 1, Object3D>, private readonly src: BikeSource,
@@ -94,14 +97,12 @@ export class BikeView {
       for (const part of parts(model)) {
         const im = new InstancedMesh(part.geometry, part.material, Math.max(1, list.length));
         im.name = `rack_${kind}_${part.name}`;
-        im.count = list.length;
+        im.count = 0;
         im.castShadow = im.receiveShadow = true;
-        list.forEach(({ r, y }, k) => {
-          this.m.compose(this.p.set(r.x, y, r.z), this.q.setFromAxisAngle(this.up, r.heading), this.one).multiply(part.local);
-          im.setMatrixAt(k, this.m);
-        });
-        im.instanceMatrix.needsUpdate = true;
-        im.computeBoundingSphere();
+        const placed = list.map(({ r, y }) => ({
+          x: r.x, z: r.z, m: new Matrix4().compose(this.p.set(r.x, y, r.z), this.q.setFromAxisAngle(this.up, r.heading), this.one).multiply(part.local),
+        }));
+        this.rackMeshes.push({ im, list: placed });
         scene.add(im);
       }
     }
@@ -129,6 +130,14 @@ export class BikeView {
   }
 
   private rebuild(x: number, z: number, ridden: ReadonlySet<number>): void {
+    const r2 = RACK_RENDER_RADIUS * RACK_RENDER_RADIUS;
+    for (const { im, list } of this.rackMeshes) {
+      let k = 0;
+      for (const r of list) if ((r.x - x) ** 2 + (r.z - z) ** 2 <= r2) im.setMatrixAt(k++, r.m);
+      im.count = k;
+      im.instanceMatrix.needsUpdate = true;
+      im.computeBoundingSphere();
+    }
     this.slots.fill(-1);
     const shown = visibleBikes(this.src.poses, x, z, BIKE_RENDER_RADIUS, ridden);
     const next = new Map<BikeType, number>();

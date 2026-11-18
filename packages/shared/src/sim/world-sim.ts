@@ -83,6 +83,8 @@ type Player = {
   bellTick: number;
 };
 
+/** Time (ms) a step may spend building streamed city tiles beyond CITY_NEED (see CityTiles.update). */
+const CITY_BUDGET_MS = 2;
 /** Ticks between two car proximity updates (0.5 s, as in single player). */
 const PROXIMITY_EVERY = 30;
 /** Ticks between two idle-reset checks (1 s). */
@@ -130,9 +132,14 @@ export class WorldSim {
   /**
    * Builds the world from the assets. foci: where cars and parked bikes get physics bodies ('players' = around every
    * player, default). sliceMs: build the city colliders in slices of this many ms (see createPhysicsWorld).
+   * streamCity: build the city's colliders only around the players (the client's prediction), starting with the
+   * manifest spawn and these points; without it the whole city is built (the server).
    */
-  static async create(a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; sliceMs?: number } = {}): Promise<WorldSim> {
-    const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs });
+  static async create(
+    a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; sliceMs?: number; streamCity?: readonly XZ[] } = {},
+  ): Promise<WorldSim> {
+    const stream = opts.streamCity ? [a.manifest.spawn, ...opts.streamCity] : undefined;
+    const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs, stream });
     const slice = timeSlicer(opts.sliceMs);
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain);
     await slice();
@@ -156,6 +163,7 @@ export class WorldSim {
     // cars and bikes near the new player must exist before the spawn test and the first step
     this.cars.updateProximity([...this.focusPoints(), at ?? manifest.spawn]);
     this.bikes.updateProximity([...this.focusPoints(), at ?? manifest.spawn]);
+    this.pw.city?.update([...this.playerPoints(), at ?? manifest.spawn], 0);
     let p: Vec3;
     if (at) {
       const ground = heightAt(terrain, at.x, at.z);
@@ -224,6 +232,8 @@ export class WorldSim {
       if (!inputs.has(id)) order.push([id, pl, NEUTRAL_INPUT(pl.yaw)]);
     }
 
+    // streamed city: tiles ahead of the players, a little per tick (always those right around them)
+    this.pw.city?.update(this.playerPoints(), CITY_BUDGET_MS);
     // people first: a knockdown or push lands before this tick's walking input is applied
     carHitsPeople(this, ev);
     separatePeople(this);
@@ -304,6 +314,8 @@ export class WorldSim {
     const pl = this.list.get(id);
     if (!pl) throw new Error(`no player ${id}`);
     this.setOwn(id, pl, from);
+    // a correction may move the player far (a teleport, a respawn): the city there must exist before the replay
+    this.pw.city?.update(this.playerPoints(), 0);
     // the own car; a ridden bike is kinematic and never among the saved bodies
     const ownBody = (): number => (pl.car !== null ? this.cars.vehicle(pl.car)!.chassis.handle : -1);
     const saved = saveDynamicBodies(this.pw.world, new Set([ownBody()]));

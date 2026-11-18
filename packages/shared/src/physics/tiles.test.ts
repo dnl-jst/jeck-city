@@ -46,3 +46,29 @@ describe('collision tiles', () => {
     }
   });
 });
+
+describe('streamed city', () => {
+  test('only tiles near the stream points exist; they follow the points and match the full build', async () => {
+    const g = grid(40, 25); // 1 km square: 10×10 tiles of 100 m
+    const full = await createPhysicsWorld(g);
+    const pw = await createPhysicsWorld(g, undefined, { stream: [{ x: 50, z: 50 }] });
+    const city = pw.city!;
+    expect(city.count).toBe(100);
+    expect(city.built).toBeGreaterThan(0);
+    expect(city.built).toBeLessThan(100);
+    const R = pw.rapier;
+    const ray = (w: typeof pw, x: number, z: number) => w.world.castRay(new R.Ray({ x, y: 5, z }, { x: 0, y: -1, z: 0 }), 10, true)?.timeOfImpact ?? null;
+    expect(ray(pw, 60, 60)).toBeCloseTo(5, 4);
+    expect(ray(pw, 950, 950)).toBeNull(); // far corner: not built
+    // move to the far corner: needed tiles are built even with no time budget, the start is dropped
+    city.update([{ x: 950, z: 950 }], 0);
+    pw.world.step();
+    expect(ray(pw, 950, 950)).toBeCloseTo(ray(full, 950, 950)!, 6);
+    expect(ray(pw, 60, 60)).toBeNull();
+    // with time, everything within CITY_WANT comes
+    city.update([{ x: 950, z: 950 }], Infinity);
+    const near = city.built;
+    expect(city.update([{ x: 950, z: 950 }], Infinity)).toBe(0);
+    expect(near).toBeGreaterThan(0);
+  });
+});
