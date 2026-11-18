@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
   CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeNpcBatch, encodeSnapshot, FixedStepper, heightAt, Interest, MAX_MESSAGE_BYTES,
-  NpcDirector, parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, surfaceY, TICK_HZ, WorldSim,
+  NPC_MAX, NpcDirector, parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, surfaceY, TICK_HZ, WorldSim,
   type NpcMsg, type PlayerId, type PlayerInput, type PlayerNear, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
@@ -260,10 +260,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
    * /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks, plus the totals since start
    * (ticks run, steps dropped) and the process' resident memory.
    */
-  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; npcs: number; npcDensity: number } {
+  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; npcs: number; npcDensity: number; npcCap: number } {
     return {
       ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
-      npcs: this.npcs?.count ?? 0, npcDensity: this.npcs?.density ?? 0,
+      npcs: this.npcs?.count ?? 0, npcDensity: this.npcs ? this.brake.factor() : 0, npcCap: this.npcs?.cap ?? 0,
       rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
     };
   }
@@ -349,7 +349,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     this.stats.record(ms);
     if (this.npcs) {
       this.brake.record(ms);
-      this.npcs.density = this.brake.factor();
+      this.npcs.cap = Math.round(NPC_MAX * this.brake.factor());
     }
   }
 

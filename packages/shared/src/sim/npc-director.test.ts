@@ -160,6 +160,23 @@ test('the load brake dissolves surplus NPCs out of sight, never close to a playe
   expect(after).toBeLessThan(before * 0.6);
 });
 
+test('a lowered cap dissolves NPCs over it, out of sight and away from the player, and stops spawning', () => {
+  const d = new NpcDirector(gridNet(), flat, 16);
+  const f: Focus = { x: 0, z: 0, heading: 0 };
+  let t = run(d, [f], 0, 600);
+  expect(d.count).toBeGreaterThan(60);
+  d.cap = 40;
+  for (let k = 0; k < 3600; k++, t++) {
+    const was = new Map([...d.all()].map((n) => [n.id, planAt(n.plan, t)] as const));
+    for (const m of d.update(t, [f])) {
+      if (m.t !== 'gone' || !was.has(m.id)) continue;
+      const p = was.get(m.id)!;
+      expect(Math.hypot(p.x - f.x, p.z - f.z)).toBeGreaterThan(120);
+    }
+  }
+  expect(d.count).toBeLessThanOrEqual(46);
+});
+
 test('density 0.5 halves the targets', () => {
   const d = new NpcDirector(gridNet(), flat, 11);
   d.density = 0.5;

@@ -5,7 +5,7 @@ const HIGH = 15, LOW = 12.5;
 const STEP = 0.1, MIN = 0.1;
 
 /**
- * The NPCs' safety net: every 5 s the p95 of the tick times of the last 5 s decides whether the NPC density goes down
+ * The NPCs' safety net: every 5 s the p95 of the tick times of the last 5 s decides whether the NPC cap (factor × NPC_MAX) goes down
  * (> 15 ms) or up (< 12.5 ms) by 0.1, within 0.1..1 (1.7 ms below the 16.7 ms budget). Measured on the machine the server runs on.
  */
 export class LoadBrake {

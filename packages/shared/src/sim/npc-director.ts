@@ -136,8 +136,10 @@ const NET_POINT_STEP = 4;
  * NPC_PLAN_LEAD_S before the current one ends. Sitters sit on seat rings. update() returns the messages for the clients.
  */
 export class NpcDirector {
-  /** Target density factor 0.1..1 (the load brake). */
+  /** Target density factor 0.1..1 (per player area). */
   density = 1;
+  /** Most NPCs at once (the load brake lowers it; above it, NPCs out of sight are dissolved). */
+  cap = NPC_MAX;
   readonly ix: Record<NetLayer, GraphIndex>;
   private readonly npcs = new Map<number, NpcState>();
   private readonly rng: () => number;
@@ -1071,6 +1073,7 @@ export class NpcDirector {
     }
     if (!foci.length) return;
     if (this.density < 1) this.dissolveSurplus(tick, foci, pos, msgs);
+    if (this.npcs.size > this.cap) this.dissolveOverCap(foci, pos, msgs);
 
     let budget = SPAWN_PER_CENSUS;
     const start = Math.floor(tick / CENSUS_EVERY) % foci.length;
@@ -1086,7 +1089,7 @@ export class NpcDirector {
       const populated = counts.walker + counts.cyclist + counts.driver >= POPULATED * moving * this.density;
       // seat groups first: they can only appear while the area is unpopulated or far enough away
       const wantGroups = Math.round(NPC_TARGETS.groups * this.density);
-      for (let c = counts.groups.size; c < wantGroups && budget > 0 && this.npcs.size < NPC_MAX - 4; c++) {
+      for (let c = counts.groups.size; c < wantGroups && budget > 0 && this.npcs.size < this.cap - 4; c++) {
         const ids = this.spawnGroup(f, foci, populated, tick, msgs);
         budget--;
         if (!ids) break;
@@ -1094,7 +1097,7 @@ export class NpcDirector {
       }
       for (const kind of ['walker', 'driver', 'cyclist'] as const) {
         const want = Math.round(NPC_TARGETS[kind] * this.density);
-        for (let c = counts[kind]; c < want && budget > 0 && this.npcs.size < NPC_MAX; c++) {
+        for (let c = counts[kind]; c < want && budget > 0 && this.npcs.size < this.cap; c++) {
           const n = this.spawnMoving(kind, f, foci, populated, pos, tick, msgs);
           budget--;
           if (!n) break;
@@ -1126,6 +1129,18 @@ export class NpcDirector {
         }
       }
       if (budget <= 0) return;
+    }
+  }
+
+  /** Over the cap: a few NPCs per census go, only those out of every player's view and farther than SURPLUS_FROM. */
+  private dissolveOverCap(foci: readonly Focus[], pos: Map<number, { x: number; z: number; n: NpcState }>, msgs: NpcMsg[]): void {
+    let over = Math.min(8, this.npcs.size - this.cap);
+    for (const p of [...pos.values()]) {
+      if (over <= 0) return;
+      if (!this.spawnOk(p.x, p.z, foci, true) || foci.some((g) => Math.hypot(g.x - p.x, g.z - p.z) < SURPLUS_FROM)) continue;
+      this.remove(p.n, msgs);
+      pos.delete(p.n.id);
+      over--;
     }
   }
 
