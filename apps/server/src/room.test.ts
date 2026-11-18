@@ -427,19 +427,15 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await leaveAll();
   });
 
+  // Uses the shared server: a fixed weather is just room.setWeather() at startup (server.ts), and a second
+  // startServer() reloads the whole world, which alone can take >20 s on a CI runner.
   it('syncs the weather through the room state', async () => {
-    const other = await startServer(loadConfig({}, { ...base, weather: { fixed: weatherPreset('snow')! } }));
-    try {
-      const c = await new Client(`ws://127.0.0.1:${other.port}`).join('nippes', { name: 'Anna', protocolVersion: PROTOCOL_VERSION, worldHash: hash });
-      c.onMessage('s', () => undefined);
-      c.onMessage('welcome', () => undefined);
-      const w = () => c.state as unknown as { weather: { known: boolean; kind: string } };
-      await until(() => w().weather?.known === true && w().weather.kind === 'snow');
-      other.room.setWeather(weatherPreset('rain')!);
-      await until(() => w().weather.kind === 'rain');
-      await c.leave().catch(() => 0);
-    } finally {
-      await other.stop();
-    }
-  }, 20_000);
+    srv.room.setWeather(weatherPreset('snow')!);
+    const c = await join('Anna');
+    const w = () => c.state as unknown as { weather: { known: boolean; kind: string } };
+    await until(() => w().weather?.known === true && w().weather.kind === 'snow');
+    srv.room.setWeather(weatherPreset('rain')!);
+    await until(() => w().weather.kind === 'rain');
+    await leaveAll();
+  });
 });
