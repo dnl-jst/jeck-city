@@ -57,7 +57,9 @@ export type PlayerSnapshot = {
   mode: 'walk' | 'drive' | 'down' | 'ride';
   pos: Vec3;
   vel: Vec3;
+  /** The camera's yaw (the input's), and the way the body faces (turns towards where it walks; what others see). */
   yaw: number;
+  facing: number;
   carId: number | null;
   char: CharacterState;
   car: VehicleState | null;
@@ -344,7 +346,7 @@ export class WorldSim {
       const v = this.cars.vehicle(pl.car)!;
       const car = v.saveState();
       return {
-        mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw,
+        mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw, facing: pl.facing,
         carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
       };
     }
@@ -352,11 +354,11 @@ export class WorldSim {
       const b = pl.ridden!.state();
       return {
         mode: 'ride', pos: { x: b.x, y: b.y, z: b.z }, vel: { x: Math.sin(b.heading) * b.speed, y: b.vy, z: Math.cos(b.heading) * b.speed },
-        yaw: pl.yaw, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
+        yaw: pl.yaw, facing: pl.facing, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
       };
     }
     return {
-      mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw,
+      mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw, facing: pl.facing,
       carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0, fallTicks: pl.fallTicks, pedalling: false,
     };
   }
@@ -381,9 +383,9 @@ export class WorldSim {
   }
 
   /** A car hit rider `id` hard: they fall off as in a crash (the bike stops and stays), with the `dismount` event. */
-  knockOffBike(id: PlayerId, ev: SimEvent[]): void {
+  knockOffBike(id: PlayerId, ev: SimEvent[], thrown: { x: number; y: number; z: number }): void {
     const pl = this.list.get(id);
-    if (pl?.ridden) this.crash(id, pl, ev);
+    if (pl?.ridden) this.crash(id, pl, ev, thrown);
   }
 
   /** Where every player is (the car they drive, the bike they ride, else their feet). */
@@ -472,7 +474,11 @@ export class WorldSim {
         const s = pl.ridden!.state();
         ev.push({ t: 'bell', id, x: s.x, z: s.z });
       }
-      if (r.crashed) this.crash(id, pl, ev);
+      if (r.crashed) {
+        // thrown on over the handlebar with the speed the bike hit the obstacle with
+        const h = pl.ridden!.state().heading, v = r.crashSpeed;
+        this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v }, true);
+      }
     } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
@@ -614,14 +620,25 @@ export class WorldSim {
     this.leaveBike(id, pl, spot, s, false, ev);
   }
 
-  /** Crashed into something: the rider falls next to the bike, which stays where it is. */
-  private crash(id: PlayerId, pl: Player, ev: SimEvent[]): void {
+  /**
+   * Crashed into something or hit by a car: the rider falls next to the bike, which stays where it is, and is
+   * `thrown` (m/s; slides out while lying, as a knocked-down walker).
+   */
+  private crash(id: PlayerId, pl: Player, ev: SimEvent[], thrown: { x: number; y: number; z: number }, over = false): void {
     const r = pl.ridden!, s = r.state();
     r.restore({ ...s, speed: 0 });
     // nowhere free to the side or behind (squeezed against a wall): fall where the bike is, never through the wall
     const spot = dismountSpot(s, (x, z) => this.bikes.canStepOff(s, x, z)) ?? { x: s.x, z: s.z };
     this.leaveBike(id, pl, spot, s, true, ev);
     pl.fallTicks = FALL_TICKS;
+    // thrown from the saddle (the hips at about riderHips above the bike's ground), not from beside the bike
+    pl.char.teleport({ x: s.x, y: s.y + TUNING.bike.riderHips - TUNING.character.radius, z: s.z });
+    // head-on into something low enough (a car, a post): over the handlebar onto or over it
+    const sp = Math.hypot(thrown.x, thrown.z);
+    if (over && sp > 0) {
+      const dx = thrown.x / sp, dz = thrown.z / sp, t = pl.char.throwOver(dx, dz, sp, thrown.y);
+      pl.char.knock({ x: dx * t.speed, y: t.up, z: dz * t.speed }, FALL_TICKS);
+    } else pl.char.knock(thrown, FALL_TICKS);
   }
 
   private leaveBike(id: PlayerId, pl: Player, spot: XZ, s: BikeState, crash: boolean, ev: SimEvent[]): void {
@@ -639,6 +656,7 @@ export class WorldSim {
 
   /** The facing follows the walking direction (as the rendered figure turns). */
   private turnFacing(pl: Player): void {
+    if (pl.char.isDown()) return; // thrown or lying: turns again once up and walking
     const v = pl.char.velocity();
     if (Math.hypot(v.x, v.z) <= FACE_MIN_SPEED) return;
     const d = Math.atan2(v.x, v.z) - pl.facing;

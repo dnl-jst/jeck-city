@@ -1,6 +1,6 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import {
-  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
+  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
@@ -19,6 +19,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { RemotePlayers } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
+import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -85,8 +86,16 @@ export class Game {
   /** On foot after the last step: velocity and ground contact (figure animation, footsteps). */
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private grounded = true;
+  /** The way the body faces after the last step (the sim's; others see the same). */
+  private facing = 0;
   /** Knocked down after the last step (the figure lies, input is ignored). */
   private down = false;
+  /** Knocked down at the last rendered frame (the ragdoll starts on the change). */
+  private wasDown = false;
+  /** The own car's or bike's pose as drawn this frame (while driving or riding; others on it are drawn on it). */
+  private drawnPose: CarPose | null = null;
+  /** Tumbling figures (own and other players') fall in a physics world of their own. */
+  readonly ragdolls: RagdollWorld;
   /** Seconds in the air on foot (for landing sounds). */
   private airTime = 0;
   /** Radio station last given to the sim for the own car (undefined: none yet in this car). */
@@ -107,6 +116,7 @@ export class Game {
     const { sim } = session;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
+    this.ragdolls = new RagdollWorld(sim.pw);
     this.character = storedCharacter();
     this.figure.setModel(ctx.character ?? null);
     this.driven = new DrivenCar(scene, ctx.carModels);
@@ -124,6 +134,9 @@ export class Game {
       bikeModels: ctx.bikeModels?.bikes, bikeTypeOf: (i) => sim.bikes.types[i]!, bikeColorOf: (i) => sim.bikes.colors[i]!,
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
+      ragdolls: this.ragdolls,
+      localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? -1, pose: this.drawnPose } : null),
+      onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -298,6 +311,7 @@ export class Game {
       this.prevPos = changed ? p.pos : this.currPos;
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -339,6 +353,7 @@ export class Game {
       this.prevPos = { x: this.prevPos.x + p.pos.x - was.x, y: this.prevPos.y + p.pos.y - was.y, z: this.prevPos.z + p.pos.z - was.z };
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -348,6 +363,8 @@ export class Game {
   private handle(events: SimEvent[]): void {
     const { hud, audio } = this.ctx;
     const me = this.session.me;
+    // a car knocked the own player off the bike: the dismount comes with a knock in the same batch
+    const hitByCar = events.some((e) => e.t === 'knock' && e.id === me);
     for (const e of events) {
       if (e.t === 'lamp') this.fallen.push(e.i);
       else if (e.t === 'bell') { if (e.id !== me) audio?.bellAt(e.x, e.z); }
@@ -359,7 +376,7 @@ export class Game {
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
       else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
-      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash);
+      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash, hitByCar);
       else if (e.t === 'dismountDenied' && e.id === me) hud.flash('Hier kannst du nicht absteigen');
       else if (e.t === 'ignition' && e.car === this.carId) {
         if (e.e === 'doorClose') audio?.doorClosed();
@@ -430,15 +447,15 @@ export class Game {
     this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
-  /** Off the bike (heading: the bike's): stepped off, or crashed and fell. */
-  private leftBike(heading: number, crash: boolean): void {
+  /** Off the bike (heading: the bike's): stepped off, or crashed (into something, or hit by a car) and fell. */
+  private leftBike(heading: number, crash: boolean, hitByCar = false): void {
     this.currBike = this.prevBike = null;
     if (this.rig) {
       this.rig.detachLights();
       this.ctx.scene.remove(this.rig.root);
     }
     this.rig = null;
-    this.ctx.scene.add(this.figure.group);
+    if (!crash) this.ctx.scene.add(this.figure.group); // (crashing: the ragdoll takes it off the rig itself)
     this.figure.heading = heading;
     this.follow.setDriving(false);
     this.mode = 'walk';
@@ -447,9 +464,18 @@ export class Game {
     this.ctx.hud.setHint('');
     this.ctx.audio?.dismountBike();
     if (crash) {
-      this.figure.fall(heading);
+      // from the riding pose, thrown as the sim throws the player (WorldSim.crash): over the handlebar with the bike's
+      // speed, or with the car's push and half of its own
+      const v = this.knockVelocity();
+      this.figure.ragdoll(this.ragdolls, v, ragSpin(v, hitByCar ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
       this.ctx.audio?.crashBike();
     }
+  }
+
+  /** The velocity the sim knocked the own player down with (the character's knock velocity). */
+  private knockVelocity(): Vec3 {
+    const c = this.session.sim.player(this.session.me).char;
+    return { x: c.vx, y: Math.max(0, c.vy), z: c.vz };
   }
 
   /** One rig (a clone of the model) per bike type, made on first use. */
@@ -467,12 +493,19 @@ export class Game {
     const { audio } = this.ctx;
     const a = this.session.alpha;
     const off = this.session.renderOffset();
+    this.ragdolls.step(dt);
     if (this.mode === 'walk') {
+      // hit by a car: limp from the walking pose, thrown with the car's push
+      if (this.down && !this.wasDown && !this.figure.busy) {
+        const v = this.knockVelocity();
+        this.figure.ragdoll(this.ragdolls, v, ragSpin(v, KNOCK_SPIN), KNOCKDOWN_S);
+      }
+      this.wasDown = this.down;
       const p = lerp3(this.prevPos, this.currPos, a);
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded);
+      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
       if (!this.flying) this.follow.update(p, 0, dt);
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
@@ -483,6 +516,7 @@ export class Game {
       const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
       // server correction still fading out (online)
       s.x += off.x; s.y += off.y; s.z += off.z;
+      this.drawnPose = headingPose(s);
       const rig = this.rig;
       if (rig) {
         const ridden = this.session.sim.riddenBike(this.session.me);
@@ -505,6 +539,7 @@ export class Game {
         pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
       }
       this.driven.setPose(pose);
+      this.drawnPose = pose;
       this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
