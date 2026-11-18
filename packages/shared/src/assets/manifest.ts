@@ -15,8 +15,9 @@ export type CharacterVariant = (typeof CHARACTER_VARIANTS)[number];
  * WORLD space (no per-chunk offset, node transform is identity): coordinates stay below ~3 km, where
  * float32 is still sub-millimetre, and client and collision share one frame without bookkeeping.
  *
- * chunk_{ix}_{iz}.glb layout: up to 13 meshes named ground, buildings, road, sidewalk, curb, trackbed,
+ * chunk_{ix}_{iz}.glb layout: up to 14 meshes named ground, buildings, road, sidewalk, curb, trackbed,
  * tram, green, squares, markings, parking, water (the river surface), bridge (bridge slabs, parapets and piers;
+ * uv = metres along / up), steel (the truss arches of railway bridges;
  * uv = metres along / up) (empty ones omitted), EXT_meshopt_compression. `buildings` carries
  * POSITION, NORMAL, _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0
  * Neusser Str., bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }

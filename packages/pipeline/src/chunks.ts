@@ -8,7 +8,7 @@ import { groundMesh, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
-export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking', 'water', 'bridge'] as const;
+export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking', 'water', 'bridge', 'steel'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
 export type StreetMeshes = Record<StreetName, Mesh>;
 /**

@@ -9,7 +9,7 @@ import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
-import { applyTerrainCuts } from './terraincut.js';
+import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
@@ -29,7 +29,7 @@ import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry, type Mesh } from './streets.js';
 import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
-import { bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
+import { abutmentFills, bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
 import { carveRiverBed, findWater, waterOutlines, waterShare, waterSurface } from './water.js';
 import { railMesh } from './streets.js';
 
@@ -150,6 +150,11 @@ async function main() {
   terrainBin = encodeTerrain(terrain);
   terrain.heights.set(decodeTerrain(terrainBin).heights);
   const bridges = planBridges(f, terrain, water);
+  // the ground behind the abutments ramps up to the deck (DGM1 dips at quay edges and underpasses)
+  const filled = applyTerrainFills(terrain, abutmentFills(bridges), water.mask);
+  terrainBin = encodeTerrain(terrain);
+  terrain.heights.set(decodeTerrain(terrainBin).heights);
+  console.log(`terrain fills: ${filled} grid points raised behind ${bridges.ends.length} abutments`);
   // LoD2 models the Rhine bridges as solid blocks from the water up to the deck: the bridges are built from OSM instead
   const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(terrain, water, b) > 0.5));
   buildings = buildings.filter((b) => !wetBuildings.has(b));
@@ -173,24 +178,25 @@ async function main() {
   console.log(`sidewalk: ${(fit.area / 1e3).toFixed(1)}k m², overshoot: ${fit.overshoot.toFixed(0)} m² (${pc(fit.overshoot)}), undershoot: ${fit.undershoot.toFixed(0)} m² (${pc(fit.undershoot)})`);
   const bed = trackBed(flat.tram.positions, flat.tram.uv, flat.tram.indices);
   const empty = { positions: new Float32Array(), indices: new Uint32Array(), uv: new Float32Array() };
-  const flatStreets: StreetMeshes = { ...flat, trackbed: { positions: bed.positions, uv: bed.uv, indices: Uint32Array.from(bed.index) }, water: empty, bridge: empty };
+  const flatStreets: StreetMeshes = { ...flat, trackbed: { positions: bed.positions, uv: bed.uv, indices: Uint32Array.from(bed.index) }, water: empty, bridge: empty, steel: empty };
   // decks: the bridge ways' geometry (and the rails of railway bridges) lifted onto the deck heights
   const deckTram = concatMeshes([deckFlat.tram, railMesh(bridges.rails)]);
   const deckBed = trackBed(deckTram.positions, deckTram.uv, deckTram.indices);
-  const deckFlatAll: StreetMeshes = { ...deckFlat, tram: deckTram, trackbed: { positions: deckBed.positions, uv: deckBed.uv, indices: Uint32Array.from(deckBed.index) }, water: empty, bridge: empty };
+  const deckFlatAll: StreetMeshes = { ...deckFlat, tram: deckTram, trackbed: { positions: deckBed.positions, uv: deckBed.uv, indices: Uint32Array.from(deckBed.index) }, water: empty, bridge: empty, steel: empty };
   const decks = {} as StreetMeshes;
   for (const name of STREET_MESHES) decks[name] = liftOntoDecks(cropMesh(deckFlatAll[name], area), bridges);
   const deckSurfaces = (['road', 'sidewalk', 'curb', 'parking', 'green', 'squares', 'trackbed'] as const).map((n) => decks[n]);
   const bodies = bridgeBodies(bridges, deckSurfaces, terrain);
   const streets = {} as StreetMeshes;
   for (const name of STREET_MESHES) {
-    if (name === 'water' || name === 'bridge') continue;
+    if (name === 'water' || name === 'bridge' || name === 'steel') continue;
     streets[name] = drapeMesh(cropMesh(flatStreets[name], area), terrain);
     console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${streets[name].indices.length / 3} triangles (${decks[name].indices.length / 3} on bridges)`);
   }
   streets.water = cropMesh(waterSurface(terrain, water), area);
   streets.bridge = bodies.mesh;
-  console.log(`water surface: ${streets.water.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles`);
+  streets.steel = bodies.steel;
+  console.log(`water surface: ${streets.water.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
   const graph = buildRoadGraph(f);
   const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 

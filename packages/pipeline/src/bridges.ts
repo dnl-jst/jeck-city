@@ -38,6 +38,13 @@ const PARAPET_MIN_RISE = 1.2;
 /** About one pier per this many metres of water. */
 const PIER_SPACING = 150;
 const PIER_LEN = 4;
+/** Steel arches of railway bridges: rise per span length, panel length (m), parallel arch lines, inset from the slab edges. */
+const ARCH_RISE = 0.16;
+const ARCH_PANEL = 8;
+const ARCH_LINES = 4;
+const ARCH_INSET = 3.5;
+/** Wind bracing only where the arch is this far above the deck. */
+const ARCH_CLEAR = 7;
 /** Piers stop this far inside the slab edges. */
 const PIER_INSET = 1.5;
 
@@ -53,6 +60,8 @@ export type Structure = {
   w0: number;
   w1: number;
   meanLevel: number;
+  /** Carries railway tracks (gets steel arches over its spans, like the Hohenzollernbrücke and the Südbrücke). */
+  rails: boolean;
   /** Profile per BIN from s0 (filled by bridgeBodies): lateral edges (left < right, metres right of the axis) and slab top. */
   left: number[];
   right: number[];
@@ -71,6 +80,8 @@ export type BridgePlan = {
   segs: (Seg & { st: number })[];
   /** Segment indices by GRID cell (segments within GRID_REACH of the cell). */
   grid: Map<string, number[]>;
+  /** Free ends (abutments): node, unit direction away from the bridge, half width of the way there. */
+  ends: { n: number; out: Pt; half: number }[];
 };
 
 const GRID = 25;
@@ -180,6 +191,7 @@ export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePla
   /** Graph distance (m) to the nearest free end of its group. */
   const toEnd = new Array<number>(pos.length).fill(Infinity);
   const kept: typeof groups = [];
+  const ends: BridgePlan['ends'] = [];
   for (const g of groups) {
     const adj = new Map<number, { j: number; wgt: number }[]>();
     for (const s of g.segs) {
@@ -188,7 +200,13 @@ export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePla
     }
     const fixed = new Set(g.nodes.filter((n) => (adj.get(n)?.length ?? 0) === 1 && isWater(t, w, pos[n]!) === undefined));
     if (!fixed.size) continue;
-    for (const n of fixed) h[n] = abutment(t, pos[n]!);
+    for (const n of fixed) {
+      h[n] = abutment(t, pos[n]!);
+      const nb = pos[adj.get(n)![0]!.j]!, p = pos[n]!, l = Math.hypot(p.x - nb.x, p.z - nb.z) || 1;
+      const el = els[g.els.find((e) => elNodes[e]![0] === n || elNodes[e]!.at(-1) === n)!]!;
+      const half = el.road ? el.road.width / 2 + 3 : el.rail ? 3 : 2;
+      ends.push({ n, out: { x: (p.x - nb.x) / l, z: (p.z - nb.z) / l }, half });
+    }
     const mean = [...fixed].reduce((s, n) => s + h[n]!, 0) / fixed.size;
     const free = g.nodes.filter((n) => !fixed.has(n));
     for (const n of free) h[n] = mean;
@@ -280,7 +298,7 @@ export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePla
     }
     for (const n of nodes) h[n] = h[n]! + A * bump(proj.get(n)!);
     const st = structures.length;
-    structures.push({ axis, cum, s0: Math.min(...ss), s1: Math.max(...ss), w0, w1, meanLevel: lsum / ln, left: [], right: [], top: [] });
+    structures.push({ axis, cum, s0: Math.min(...ss), s1: Math.max(...ss), w0, w1, meanLevel: lsum / ln, rails: elIds.some((e) => els[e]!.rail), left: [], right: [], top: [] });
     for (const g of members) for (const s of g.segs) segs.push({ ...s, st });
     for (const e of elIds) {
       const el = els[e]!;
@@ -299,7 +317,8 @@ export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePla
       }
     }
   });
-  return { roads, tracks, rails, structures, pos, h, segs, grid };
+  const keptNodes = new Set(kept.flatMap((g) => g.nodes));
+  return { roads, tracks, rails, structures, pos, h, segs, grid, ends: ends.filter((e) => keptNodes.has(e.n)) };
 }
 
 /** Concatenates meshes (mark kept only if every part has it). */
@@ -328,6 +347,26 @@ export function triangleSoup(m: Mesh): Float32Array {
   const out = new Float32Array(m.indices.length * 3);
   for (let k = 0; k < m.indices.length; k++) out.set(m.positions.subarray(m.indices[k]! * 3, m.indices[k]! * 3 + 3), k * 3);
   return out;
+}
+
+/** Behind each abutment, the ground ramps this far (m) at deck height (applyTerrainFills adds the skirt). */
+const APPROACH = 20;
+
+/**
+ * Fill surfaces (triangles, 9 floats each) for applyTerrainFills: per free end a level quad at its deck height from
+ * 1 m onto the bridge to APPROACH m behind it, as wide as the way. The DGM often dips right before a bridge (a quay
+ * edge smoothed into a slope, an underpass): the street leading onto the deck then meets it without a step.
+ */
+export function abutmentFills(plan: BridgePlan): Float32Array {
+  const out: number[] = [];
+  for (const { n, out: d, half } of plan.ends) {
+    const p = plan.pos[n]!, y = plan.h[n]!;
+    const nx = -d.z * half, nz = d.x * half;
+    const a = { x: p.x - d.x, z: p.z - d.z }, b = { x: p.x + d.x * APPROACH, z: p.z + d.z * APPROACH };
+    const q = [[a.x + nx, a.z + nz], [a.x - nx, a.z - nz], [b.x - nx, b.z - nz], [b.x + nx, b.z + nz]] as const;
+    for (const [i, j, k] of [[0, 1, 2], [0, 2, 3]] as const) out.push(q[i][0], y, q[i][1], q[j][0], y, q[j][1], q[k][0], y, q[k][1]);
+  }
+  return Float32Array.from(out);
 }
 
 /** Deck height under (x, z) from the nearest deck way, with its structure and distance; undefined without decks. */
@@ -389,6 +428,27 @@ class Builder {
     this.quad(p3, q3, q2, p2, [0, 1, 0], [[u0, 0], [u1, 0], [u1, 1], [u0, 1]]); // top
     this.quad(p0, q0, q1, p1, [0, -1, 0], [[u0, 0], [u1, 0], [u1, 1], [u0, 1]]); // bottom
   }
+  /** Straight beam from a to b with a w × h cross-section (h in the vertical plane through the beam), all faces outward. */
+  beam(a: V3, b: V3, w: number, h: number): void {
+    const d: V3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const len = Math.hypot(...d);
+    if (len < 1e-6) return;
+    let side: V3 = [-d[2], 0, d[0]]; // horizontal, perpendicular to the beam
+    const sl = Math.hypot(...side);
+    side = sl < 1e-6 ? [1, 0, 0] : [side[0] / sl, 0, side[2] / sl];
+    const up: V3 = [side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2], side[0] * d[1] - side[1] * d[0]].map((v) => v / len) as V3;
+    const corner = (o: V3, sx: number, uy: number): V3 => [0, 1, 2].map((k) => o[k]! + side[k]! * sx * w / 2 + up[k]! * uy * h / 2) as V3;
+    const sec = (o: V3) => [corner(o, -1, -1), corner(o, 1, -1), corner(o, 1, 1), corner(o, -1, 1)];
+    const p = sec(a), q = sec(b);
+    const centre: V3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+    const face = (f: V3[], u0: number, u1: number) => {
+      const out: V3 = [0, 1, 2].map((k) => f.reduce((sum, v) => sum + v[k]!, 0) / 4 - centre[k]!) as V3;
+      this.quad(f[0]!, f[1]!, f[2]!, f[3]!, out, [[u0, 0], [u1, 0], [u1, 1], [u0, 1]]);
+    };
+    face(p, 0, 1);
+    face(q, 0, 1);
+    for (let k = 0; k < 4; k++) face([p[k]!, q[k]!, q[(k + 1) % 4]!, p[(k + 1) % 4]!], 0, len);
+  }
   build(): Mesh {
     return { positions: Float32Array.from(this.pos), indices: Uint32Array.from(this.idx), uv: Float32Array.from(this.uv) };
   }
@@ -401,7 +461,7 @@ const sideOut = (from: V3, other: V3): V3 => [from[0] - other[0], 0, from[2] - o
  * parapets along both edges where the deck is clear of the ground, and piers in the water. Returns the body mesh
  * (uv: metres along / up) and its collision triangles (slab, parapets, piers).
  */
-export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): { mesh: Mesh; collision: Float32Array } {
+export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): { mesh: Mesh; steel: Mesh; collision: Float32Array } {
   const bins = plan.structures.map((s) => {
     const n = Math.max(2, Math.ceil((s.s1 - s.s0) / BIN) + 1);
     return { lo: new Array<number>(n).fill(Infinity), hi: new Array<number>(n).fill(-Infinity), y: new Array<number>(n).fill(Infinity) };
@@ -422,6 +482,7 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
     }
   }
   const body = new Builder();
+  const steel = new Builder();
   const coll: number[] = [];
   const addColl = (m: Mesh, from: number) => {
     for (let k = from; k < m.indices.length; k++) coll.push(m.positions[m.indices[k]! * 3]!, m.positions[m.indices[k]! * 3 + 1]!, m.positions[m.indices[k]! * 3 + 2]!);
@@ -471,6 +532,7 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
       }
     }
     // piers: evenly spaced over the water span
+    const piers: number[] = [];
     if (Number.isFinite(s.w0) && s.w1 - s.w0 > 60) {
       const count = Math.max(1, Math.round((s.w1 - s.w0) / PIER_SPACING) - 1);
       const bed = s.meanLevel - WATER_DEPTH - 1;
@@ -478,6 +540,7 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
         const sm = s.w0 + ((s.w1 - s.w0) * k) / (count + 1);
         const i = Math.round((sm - s.s0) / BIN);
         if (i < 0 || i >= n) continue;
+        piers.push(sm);
         const l = s.left[i]! + PIER_INSET, r = s.right[i]! - PIER_INSET;
         if (r - l < 2) continue;
         const top = s.top[i]! - SLAB_DEPTH;
@@ -486,8 +549,53 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
       }
     }
     addColl(body.build(), from);
+    // railway bridges: steel truss arches over each span (bank – piers – bank)
+    if (s.rails && piers.length) {
+      const fromSteel = steel.idx.length;
+      const bounds = [s.w0, ...piers, s.w1];
+      const topAt = (sv: number) => {
+        const x = Math.min(n - 1, Math.max(0, (sv - s.s0) / BIN)), i0 = Math.floor(x), i1 = Math.min(n - 1, i0 + 1);
+        return s.top[i0]! + (s.top[i1]! - s.top[i0]!) * (x - i0);
+      };
+      for (let k = 1; k < bounds.length; k++) {
+        const a = bounds[k - 1]!, b = bounds[k]!, span = b - a;
+        if (span < 30) continue;
+        const mid = Math.min(n - 1, Math.max(0, Math.round(((a + b) / 2 - s.s0) / BIN)));
+        const l = s.left[mid]! + ARCH_INSET, r = s.right[mid]! - ARCH_INSET;
+        if (r - l < 4) continue;
+        const rise = ARCH_RISE * span;
+        const panels = Math.max(6, Math.round(span / ARCH_PANEL));
+        const lines = Array.from({ length: ARCH_LINES }, (_, j) => l + ((r - l) * j) / (ARCH_LINES - 1));
+        const pt = (sv: number, lat: number, y: number): V3 => {
+          const { p, dir } = pointAt(s.axis, s.cum, sv);
+          return [p.x - dir.z * lat, y, p.z + dir.x * lat];
+        };
+        const chords = lines.map((lat) => Array.from({ length: panels + 1 }, (_, i) => {
+          const sv = a + (span * i) / panels;
+          const base = topAt(sv) + SLAB_GAP + 0.3;
+          return { lo: pt(sv, lat, base), hi: pt(sv, lat, base + rise * Math.sin((Math.PI * i) / panels)) };
+        }));
+        for (const c of chords) {
+          for (let i = 0; i < panels; i++) {
+            steel.beam(c[i]!.hi, c[i + 1]!.hi, 0.9, 1.3); // arch
+            steel.beam(c[i]!.lo, c[i + 1]!.lo, 0.7, 0.9); // tie
+            // diagonals lean towards the crown
+            if (i < panels / 2) steel.beam(c[i]!.lo, c[i + 1]!.hi, 0.3, 0.3);
+            else steel.beam(c[i]!.hi, c[i + 1]!.lo, 0.3, 0.3);
+            if (i > 0) steel.beam(c[i]!.lo, c[i]!.hi, 0.4, 0.4); // hangers
+          }
+        }
+        // wind bracing between neighbouring arches where they clear the trains
+        for (let j = 1; j < chords.length; j++) {
+          for (let i = 1; i < panels; i++) {
+            if (chords[j]![i]!.hi[1] - chords[j]![i]!.lo[1] > ARCH_CLEAR) steel.beam(chords[j - 1]![i]!.hi, chords[j]![i]!.hi, 0.35, 0.5);
+          }
+        }
+      }
+      addColl(steel.build(), fromSteel);
+    }
   });
-  return { mesh: body.build(), collision: Float32Array.from(coll) };
+  return { mesh: body.build(), steel: steel.build(), collision: Float32Array.from(coll) };
 }
 
 /** True if p lies on a bridge structure (within its profile, at least 1 m above the ground), e.g. to keep props off. */
