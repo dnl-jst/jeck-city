@@ -8,11 +8,17 @@ export type Pt = { x: number; z: number };
  * width = cross.carriageway (kerb to kerb); lanes = all car lanes; cross left/right relative to `points` order;
  * profile (withProfiles): side edges per vertex incl. ramps between ways.
  */
-export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile };
+export type Road = { id: number; name?: string; kind: string; points: Pt[]; width: number; oneway: boolean; lanes: number; cross: CrossSection; profile?: Profile; bridge?: true };
 export type OsmFeatures = {
   boundary: Pt[];
   roads: Road[];
   tramTracks: Pt[][];
+  /** The tram tracks (same arrays as in tramTracks) on a bridge=*. */
+  bridgeTracks: Pt[][];
+  /** railway=rail on a bridge=* (rails are drawn on bridges only, e.g. over the Rhine). */
+  railBridges: Pt[][];
+  /** waterway=river centre lines (the Rhine). */
+  rivers: Pt[][];
   tramStops: { pos: Pt; name: string }[];
   greens: Pt[][];
   trees: Pt[];
@@ -44,9 +50,9 @@ type El = { type: string; id: number; lat?: number; lon?: number; geometry?: LL[
 
 /**
  * The play area: the union of these Stadtteile (Nippes, Neustadt-Nord with the Agnesviertel, Altstadt-Nord,
- * Altstadt-Süd, Neustadt-Süd).
+ * Altstadt-Süd, Neustadt-Süd, Deutz).
  */
-export const BOUNDARY_IDS = [2613766, 2613763, 2613711, 2613712, 2613764];
+export const BOUNDARY_IDS = [2613766, 2613763, 2613711, 2613712, 2613764, 2613724];
 const ROAD_KINDS = new Set(['primary', 'secondary', 'tertiary', 'residential', 'unclassified', 'living_street', 'service', 'footway', 'path', 'cycleway', 'pedestrian']);
 const GREEN = (t: Tags) =>
   ['grass', 'village_green', 'recreation_ground', 'railway', 'meadow', 'forest', 'allotments', 'flowerbed', 'brownfield'].includes(t.landuse ?? '') || ['park', 'garden'].includes(t.leisure ?? '');
@@ -66,6 +72,21 @@ function shopOf(pos: Pt, t: Tags): Shop | undefined {
 }
 
 const toPts = (g: LL[]): Pt[] => g.map((p) => wgs84ToLocal(p.lat, p.lon));
+const isBridge = (t: Tags) => t.bridge !== undefined && t.bridge !== 'no';
+/** Bridge ways get vertices at most this far apart: the deck height (bridges.ts) is set per vertex. */
+export const BRIDGE_VERTEX_SPACING = 8;
+
+/** Inserts evenly spaced vertices so that no segment is longer than `max`. */
+export function densify(pts: Pt[], max: number): Pt[] {
+  const out: Pt[] = pts.length ? [pts[0]!] : [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1]!, b = pts[i]!;
+    const n = Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / max);
+    for (let k = 1; k < n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n });
+    out.push(b);
+  }
+  return out;
+}
 const isClosed = (p: Pt[]) => p.length >= 4 && p[0]!.x === p[p.length - 1]!.x && p[0]!.z === p[p.length - 1]!.z;
 
 /** Joins ways end-to-end (reversing as needed) into rings; unclosed leftovers are dropped. */
@@ -114,12 +135,13 @@ function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Ro
   const lanes = cross.lanesForward + cross.lanesBackward;
   const road: Road = { id: el.id, kind, points: reverse ? [...pts].reverse() : pts, width: cross.carriageway, oneway, lanes, cross };
   if (t.name) road.name = t.name;
+  if (isBridge(t)) road.bridge = true;
   return road;
 }
 
 export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
-  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
@@ -154,10 +176,16 @@ export function parseOsm(json: unknown): OsmFeatures {
         if (shop) f.shops.push(shop);
       }
     } else if (el.type === 'way' && el.geometry) {
-      const pts = toPts(el.geometry);
+      const raw = toPts(el.geometry);
+      const pts = isBridge(t) && !isClosed(raw) ? densify(raw, BRIDGE_VERTEX_SPACING) : raw;
       const closed = isClosed(pts);
       if (t.railway === 'tram' || t.railway === 'light_rail') {
         if (t.tunnel !== 'yes' && pts.length >= 2) f.tramTracks.push(pts);
+        if (t.tunnel !== 'yes' && pts.length >= 2 && isBridge(t)) f.bridgeTracks.push(pts);
+      } else if (t.railway === 'rail') {
+        if (isBridge(t) && pts.length >= 2) f.railBridges.push(pts);
+      } else if (t.waterway === 'river') {
+        if (pts.length >= 2) f.rivers.push(pts);
       } else if (t.public_transport === 'platform' && isStopTags(t)) {
         stops.push({ pos: centroid(closed ? pts.slice(0, -1) : pts), name: t.name!, prio: 0 });
       } else if (t.highway) {

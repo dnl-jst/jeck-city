@@ -6,7 +6,7 @@ import { edgeAt } from './roadprofile.js';
 
 const L = 3000;
 const box = (x0: number, z0: number, x1: number, z1: number): Pt[] => [{ x: x0, z: z0 }, { x: x1, z: z0 }, { x: x1, z: z1 }, { x: x0, z: z1 }];
-const empty: OsmFeatures = { boundary: box(-100, -1000, L + 100, 100), roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+const empty: OsmFeatures = { boundary: box(-100, -1000, L + 100, 100), roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 // eastbound road along z = 0; right of travel is +z
 const road = (over: Partial<Road> = {}): Road => ({
   id: 1, kind: 'secondary', name: 'A', points: [{ x: 0, z: 0 }, { x: L, z: 0 }], width: 10, oneway: false, lanes: 2, cross: crossOf('secondary', 10), ...over,

@@ -5,7 +5,7 @@ import { placeLabels, minScaleFor } from './labels';
 import type { MapView } from './view';
 
 const data = (over: Partial<MapData>): MapData => ({
-  version: 1, bounds: { minX: -5000, minZ: -5000, maxX: 5000, maxZ: 5000 }, boundary: [], roads: [], buildings: [], greens: [],
+  version: 1, bounds: { minX: -5000, minZ: -5000, maxX: 5000, maxZ: 5000 }, boundary: [], roads: [], buildings: [], greens: [], water: [],
   squares: [], tram: [], tramStops: [], ...over,
 });
 const view = (scale: number, over: Partial<MapView> = {}): MapView => ({ cx: 0, cz: 0, scale, rot: 0, w: 2400, h: 800, ...over });

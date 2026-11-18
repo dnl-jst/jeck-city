@@ -8,6 +8,7 @@ const valid = (): MapData => ({
   roads: [{ kind: 'primary', name: 'Neusser Str.', width: 8, pts: [0, 0, 5, 5, 10, 5] }],
   buildings: [[0, 0, 1, 0, 1, 1, 2, 2, 3, 2, 3, 3]],
   greens: [[0, 0, 4, 0, 4, 4, 0, 4]],
+  water: [[20, 0, 30, 0, 30, 40, 20, 40]],
   squares: [{ name: 'Wilhelm-Sollmann-Platz', pts: [0, 0, 3, 0, 3, 3] }, { name: '', pts: [5, 5, 6, 5, 6, 6] }],
   tram: [[0, 0, 10, 10]],
   tramStops: [{ name: 'Florastr.', x: 5, z: 6 }],
@@ -16,6 +17,11 @@ const valid = (): MapData => ({
 test('parses a valid map', () => {
   const m = valid();
   expect(parseMapData(JSON.parse(JSON.stringify(m)))).toEqual(m);
+});
+
+test('a map without water (older pipeline) parses with none', () => {
+  const { water: _, ...old } = valid();
+  expect(parseMapData(JSON.parse(JSON.stringify(old))).water).toEqual([]);
 });
 
 test('rejects version 2', () => expect(() => parseMapData({ ...valid(), version: 2 })).toThrow(/map: version/));

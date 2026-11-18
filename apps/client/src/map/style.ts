@@ -3,6 +3,7 @@ export const MAP_STYLE = {
   bg: '#141a2b',
   building: '#252d44',
   green: '#1c3030',
+  water: '#16304a',
   square: '#2c3350',
   tram: '#7f8fb8',
   boundary: 'rgba(242,196,107,0.35)',

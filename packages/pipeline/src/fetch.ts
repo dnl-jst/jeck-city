@@ -23,17 +23,17 @@ const OVERPASS_RETRY_MS = 20_000;
 const OVERPASS_REQUEST_MS = 240_000;
 const USER_AGENT = 'nippes-nights-pipeline/0.1';
 
-// Play area bbox (UTM 32N): Nippes, Neustadt-Nord (Agnesviertel), Altstadt-Nord, Altstadt-Süd and Neustadt-Süd,
+// Play area bbox (UTM 32N): Nippes, Neustadt-Nord (Agnesviertel), Altstadt-Nord, Altstadt-Süd, Neustadt-Süd and Deutz,
 // + 250 m: covers the 150 m backdrop and the world rect (boundary bbox + 200 m, see worldRect) that the terrain is
 // cut from.
 const MARGIN = 250;
-const BOUNDS = { minE: 354118 - MARGIN, minN: 5642367 - MARGIN, maxE: 357875 + MARGIN, maxN: 5648852 + MARGIN };
+const BOUNDS = { minE: 354118 - MARGIN, minN: 5642367 - MARGIN, maxE: 359222 + MARGIN, maxN: 5648852 + MARGIN };
 
 // Overpass bbox: Nippes (50.9537445..50.9735975, 6.9410780..6.9688318) ∪ Neustadt-Nord
 // (50.9365632..50.9592877, 6.9247210..6.9755545) ∪ Altstadt-Nord (50.9344518..50.9500937, 6.9395438..6.9688513)
 // ∪ Altstadt-Süd (50.9213181..50.9370187, 6.9392632..6.9698465) ∪ Neustadt-Süd (50.9153860..50.9377646,
-// 6.9246950..6.9733400) + ~150 m.
-const OSM_BBOX = '50.91404,6.92256,50.97500,6.97768'; // S,W,N,E
+// 6.9246950..6.9733400) ∪ Deutz (50.9172265..50.9546524, 6.9650439..6.9956111) + ~150 m.
+const OSM_BBOX = '50.91404,6.92256,50.97500,6.99775'; // S,W,N,E
 
 export function tileNamesForBounds(minE: number, minN: number, maxE: number, maxN: number): string[] {
   const names: string[] = [];
@@ -135,6 +135,9 @@ out geom;
   nwr["shop"](${OSM_BBOX});
   nwr["amenity"](${OSM_BBOX});
   way[~"^parking:"~"."](${OSM_BBOX});
+  way["waterway"="river"](${OSM_BBOX});
+  way["man_made"="bridge"](${OSM_BBOX});
+  way["railway"="rail"]["bridge"](${OSM_BBOX});
 );
 out geom;`;
 

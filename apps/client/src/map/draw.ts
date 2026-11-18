@@ -54,6 +54,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, data: MapData, grid: MapG
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
+  fillPolys(ctx, data.water, MAP_STYLE.water); // a few rings: drawn whole, not via the grid
   fillPolys(ctx, items.greens.map((i) => data.greens[i]!), MAP_STYLE.green);
   fillPolys(ctx, items.squares.map((i) => data.squares[i]!.pts), MAP_STYLE.square);
   fillTriangles(ctx, items.buildings.map((i) => data.buildings[i]!), MAP_STYLE.building);
