@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { Quaternion, Vector3 } from 'three';
 import { headingOf, parkedPose, terrainNormal, VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
-import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, glareFacing, lampPower, needsCarRebuild, visibleCars } from './car';
+import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, lampPower, needsCarRebuild, visibleCars } from './car';
 
 test('visibleCars: indices of the cars within the render radius, in manifest order', () => {
   const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: -249 }, { x: 176, z: 176 }, { x: 177, z: 178 }];
@@ -53,14 +53,6 @@ test('low beam: falls off smoothly sideways, no hard edge', () => {
     expect(xs[i - 1]! - xs[i]!).toBeLessThan(0.35);
   }
 });
-test('glare: full head-on, gone beside and behind the lamp', () => {
-  const fwd = new Vector3(0, 0, 1);
-  expect(glareFacing(fwd, new Vector3(0, 0, 1), 3)).toBe(1);
-  expect(glareFacing(fwd, new Vector3(1, 0, 0), 3)).toBe(0);
-  expect(glareFacing(fwd, new Vector3(0, 0, -1), 3)).toBe(0);
-  expect(glareFacing(fwd, new Vector3(Math.SQRT1_2, 0, Math.SQRT1_2), 3)).toBeLessThan(0.4);
-});
-
 test('parked car rests on terrain and follows its slope', () => {
   const cols = 101, rows = 101;
   const heights = new Float32Array(cols * rows);

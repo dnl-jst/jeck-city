@@ -43,7 +43,7 @@ const STATIC_ONLY = staticWorldFilter();
 
 /**
  * The playable game: renders the session's WorldSim (walking figure, cars, bikes, follow camera) and turns keyboard
- * and mouse into the local player's input. Sound, radio wheel, map, camera and glare live here; the simulation does not.
+ * and mouse into the local player's input. Sound, radio wheel, map and camera live here; the simulation does not.
  */
 export class Game {
   mode: 'walk' | 'drive' | 'ride' = 'walk';
@@ -129,7 +129,7 @@ export class Game {
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
     this.remotes = session.remote ? new RemotePlayers(scene, this.cars, {
-      me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!, occluded: (a, b) => this.occluded(a, b),
+      me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!,
       carModels: ctx.carModels, figureModel: ctx.character ?? null, figureFor: (v) => this.figureFor(v),
       bikeModels: ctx.bikeModels?.bikes, bikeTypeOf: (i) => sim.bikes.types[i]!, bikeColorOf: (i) => sim.bikes.colors[i]!,
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
@@ -543,7 +543,6 @@ export class Game {
       this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
-      this.driven.updateGlare(this.ctx.camera, this.occluded, dt);
       if (audio) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
         const h = headingOf(pose), v = sim.cars.vehicle(this.carId)!.chassis.linvel();
@@ -566,15 +565,6 @@ export class Game {
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }
   }
-
-  /** Line of sight between two points blocked by static world geometry (lamp glare vs. camera). */
-  private readonly occluded = (from: Vec3, to: Vec3): boolean => {
-    const { rapier: R, world: w } = this.session.sim.pw;
-    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
-    const d = Math.hypot(dx, dy, dz);
-    if (d < 0.5) return false;
-    return w.castRay(new R.Ray(from, { x: dx / d, y: dy / d, z: dz / d }), d, true, undefined, undefined, undefined, undefined, STATIC_ONLY) !== null;
-  };
 
   private toggleFly(): void {
     this.flying = !this.flying;

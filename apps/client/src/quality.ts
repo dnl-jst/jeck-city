@@ -19,7 +19,7 @@ export type Quality = {
   lampLights: number;
   /** Disco ball spot lights (of 8; picked evenly round the ball). */
   discoDots: number;
-  /** The own car's red tail-lamp spot lights (the lamp glass and glare glow regardless). */
+  /** The own car's red tail-lamp spot lights (the lamp glass glows regardless). */
   tailLights: boolean;
   /** Shadow map size of the own car's headlight beams; 0 = the beams cast no shadows. */
   beamShadow: number;

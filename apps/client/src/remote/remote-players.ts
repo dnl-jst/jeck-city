@@ -40,7 +40,6 @@ export interface CarView {
   setPose(p: CarPose): void;
   setWheels(w: WheelSource, dt: number): void;
   setLights(night: number, braking: boolean, power: number): void;
-  updateGlare(camera: Camera, occluded: (from: Vec3, to: Vec3) => boolean, dt: number): void;
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
@@ -78,7 +77,6 @@ export type RemoteOptions = {
   /** Pitch and height so a remote bike's wheels sit on uneven ground (absent: shown level). */
   bikeGroundPose?(type: BikeType, s: BikeState): { pitch: number; dy: number };
   makeRig?: (type: BikeType) => RiderRig | null;
-  occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
   /** The car the local player drives or the bike they ride, and its pose as drawn (someone on it is drawn on it), or null. */
@@ -273,7 +271,6 @@ export class RemotePlayers {
       d.view.setWheels(streamedWheels(c), dt);
       // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
       d.view.setLights(night, c.brakeLight, lampPower(info.level, Math.random));
-      d.view.updateGlare(camera, this.opts.occluded, dt);
       d.label = this.label(d.label, names.get(info.driver), c.x, c.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, c.z, cp);
     }
     for (const [id, d] of this.driven) {
