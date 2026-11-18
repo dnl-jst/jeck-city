@@ -99,3 +99,15 @@ test('bicycle parking: kinds, capacity default, areas with outline', () => {
   expect(f.bikeParking.map((b) => [b.kind, b.capacity])).toEqual([['stands', 8], ['stands', 6], ['wall', 6], ['other', 6], ['stands', 20]]);
   expect(f.bikeParking[4]!.outline).toHaveLength(3);
 });
+
+test('a pedestrian multipolygon (e.g. Kardinal-Höffner-Platz) becomes a square', () => {
+  const way = (ref: number, pts: [number, number][]) => ({ type: 'way', ref, role: 'outer', geometry: pts.map(([lat, lon]) => ({ lat, lon })) });
+  const f = parseOsm({ elements: [
+    { type: 'relation', id: 7843405, tags: { type: 'multipolygon', highway: 'pedestrian', name: 'Kardinal-Höffner-Platz' }, members: [
+      way(1, [[50.941, 6.956], [50.9415, 6.956], [50.9415, 6.9565]]), way(2, [[50.9415, 6.9565], [50.941, 6.9565], [50.941, 6.956]]),
+    ] },
+  ] });
+  expect(f.squares).toHaveLength(1);
+  expect(f.squares[0]!.name).toBe('Kardinal-Höffner-Platz');
+  expect(f.squares[0]!.outline.length).toBeGreaterThanOrEqual(4);
+});

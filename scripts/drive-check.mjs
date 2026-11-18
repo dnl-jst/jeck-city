@@ -1,7 +1,8 @@
 // Usage: node scripts/drive-check.mjs [baseUrl] [shotsDir]
 // Runs offline (?offline=1: local simulation, no server); further query parameters in baseUrl are kept.
-// Scripted drive in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): spawn (no ?cam), pick the parked car nearest to the spawn (must be within
-// the 2.7 m the pipeline guarantees), press E and check that this car is the one entered, wait for the engine (throttle
+// Scripted drive in headless Chromium (host GPU; NN_SOFTWARE_GL=1: SwiftShader): no car stands at the spawn (the
+// Domplatte), so pick the parked car nearest to the spawn with no bike within 8 m and a clear 45 m ahead, start 1.5 m
+// beside it (?cam), press E and check that this car is the one entered, wait for the engine (throttle
 // is dead until it runs), hold W (then W+D), and check that the car moved > 20 m, is not inside a building, stops, and
 // that getting out puts the player on foot again. In the day run, hold R to open the radio wheel, point right (dev hook
 // __nnWheelNudge, no pointer lock headless) and release: Radio Köln. Saves task11-car.png (day), task11-night-car.png
@@ -11,7 +12,6 @@ import { browserArgs } from './browser-args.mjs';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const shots = process.argv[3];
-const REACH = 2.7;
 // waits are budgets in fixed physics steps (60 per simulated second): a loaded machine renders fewer frames and
 // so simulates slower than real time, which made wall-clock timeouts flaky. The wall clock only guards a hang.
 const HANG_MS = 15 * 60_000;
@@ -19,9 +19,29 @@ const HANG_MS = 15 * 60_000;
 const STALL_MS = 10_000;
 const STEPS = { enter: 300, engine: 300, wheel: 300, away12: 900, away30: 1200, stop: 900, exit: 300 };
 
+/** The car to drive and the start beside it (manifest read once, in Node). */
+async function pickCar() {
+  const { spawn, parked, bikes } = await fetch(new URL('/world/manifest.json', base)).then((r) => r.json());
+  // no bike within 8 m (with a bike in reach, E enters the one the figure faces) and no other parked car in the 45 m
+  // ahead of it (driving W straight on must not end behind a bumper)
+  const clearAhead = (c) => parked.every((o) => {
+    if (o === c) return true;
+    const dx = o.x - c.x, dz = o.z - c.z;
+    const along = dx * Math.sin(c.heading) + dz * Math.cos(c.heading), side = dx * Math.cos(c.heading) - dz * Math.sin(c.heading);
+    return !(along > -3 && along < 45 && Math.abs(side) < 3);
+  });
+  const car = parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
+    .map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((p, q) => p.d - q.d)[0];
+  if (!car) throw new Error('no parked car with a clear road ahead');
+  return { car, start: { x: car.x + Math.cos(car.heading) * 1.5, z: car.z - Math.sin(car.heading) * 1.5 } };
+}
+const { car: near, start } = await pickCar();
+console.log(`car (${near.x.toFixed(1)}, ${near.z.toFixed(1)}), ${near.d.toFixed(0)} m from the spawn; starting beside it`);
+
 async function drive(page, time, shot, wheelShot) {
   const url = new URL(base);
   url.searchParams.set('offline', '1');
+  url.searchParams.set('cam', `${start.x.toFixed(2)},2,${start.z.toFixed(2)}`);
   url.searchParams.set('time', time);
   url.searchParams.set('date', '2026-06-15');
   await page.goto(url.href);
@@ -54,17 +74,13 @@ async function drive(page, time, shot, wheelShot) {
     return s;
   };
 
-  const { spawn, parked } = await page.evaluate(() => fetch('/world/manifest.json').then((r) => r.json()));
-  const near = parked.map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((a, b) => a.d - b.d)[0];
-  console.log(`${time}: nearest car (${near.x.toFixed(1)}, ${near.z.toFixed(1)}), ${near.d.toFixed(2)} m from the spawn (${spawn.x}, ${spawn.z})`);
-  if (near.d > REACH) throw new Error(`nearest parked car ${near.d.toFixed(2)} m from the spawn (> ${REACH})`);
-  const atSpawn = await state();
-  if (atSpawn.mode !== 'walk' || Math.hypot(atSpawn.x - spawn.x, atSpawn.z - spawn.z) > 0.5) throw new Error(`player not at the spawn: ${JSON.stringify(atSpawn)}`);
+  const atStart = await state();
+  if (atStart.mode !== 'walk' || Math.hypot(atStart.x - start.x, atStart.z - start.z) > 0.5) throw new Error(`player not at the start beside the car: ${JSON.stringify(atStart)}`);
 
   await page.keyboard.press('KeyE');
   const s0 = await until((s) => s.mode === 'drive', null, STEPS.enter, 'E did not enter the car');
   const entered = Math.hypot(s0.x - near.x, s0.z - near.z);
-  if (entered > 1) throw new Error(`entered a car ${entered.toFixed(2)} m from the nearest one`);
+  if (entered > 1) throw new Error(`entered a car ${entered.toFixed(2)} m from the chosen one`);
   // throttle is dead until the engine has started
   const running = await until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
   // R held during the start is cancelled until let go: let one more frame see the engine running with R up first

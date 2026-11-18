@@ -4,7 +4,7 @@ import type { Posture } from '../player';
 import { spreadIndices } from '../quality';
 
 /** Upper-body posture of a rider per bike type. */
-export const RIDER_POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright' };
+export const RIDER_POSTURE: Record<BikeType, Posture> = { dutch: 'upright', road: 'race', mtb: 'sport', longjohn: 'upright', trike: 'upright', soundjohn: 'upright', escooter: 'standing' };
 
 const DISCO_HUE = new Color();
 

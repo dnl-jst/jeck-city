@@ -10,7 +10,7 @@ import { TrafficSignals } from './signals';
 import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { LoadingArt } from './loading-art';
-import { nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
+import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
@@ -19,14 +19,16 @@ import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
 import { Props } from './props';
+import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
 import { attachInput, Input } from './input';
+import { TouchControls, touchPreferred } from './touch';
 import { Game } from './game';
 import { storeCharacter, storedCharacter } from './characters';
 import { OfflineSession, type Session } from './session';
-import { OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
+import { mapPlayers, OnlineSession, remoteList, type RemotePlayerInfo } from './net/online-session';
 import { Lobby } from './net/lobby';
 import { Connection, connectRoom, JoinRejected, STATUS_TEXTS } from './net/connection';
 import { AudioMixer } from './audio/mixer';
@@ -127,7 +129,8 @@ function bootFailed(err: unknown): never {
 // WebGL2 is checked before anything else is set up
 if (!document.createElement('canvas').getContext('webgl2')) bootFailed(new NoWebGLError());
 /** Graphics quality (G cycles it; ?quality=low|medium|high overrides the stored choice). */
-let qualityLevel: QualityLevel = storedQuality(params.get('quality'));
+// phones and tablets start on the lightest level (a coarse primary pointer, as for the touch controls)
+let qualityLevel: QualityLevel = storedQuality(params.get('quality'), window.matchMedia('(pointer: coarse)').matches ? DEFAULT_TOUCH_QUALITY : DEFAULT_QUALITY);
 /** Antialiasing is fixed with the WebGL context: a level switch changes it only on the next page load. */
 const bootAntialias = QUALITY[qualityLevel].antialias;
 let renderer: WebGLRenderer;
@@ -157,10 +160,13 @@ resize();
 
 const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
+// phones and tablets: sticks and buttons on screen (?touch=1 forces them, ?touch=0 hides them)
+const touchOn = touchPreferred(params.get('touch'), window.matchMedia('(pointer: coarse)').matches);
 attachInput(input, canvas, (locked) => {
   hud.setHint(locked ? (game?.modeHint ?? '') : LOOK_HINT);
   game?.map.onLockChange(locked);
-});
+}, touchOn);
+const touch = new TouchControls(document.body, input, touchOn);
 const world = new WorldLoader(scene, '/world/');
 
 // sound: nothing plays before the first user gesture; the recordings load in parallel with the world
@@ -177,6 +183,9 @@ const radioWheel = new RadioWheel(document.body);
 gameAudio.load().catch(console.error);
 // no `once`: a later rejected play()/resume() is retried on the next gesture (unlock is idempotent)
 window.addEventListener('pointerdown', () => gameAudio.unlock());
+// Safari counts a finger's pointerup/touchend as the gesture that may start sound, not its pointerdown
+window.addEventListener('pointerup', () => gameAudio.unlock());
+window.addEventListener('touchend', () => gameAudio.unlock());
 window.addEventListener('keydown', () => gameAudio.unlock());
 document.addEventListener('visibilitychange', () => gameAudio.setHidden(document.hidden));
 
@@ -219,6 +228,7 @@ if (debug) {
 
 let lighting: Lighting | null = null;
 let precip: Precipitation | null = null;
+let boundaryGlow: BoundaryGlow | null = null;
 /** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees, cars and rain/snow (all live but MSAA). */
 function applyQuality(): void {
   const q = QUALITY[qualityLevel];
@@ -261,6 +271,11 @@ renderer.setAnimationLoop((t: number) => {
       const aa = QUALITY[qualityLevel].antialias === bootAntialias ? '' : ' (Kantenglättung ab dem nächsten Laden)';
       hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
     }
+    touch.update({
+      playing: true, mode: game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
+      mapOpen: game.map.open, muted: gameAudio.isMuted, flying: game.flying,
+    });
+    touch.tick(dt);
     game.frame(dt, nightFactor);
     for (const i of game.takeFallenLamps()) {
       props.knockDown(i);
@@ -285,8 +300,9 @@ renderer.setAnimationLoop((t: number) => {
         else maps.bigMap.close();
         maps.minimap.setVisible(!open);
       }
-      maps.minimap.update(p.x, p.z, yaw, maps.tracker.update(p.x, p.z));
-      if (open) maps.bigMap.update(game.mapInput, { x: p.x, z: p.z, yaw });
+      const others = onlineSession ? mapPlayers(onlineSession.remote(), onlineSession.roster(), onlineSession.me) : [];
+      maps.minimap.update(p.x, p.z, yaw, maps.tracker.update(p.x, p.z), others);
+      if (open) maps.bigMap.update(game.mapInput, { x: p.x, z: p.z, yaw }, others);
     }
     world.update(camera.position);
     if (world.revision !== propsRevision) {
@@ -307,6 +323,8 @@ renderer.setAnimationLoop((t: number) => {
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
     precip?.update(dt, camera.position, look);
+    const f = game.flying ? camera.position : game.focus();
+    boundaryGlow?.update(dt, f.x, f.z, nightFactor);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
     const far = lighting.viewFar + 5;
     if (Math.abs(camera.far - far) > 0.5) {
@@ -332,7 +350,7 @@ const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} ·
 let npcNet: NpcNet | null = null;
 let signalJunctions: SignalJunction[] = [];
 
-async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
+async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundary: Float32Array }> {
   // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain, signals, npc] = await Promise.all([
@@ -344,12 +362,13 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid }> {
     offline && manifest.npc ? fetchOk('/world/npc.json', { cache: 'no-cache' }).then(async (r) => parseNpcNet(await r.json())) : null,
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
-  const sim = await WorldSim.create({ manifest, collision, terrain, signals, npc }, { sliceMs: 12 });
+  // only the city around the player gets colliders (the whole city takes far too long and too much memory on a phone)
+  const sim = await WorldSim.create({ manifest, collision, terrain, signals, npc }, { sliceMs: 12, streamCity: start ? [start] : [] });
   npcNet = npc;
   signalJunctions = signals ?? [];
   physicsLoading = false; // only once the world is built
   showStatus();
-  return { sim, terrain };
+  return { sim, terrain, boundary: collision.boundary };
 }
 
 /** map.json → minimap and big map; a failure only means no map. */
@@ -395,7 +414,7 @@ async function connect(): Promise<Connection | null> {
 }
 
 const start = devCamParam ? { x: devCamParam.x, z: devCamParam.z } : undefined;
-Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain }, mapData, conn]) => {
+Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus = s; showStatus(); }, manifestLoad), loadSim(), loadMap(), connect()]).then(async ([m, { sim, terrain, boundary }, mapData, conn]) => {
   connection = conn;
   // bikes still ride without their models (unseen), so a failed model download is not fatal
   const characters = world.characterModels(m);
@@ -434,6 +453,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     (x, z) => heightAt(terrain, x, z),
   );
   precip = new Precipitation(scene);
+  boundaryGlow = new BoundaryGlow(scene, boundary, (x, z) => heightAt(terrain, x, z));
   // online, the local figure starts where the server most likely spawned it; the first snapshot sets it exactly
   const allowed = devAllowed(conn ? 'online' : 'offline', conn?.welcome ?? null, debug, import.meta.env.DEV);
   const devCam = allowed.cam ? devCamParam : null;

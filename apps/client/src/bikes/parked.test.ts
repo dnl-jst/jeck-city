@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { BoxGeometry, Group, InstancedMesh, Mesh, MeshStandardMaterial, Scene } from 'three';
 import type { BikeType } from '@nn/shared';
-import { BikeView, type BikeSource } from './parked';
+import { BikeView, RACK_RENDER_RADIUS, type BikeSource } from './parked';
 
 const model = () => {
   const g = new Group();
@@ -26,14 +26,17 @@ function source(): BikeSource {
 
 const counts = (scene: Scene) => scene.children.filter((c): c is InstancedMesh => (c as InstancedMesh).isInstancedMesh).map((m) => [m.name, m.count]);
 
-test('draws the bikes near the camera per type, not the ridden one, racks always', () => {
+test('draws the bikes near the camera per type, not the ridden one, racks near the camera', () => {
   const scene = new Scene();
   const src = source();
   const models = new Map<BikeType, Group>([['dutch', model()], ['road', model()]]);
-  const view = new BikeView(scene, models, new Map([[0, model()]]), src, [{ x: 1, z: 1, heading: 0, kind: 0 }], [0.12]);
+  const racks = [{ x: 1, z: 1, heading: 0, kind: 0 as const }, { x: RACK_RENDER_RADIUS + 50, z: 0, heading: 0, kind: 0 as const }];
+  const view = new BikeView(scene, models, new Map([[0, model()]]), src, racks, [0.12, 0.12]);
   view.update(0, 0);
   expect(counts(scene)).toEqual(expect.arrayContaining([['bike_dutch_frame', 2], ['bike_dutch_wheel_rear', 2], ['bike_road_frame', 1], ['rack_0_frame', 1]]));
   (src.rider as (number | null)[])[0] = 3;
   view.update(0, 0);
   expect(counts(scene)).toEqual(expect.arrayContaining([['bike_dutch_frame', 1]]));
+  view.update(RACK_RENDER_RADIUS + 50, 0); // moved to the far rack: only it is drawn
+  expect(counts(scene)).toEqual(expect.arrayContaining([['rack_0_frame', 1]]));
 });

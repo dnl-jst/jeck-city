@@ -9,18 +9,20 @@ import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from
 import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
-import { prepareModel, prepareProp } from './models.js';
+import { prepareModel, prepareProp, type PreparedModel } from './models.js';
+import { applyTerrainCuts } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
-import { parkedCarSpots, spawnCarSpot, withSpawnCar } from './parking.js';
+import { placeScooters } from './escooters.js';
+import { parkedCarSpots } from './parking.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot } from './bikeracks.js';
 import { assignShops, classifyBuildings, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
-import { findSpawn } from './spawn.js';
+import { placeSpawn, SPAWN_AT, SPAWN_LOOK_AT, topSurface } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
 import { sidewalkFit } from './sidewalkmetric.js';
@@ -37,6 +39,7 @@ const SHOP_SEED = 2613766;
 const OUT_DIR = 'apps/client/public/world';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
+const SCOOTER_SEED = 2025611;
 const BIKE_MODELS = 'data/models/bikes';
 const SIGNAL_MODELS = 'data/models/signals';
 const CAR_MODELS = 'data/models/cars';
@@ -52,7 +55,6 @@ const SOUND_BIKE = { x: 35.0, z: -729.6, heading: -2.912, type: 5, color: 0xc026
 const TREE_SEED = 2613766;
 /** Seed of the lawn seat rings in parks. */
 const PARK_SEED = 1766132;
-const SPAWN_TARGET = { x: 0, z: 0 };
 /**
  * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
  * adaptively until every triangle lies within 2 cm of the 1 m drape (edges down to 5 cm at sharp terrain kinks).
@@ -93,7 +95,7 @@ async function main() {
     const buf = await readFile(join(RAW_DIR, 'dgm1', t));
     return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
   })));
-  const terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(dgm, TERRAIN_SIGMA), area));
+  let terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(dgm, TERRAIN_SIGMA), area));
   const terrain = decodeTerrain(terrainBin);
   const { datum } = terrain;
   let hMin = Infinity, hMax = -Infinity;
@@ -122,6 +124,27 @@ async function main() {
   if (Object.keys(overrides).length) console.log(`overrides: ${Object.keys(overrides).join(', ')}`);
   const active = buildings.filter((b) => !(b.id in overrides));
 
+  // replacement models, prepared now: their *_cut surfaces lower the terrain before anything is draped on it
+  // (several LOD2 buildings may share one model, a structure split into parts: it is shipped once)
+  const byPath = new Map<string, string[]>();
+  for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
+  const prepared = new Map<string, { m: PreparedModel; parts: BuildingMesh[]; lift: number }>();
+  for (const [path, ids] of byPath) {
+    const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
+    // the model is authored with y = 0 at the LoD2 base; on a slope the lowest base of its buildings
+    const lift = Math.min(...parts.map((p) => p.base));
+    prepared.set(path, { m: await prepareModel(await readFile(path), lift), parts, lift });
+  }
+  const cuts = [...prepared.values()].filter((p) => p.m.cut.length);
+  if (cuts.length) {
+    let n = 0;
+    for (const { m } of cuts) n += applyTerrainCuts(terrain, m.cut);
+    // the client reads the quantized heights from terrain.bin: re-encode and use exactly those from here on
+    terrainBin = encodeTerrain(terrain);
+    terrain.heights.set(decodeTerrain(terrainBin).heights);
+    console.log(`terrain cuts: ${n} grid points lowered under ${cuts.length} model(s)`);
+  }
+
   const placedShops = assignShops(f.shops, f.boundary, active);
   if (args.includes('--list-shops')) return listNeusserShops(f, placedShops, active);
   const curated: Record<string, string> = existsSync(SHOP_NAMES) ? JSON.parse(await readFile(SHOP_NAMES, 'utf8')) : {};
@@ -144,9 +167,7 @@ async function main() {
     console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${streets[name].indices.length / 3} triangles`);
   }
   const graph = buildRoadGraph(f);
-  const flatSpawn = findSpawn(f.roads, SPAWN_TARGET, buildings);
-  const spawn = { ...flatSpawn, y: heightAt(terrain, flatSpawn.x, flatSpawn.z) + flatSpawn.y }; // flat y = sidewalk height
-  console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}), ${Math.hypot(spawn.x, spawn.z).toFixed(1)} m from origin`);
+  const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 
   await mkdir(OUT_DIR, { recursive: true });
   for (const file of await readdir(OUT_DIR)) if (/^(chunk|model)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
@@ -161,19 +182,15 @@ async function main() {
 
   const models: WorldManifest['models'] = [];
   const modelCollision: Float32Array[] = [];
-  // several LOD2 buildings may share one model (a structure split into parts): ship it once
-  const byPath = new Map<string, string[]>();
-  for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
   for (const [path, ids] of byPath) {
-    const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
+    const { m, parts, lift } = prepared.get(path)!;
     const id = ids[0]!;
     const b = parts[0]!;
-    // the model is authored with y = 0 at the LoD2 base; on a slope the lowest base of its buildings
-    const lift = Math.min(...parts.map((p) => p.base));
-    const m = await prepareModel(await readFile(path), lift);
     const off = Math.min(...parts.map((p) => Math.hypot(m.centre.x - p.centroid.x, m.centre.z - p.centroid.z)));
-    // a model far from its building was exported in the wrong frame (local origin, Z up, …)
-    if (off > 25) throw new Error(`override ${ids.join(', ')}: model centre is ${off.toFixed(1)} m from the building (${path})`);
+    // a model far from its building was exported in the wrong frame (local origin, Z up, …); a large model that
+    // reaches out (the Dom with the Domtreppe and the Kreuzblume) passes as long as its building lies inside it
+    const inside = parts.some((p) => p.centroid.x >= m.bounds.minX && p.centroid.x <= m.bounds.maxX && p.centroid.z >= m.bounds.minZ && p.centroid.z <= m.bounds.maxZ);
+    if (off > 25 && !inside) throw new Error(`override ${ids.join(', ')}: model centre is ${off.toFixed(1)} m from the building (${path})`);
     const chunk = chunkKey(b.centroid.x, b.centroid.z);
     if (!chunks.some((c) => c.key === chunk)) throw new Error(`override ${id}: chunk ${chunk} does not exist`);
     const file = `model_${basename(path, '.glb')}.glb`;
@@ -193,6 +210,10 @@ async function main() {
   }
   const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: modelCollision, terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
+  // the spawn stands on the walkable surface there: pavement if any, else the terrain
+  const spawnGround = heightAt(terrain, spawn.x, spawn.z);
+  const spawnY = topSurface(collision, spawn.x, spawn.z, spawnGround);
+  console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) on the Domplatte, ${(spawnY - spawnGround).toFixed(2)} m above the terrain`);
   await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
   await writeFile(join(OUT_DIR, 'terrain.bin'), new Uint8Array(terrainBin));
 
@@ -251,13 +272,16 @@ async function main() {
   }
   console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 
-  const spawnCar = spawnCarSpot(f, spawn, buildings);
   const racks = layoutRacks(f, buildings);
-  const carSpots = withSpawnCar(spawnCar, dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks));
-  const spawnBike = spawnBikeSpot(f, spawn, spawnCar, buildings);
+  const carSpots = dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings), racks);
+  const spawnBike = spawnBikeSpot(f, spawn, buildings);
   if (insideAnyFootprint(SOUND_BIKE, buildings)) throw new Error('sound bike: spot lies inside a building');
   const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter((b) =>
     Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR && Math.hypot(b.x - SOUND_BIKE.x, b.z - SOUND_BIKE.z) >= SPAWN_BIKE_CLEAR);
+  const scooters = placeScooters(f, buildings, SCOOTER_SEED, {
+    lamps, trees, hoops: racks.flatMap((r) => r.hoops), keepClear: [spawn, spawnBike, SOUND_BIKE],
+  }, sidewalks);
+  console.log(`e-scooters: ${scooters.length} (${scooters.filter((s) => s.down).length} lying)`);
   const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
 
@@ -282,7 +306,7 @@ async function main() {
     origin: { e: ORIGIN_UTM.e, n: ORIGIN_UTM.n },
     chunkSize: CHUNK_SIZE,
     chunks,
-    spawn: { x: r2(spawn.x), y: r2(spawn.y), z: r2(spawn.z), heading: r3(spawn.heading) },
+    spawn: { x: r2(spawn.x), y: r2(spawnY), z: r2(spawn.z), heading: r3(spawn.heading) },
     boundary: f.boundary.map((p) => [r2(p.x), r2(p.z)]),
     lamps: lamps.map((p) => [r2(p.x), r2(p.z)]),
     trees: trees.map((p) => [r2(p.x), r2(p.z)]),
@@ -301,7 +325,10 @@ async function main() {
     carModels,
     characterModels,
     bikeRacks: racks.flatMap((r) => r.hoops.map((h) => ({ x: r2(h.x), z: r2(h.z), heading: r3(r.heading), kind: r.kind }))),
-    bikes: [{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+    bikes: [
+      ...[{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
+      ...scooters.map(({ down, ...b }) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading), ...(down ? { down } : {}) })),
+    ],
     parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,
@@ -309,8 +336,6 @@ async function main() {
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
-  const car0 = manifest.parked[0]!;
-  console.log(`spawn car: ${Math.hypot(car0.x - spawn.x, car0.z - spawn.z).toFixed(2)} m from the spawn`);
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;

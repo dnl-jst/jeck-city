@@ -1,6 +1,6 @@
 import earcut from 'earcut';
 import type { OsmFeatures, Pt, Road } from './osm.js';
-import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, offsetLine, ptKey, subPolylineAt } from './polyline.js';
+import { cumulative, dedupe, dist, distToPolyline, DRIVABLE, junctions, offsetLine, pointInPolygon, ptKey, subPolylineAt } from './polyline.js';
 import { buildMarkings } from './markings.js';
 import { allSidewalkWidths, type SidewalkWidths, widthAt } from './sidewalkwidth.js';
 import { edges } from './roadprofile.js';
@@ -27,6 +27,28 @@ const RANK: Record<string, number> = {
   residential: 5, tertiary: 6, secondary: 7, primary: 8,
 };
 const roadY = (r: Road): number => ROAD_Y + (RANK[r.kind] ?? 0) * RANK_STEP;
+/** Paths that get no ribbon where they cross a paved square (the square already paves them). */
+const ON_SQUARE_HIDDEN = new Set(['footway', 'path', 'pedestrian']);
+
+/**
+ * Index runs [i0, i1] of `pts` whose segments lie outside every square (segment midpoint test); each run has at
+ * least two points.
+ */
+export function runsOutsideSquares(pts: Pt[], squares: Pt[][]): [number, number][] {
+  const runs: [number, number][] = [];
+  let start = -1;
+  for (let i = 1; i < pts.length; i++) {
+    const m = { x: (pts[i - 1]!.x + pts[i]!.x) / 2, z: (pts[i - 1]!.z + pts[i]!.z) / 2 };
+    const inside = squares.some((sq) => pointInPolygon(m, sq));
+    if (!inside && start < 0) start = i - 1;
+    if (inside && start >= 0) {
+      runs.push([start, i - 1]);
+      start = -1;
+    }
+  }
+  if (start >= 0) runs.push([start, pts.length - 1]);
+  return runs;
+}
 
 type V3 = [number, number, number];
 
@@ -175,9 +197,19 @@ function medianInfo(pr: Prepared, all: Prepared[]): MedianInfo[] {
   });
 }
 
-function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; curb: MeshBuilder; green: MeshBuilder; parking: MeshBuilder }, junc: Map<string, Pt>, arms: Map<string, (Arm & { road: Road })[]>): void {
+function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; curb: MeshBuilder; green: MeshBuilder; parking: MeshBuilder; squares: MeshBuilder }, junc: Map<string, Pt>, arms: Map<string, (Arm & { road: Road })[]>, squares: Pt[][] = []): void {
   const { r, pts, cum } = pr;
   const y = roadY(r);
+  if (ON_SQUARE_HIDDEN.has(r.kind)) {
+    // pedestrian zones are paved like squares (e.g. the Domplatte, mapped as a net of wide pedestrian ways)
+    const into = r.kind === 'pedestrian' ? b.squares : b.road;
+    const yy = r.kind === 'pedestrian' ? SQUARE_Y : y;
+    for (const [i0, i1] of runsOutsideSquares(pts, squares)) {
+      const p = pts.slice(i0, i1 + 1);
+      addRibbon(into, p, offsetLine(p, pr.kerb.left.slice(i0, i1 + 1).map((k) => -k)), offsetLine(p, pr.kerb.right.slice(i0, i1 + 1)), yy, yy, 0, r.width);
+    }
+    return;
+  }
   addRibbon(b.road, pts, offsetLine(pts, pr.kerb.left.map((k) => -k)), offsetLine(pts, pr.kerb.right), y, y, 0, r.width);
   if (!DRIVABLE.has(r.kind)) return;
   const total = cum[cum.length - 1]!;
@@ -285,7 +317,8 @@ export function buildStreetGeometry(f: OsmFeatures, widths: Map<Road, SidewalkWi
       arms.set(key, list);
     });
   }
-  for (const p of prepared) roadSides(p, { road, sidewalk, curb, green, parking }, junc, arms);
+  const squareRings = f.squares.map((s) => s.outline);
+  for (const p of prepared) roadSides(p, { road, sidewalk, curb, green, parking, squares }, junc, arms, squareRings);
 
   for (const track of f.tramTracks) {
     const pts = dedupe(track);

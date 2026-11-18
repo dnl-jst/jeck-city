@@ -19,6 +19,10 @@ export class Input {
   private dx = 0;
   private dy = 0;
   private notches = 0;
+  /** Touch stick (TouchControls): forward/right on the network's i8 grid, and pushed far enough to run. */
+  private stickF = 0;
+  private stickR = 0;
+  private stickRun = false;
 
   /** Returns true if the key was taken (the caller may then preventDefault). */
   keyDown(e: KeyEventLike): boolean {
@@ -32,8 +36,19 @@ export class Input {
     this.down.delete(e.code);
   }
 
+  /**
+   * The touch move stick: forward/right in −1..1. Snapped to the 1/127 grid the input packets use, so the client's
+   * prediction steps with exactly what the server receives. `run` once it is pushed (almost) all the way.
+   */
+  setStick(forward: number, right: number, run: boolean): void {
+    this.stickF = quantizeAxis(forward);
+    this.stickR = quantizeAxis(right);
+    this.stickRun = run;
+  }
+
   /** Window lost focus: key-ups would never arrive, so let go of everything. */
   releaseAll(): void {
+    this.setStick(0, 0, false);
     this.down.clear();
     this.pressed.clear();
     this.blurred = true;
@@ -60,14 +75,14 @@ export class Input {
     return this.down.has(code);
   }
 
-  /** forward/right in −1..1 (opposite keys cancel). */
+  /** forward/right in −1..1 (opposite keys cancel; keys and the touch stick add up). */
   axes(): { forward: number; right: number } {
     const any = (codes: string[]) => (codes.some((c) => this.down.has(c)) ? 1 : 0);
-    return { forward: any(FORWARD) - any(BACK), right: any(RIGHT) - any(LEFT) };
+    return { forward: clamp1(any(FORWARD) - any(BACK) + this.stickF), right: clamp1(any(RIGHT) - any(LEFT) + this.stickR) };
   }
 
   run(): boolean {
-    return this.down.has('ShiftLeft') || this.down.has('ShiftRight');
+    return this.down.has('ShiftLeft') || this.down.has('ShiftRight') || this.stickRun;
   }
 
   brake(): boolean {
@@ -99,19 +114,25 @@ export class Input {
   }
 }
 
+const clamp1 = (v: number): number => Math.max(-1, Math.min(1, v));
+/** −1..1 on the 1/127 grid of the input packets (codec axisToI8). */
+export const quantizeAxis = (v: number): number => (Number.isFinite(v) ? Math.round(clamp1(v) * 127) / 127 : 0);
+
 const GAME_KEYS = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, 'Space']);
 
 /**
  * Wires `input` to the window and canvas: keys, blur, pointer lock on click (Esc releases, handled by the
  * browser), mouse look and the wheel while locked. `onLock(locked)` reports lock changes (for the hint).
+ * `touch`: the touch overlay is in charge of looking around, so a tap never asks for pointer lock.
  */
-export function attachInput(input: Input, canvas: HTMLCanvasElement, onLock: (locked: boolean) => void): void {
+export function attachInput(input: Input, canvas: HTMLCanvasElement, onLock: (locked: boolean) => void, touch = false): void {
   window.addEventListener('keydown', (e) => {
     if (input.keyDown(e) && GAME_KEYS.has(e.code)) e.preventDefault(); // no page scrolling on arrows/space
   });
   window.addEventListener('keyup', (e) => input.keyUp(e));
   window.addEventListener('blur', () => input.releaseAll());
   canvas.addEventListener('click', () => {
+    if (touch) return;
     if (document.pointerLockElement !== canvas) void canvas.requestPointerLock()?.catch?.(() => {});
   });
   document.addEventListener('pointerlockchange', () => onLock(document.pointerLockElement === canvas));

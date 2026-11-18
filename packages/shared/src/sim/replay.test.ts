@@ -159,14 +159,16 @@ for (const [name, assets, skip] of worlds) {
     /**
      * Spec 13.3: a server sim (own player 1 plus a bystander, player 2) and a client prediction sim (player 1, the
      * bystander as a proxy) run the same inputs; after every 3rd tick the snapshot goes through the codec and the
-     * client reconciles at once (0 ms latency). Returns the largest position error seen before a reconciliation.
+     * client reconciles at once (0 ms latency). Returns the largest position error seen before a reconciliation. The
+     * client streams its city (as in the browser), the server has all of it.
      */
     async function run(ticks: number, input: (t: number, s: WorldSim) => PlayerInput, car: number | null, bike: number | null = null): Promise<number> {
       const a = await assets();
       const server = await WorldSim.create(a);
-      const client = await WorldSim.create(a);
       const at = car !== null ? leftOf(server.cars.poses[car]!, 2.5)
         : bike !== null ? leftOfBike(server.bikes.poses[bike]!, 1) : a.manifest.spawn;
+      // the client as in the browser: only the city around its player has colliders
+      const client = await WorldSim.create(a, { streamCity: [at] });
       server.addPlayer(1, at);
       client.addPlayer(1, at);
       server.addPlayer(2, { x: at.x + 1.5, z: at.z - 1.5 });
@@ -222,7 +224,7 @@ for (const [name, assets, skip] of worlds) {
       expect(rode).toBe(true);
       expect(a.manifest.bikes.length).toBeGreaterThan(0);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, 120_000); // the last of several whole-city worlds in this process (wasm memory only grows): slow
   });
 }
 

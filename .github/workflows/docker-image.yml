@@ -75,6 +75,27 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+      # Compressing the >1 GB world takes most of the image build. The pipeline is deterministic, so between runs
+      # nearly every world file is unchanged: the compressed variants are kept in .precompress-cache (by content
+      # hash), which the image build copies in and reuses. Only new or changed files are compressed here; the cache is
+      # pruned to this world and saved under its hash (an unchanged world skips the save).
+      - id: worldhash
+        run: echo "h=$(cd apps/client/public/world && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - id: precompress
+        uses: actions/cache/restore@v6
+        with:
+          path: .precompress-cache
+          key: precompress-${{ steps.worldhash.outputs.h }}
+          restore-keys: precompress-
+      - name: Compress the world (only what the cache does not have yet)
+        if: steps.precompress.outputs.cache-hit != 'true'
+        run: node scripts/precompress.mjs apps/client/public/world --cache .precompress-cache --cache-only --prune
+      - if: steps.precompress.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .precompress-cache
+          key: precompress-${{ steps.worldhash.outputs.h }}
+
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4

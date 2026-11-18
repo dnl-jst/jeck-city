@@ -100,8 +100,15 @@ test('manifest parse: old manifest without bikes gets empty lists', () => {
   expect(m.bikeRacks).toEqual([]);
 });
 
+test('manifest parse keeps the down flag of a lying e-scooter, drops a false one', () => {
+  const m = parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 6, color: 0, down: true }, { x: 1, z: 0, heading: 0, type: 6, color: 0, down: false }] });
+  expect(m.bikes[0]!.down).toBe(true);
+  expect('down' in m.bikes[1]!).toBe(false);
+});
+
 test('manifest parse rejects bike type out of range and rack kind 2', () => {
-  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 6, color: 0 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 7, color: 0 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 6, color: 0, down: 1 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikes: [{ x: 0, z: 0, heading: 0, type: 1.5, color: 0 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), bikeRacks: [{ x: 0, z: 0, heading: 0, kind: 2 }] })).toThrow();
 });

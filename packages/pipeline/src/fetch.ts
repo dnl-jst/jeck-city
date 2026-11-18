@@ -3,6 +3,7 @@ import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { BOUNDARY_IDS } from './osm.js';
 
 const LOD2_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod2_gml/lod2_gml/';
 const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/';
@@ -22,14 +23,17 @@ const OVERPASS_RETRY_MS = 20_000;
 const OVERPASS_REQUEST_MS = 240_000;
 const USER_AGENT = 'nippes-nights-pipeline/0.1';
 
-// Play area bbox (UTM 32N): Nippes + Neustadt-Nord (Agnesviertel), + 250 m: covers the 150 m backdrop and the
-// world rect (boundary bbox + 200 m, see worldRect) that the terrain is cut from.
+// Play area bbox (UTM 32N): Nippes, Neustadt-Nord (Agnesviertel), Altstadt-Nord, Altstadt-Süd and Neustadt-Süd,
+// + 250 m: covers the 150 m backdrop and the world rect (boundary bbox + 200 m, see worldRect) that the terrain is
+// cut from.
 const MARGIN = 250;
-const BOUNDS = { minE: 354180 - MARGIN, minN: 5644720 - MARGIN, maxE: 357875 + MARGIN, maxN: 5648852 + MARGIN };
+const BOUNDS = { minE: 354118 - MARGIN, minN: 5642367 - MARGIN, maxE: 357875 + MARGIN, maxN: 5648852 + MARGIN };
 
 // Overpass bbox: Nippes (50.9537445..50.9735975, 6.9410780..6.9688318) ∪ Neustadt-Nord
-// (50.9365632..50.9592877, 6.9247210..6.9755545) + ~150 m.
-const OSM_BBOX = '50.93521,6.92259,50.97500,6.97768'; // S,W,N,E
+// (50.9365632..50.9592877, 6.9247210..6.9755545) ∪ Altstadt-Nord (50.9344518..50.9500937, 6.9395438..6.9688513)
+// ∪ Altstadt-Süd (50.9213181..50.9370187, 6.9392632..6.9698465) ∪ Neustadt-Süd (50.9153860..50.9377646,
+// 6.9246950..6.9733400) + ~150 m.
+const OSM_BBOX = '50.91404,6.92256,50.97500,6.97768'; // S,W,N,E
 
 export function tileNamesForBounds(minE: number, minN: number, maxE: number, maxN: number): string[] {
   const names: string[] = [];
@@ -116,7 +120,7 @@ export async function fetchDgmTiles(dir: string): Promise<string[]> {
 
 export const OVERPASS_QUERY = `[out:json][timeout:180];
 (
-  relation(id:2613766,2613763);
+  relation(id:${BOUNDARY_IDS.join(',')});
 );
 out geom;
 (

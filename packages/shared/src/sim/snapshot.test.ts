@@ -26,6 +26,16 @@ describe('buildSnapshot', () => {
     expect(s.own.mode).toBe(0);
   });
 
+  test("a walker's yaw is the way their body faces, not their camera", async () => {
+    const sim = await world();
+    // player 2 walks along +x (camera yaw π/2), then stands and turns only the camera
+    for (let t = 0; t < 60; t++) sim.step(new Map([[2, { ...N, forward: 1, yaw: Math.PI / 2 }]]));
+    for (let t = 0; t < 30; t++) sim.step(new Map([[2, { ...N, yaw: -2.5 }]]));
+    const w = buildSnapshot(sim, 1, new Interest(), 0, [], slotOf).walkers.find((w) => w.slot === 12)!;
+    expect(Math.abs(Math.atan2(Math.sin(w.yaw - Math.PI / 2), Math.cos(w.yaw - Math.PI / 2)))).toBeLessThan(0.05);
+    expect(sim.player(2).yaw).toBeCloseTo(-2.5, 5);
+  });
+
   test('sleeping parked cars are never in snapshots', async () => {
     const sim = await world();
     expect(sim.cars.awake()).toEqual([]);

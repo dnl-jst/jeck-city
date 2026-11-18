@@ -29,7 +29,7 @@ type StatePose = { x: number; y: number; z: number; qx: number; qy: number; qz: 
  * poses, lying lamps); entries are keyed by slot / car index / bike index / lamp index. Car driver, bike rider −1: none.
  */
 export type NetState = {
-  players: StateMap<{ slot: number; name: string; mode: number; carId: number; bikeId: number; variant: number }>;
+  players: StateMap<{ slot: number; name: string; mode: number; carId: number; bikeId: number; variant: number; mapX?: number; mapZ?: number }>;
   cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
   bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number }>;
   lamps: StateMap<StatePose>;

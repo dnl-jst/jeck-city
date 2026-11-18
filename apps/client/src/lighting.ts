@@ -185,6 +185,8 @@ export class Lighting {
   private lampCount: number = MAX_LAMP_LIGHTS;
   /** Sun shadows are cast within this radius (m) around the camera. */
   private shadowRadius = 0;
+  /** Whether the quality level has sun shadows at all. */
+  private sunShadows = true;
   /** Fog distances relative to the full view distance (FULL_VIEW): a lower quality level pulls the fog in. */
   private viewScale = 1;
 
@@ -243,11 +245,12 @@ export class Lighting {
     this.pool.forEach((l, i) => { l.visible = i < this.lampCount; });
     this.poolAt = null; // reassign the pool on the next update
     const s = this.sun.shadow;
-    s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
+    this.sunShadows = q.sunShadow > 0;
+    if (this.sunShadows) s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
     this.shadowRadius = q.shadowRadius;
     this.viewScale = q.viewDistance / FULL_VIEW;
-    s.camera.left = s.camera.bottom = -q.shadowRadius;
-    s.camera.right = s.camera.top = q.shadowRadius;
+    s.camera.left = s.camera.bottom = -Math.max(q.shadowRadius, 1);
+    s.camera.right = s.camera.top = Math.max(q.shadowRadius, 1);
     s.camera.updateProjectionMatrix();
   }
 
@@ -298,8 +301,8 @@ export class Lighting {
     const lit = sun.altitude > 0;
     this.sun.color.copy(mood.sun);
     this.sun.intensity = mood.sunI;
-    this.sun.castShadow = lit;
-    const texel = (2 * this.shadowRadius) / this.sun.shadow.mapSize.x;
+    this.sun.castShadow = lit && this.sunShadows;
+    const texel = (2 * Math.max(this.shadowRadius, 1)) / this.sun.shadow.mapSize.x;
     const t = this.sun.target.position.set(Math.round(cameraPos.x / texel) * texel, cameraPos.y, Math.round(cameraPos.z / texel) * texel);
     this.sun.position.copy(t).addScaledVector(dir, 400);
     this.sun.target.updateMatrixWorld();

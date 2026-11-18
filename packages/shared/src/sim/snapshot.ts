@@ -39,7 +39,7 @@ export function snapshotRound(sim: WorldSim, events: SimEvent[], slotOf: (id: Pl
     const slot = slotOf(other);
     const speed = Math.hypot(p.vel.x, p.vel.z);
     const state: WalkerState = p.falling ? 3 : p.mode === 'down' ? 2 : speed > WALK_MIN_SPEED ? 1 : 0;
-    walkers.push({ key: `p${slot}`, x: p.pos.x, z: p.pos.z, owner: other, v: { slot, x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.yaw, speed, state } });
+    walkers.push({ key: `p${slot}`, x: p.pos.x, z: p.pos.z, owner: other, v: { slot, x: p.pos.x, y: p.pos.y, z: p.pos.z, yaw: p.facing, speed, state } });
   }
 
   const riders: SnapshotRound['riders'] = [];

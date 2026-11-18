@@ -12,3 +12,4 @@ export * from './prng';
 export * from './npc-director';
 export * from './npc-bodies';
 export * from './npc-junctions';
+export * from './roof';

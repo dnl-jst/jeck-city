@@ -1,15 +1,15 @@
 # Jeck City
 
-Open-World-Spiel in Köln (Repository-Name noch `nippes-nights`): Alle Besucher sind gleichzeitig in derselben Stadt, zu Fuß, mit dem Rad oder im Auto. Vor dem Laden erklärt ein Intro-Screen das Spiel und warnt vor der Download-Größe (beim Build aus der erzeugten Welt gemessen).
+Open-World-Spiel in Köln (Repository-Name noch `nippes-nights`; Nippes, Neustadt-Nord, Altstadt-Nord, Altstadt-Süd, Neustadt-Süd): Alle Besucher sind gleichzeitig in derselben Stadt, zu Fuß, mit dem Rad oder im Auto. Los geht es auf der Domplatte. Vor dem Laden erklärt ein Intro-Screen das Spiel und warnt vor der Download-Größe (beim Build aus der erzeugten Welt gemessen).
 
-Rund um die Spieler erzeugt der Server NPCs: Passanten, Radfahrer, Autofahrer und Gruppen in Parks. Sie halten sich an Ampeln und rechts vor links und schimpfen auf Kölsch, wenn man ihnen im Weg steht. Das Wegenetz dafür (`npc.json`) erzeugt `npm run pipeline`; `/healthz` meldet `npcs` und `npcDensity` (sinkt automatisch, wenn der Server-Takt zu langsam wird). Design: `docs/superpowers/specs/2026-11-17-npcs-design.md`.
+Rund um die Spieler erzeugt der Server NPCs: Passanten, Radfahrer, Autofahrer und Gruppen in Parks. Sie halten sich an Ampeln und rechts vor links und schimpfen auf Kölsch, wenn man ihnen im Weg steht. Das Wegenetz dafür (`npc.json`) erzeugt `npm run pipeline`; `/healthz` meldet `npcs`, `npcDensity` und `npcCap` (die Obergrenze sinkt automatisch, wenn der Server-Takt zu langsam wird). Design: `docs/superpowers/specs/2026-11-17-npcs-design.md`.
 TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ## Entwickeln
 
 ```
 npm ci
-npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~350 MB, nicht im Repository)
+npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~1,3 GB, nicht im Repository)
 npm run dev          # Spielserver + Vite
 npm test
 npm run typecheck

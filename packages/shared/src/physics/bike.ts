@@ -1,7 +1,8 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { BIKE_SPECS, type BikeSpec, type BikeType } from './biketypes';
 import { TUNING } from './tuning';
-import { BIKE_GROUPS, type PhysicsWorld } from './world';
+import { CHARACTER_CENTRE } from './character';
+import { BIKE_GROUPS, CHARACTER_GROUPS, type PhysicsWorld } from './world';
 
 /** pedal −1..1 (negative = brake, at a standstill push backwards), steer −1..1 (positive = right). */
 export type BikeInput = { pedal: number; steer: number; sprint: boolean; hop: boolean };
@@ -13,7 +14,8 @@ export type BikeInput = { pedal: number; steer: number; sprint: boolean; hop: bo
  */
 export type BikeState = { x: number; y: number; z: number; heading: number; speed: number; steer: number; vy: number; grounded: boolean; crank: number };
 
-export type BikeStepResult = { crashed: boolean; landed: boolean };
+/** crashSpeed: the speed (m/s) the bike hit the obstacle with when it crashed (0 otherwise). */
+export type BikeStepResult = { crashed: boolean; landed: boolean; crashSpeed: number };
 
 const T = TUNING.bike;
 const DT = TUNING.world.dt;
@@ -33,9 +35,14 @@ export function bikeColliderRadius(spec: BikeSpec): number {
 /** Wheel capsule (upright, like the walking character): radius and half height of its straight part. */
 const FOOT_R = 0.3;
 const FOOT_HALF = 0.12;
-/** Frame box: from FRAME_BOTTOM above the ground (clear of kerbs) to FRAME_TOP; ~0.3 m past the axles. */
+/**
+ * Frame box: from FRAME_BOTTOM above the ground (clear of kerbs) to FRAME_TOP (as high as a parked bike's box, so
+ * someone standing on a ridden bike stands as high as on the stand-in other clients have for it); ~0.3 m past the axles.
+ */
 const FRAME_BOTTOM = 0.3;
-const FRAME_TOP = 1.2;
+export const FRAME_TOP = 0.9;
+/** People with their feet at least this high above the frame's bottom stand on it (passengers), not in its way. */
+const PASSENGER_ABOVE = FRAME_TOP - 0.3 - FRAME_BOTTOM;
 const OFFSET = 0.02;
 /** Surfaces whose normal points up more than this (slope ≤ maxSlope) are ground, not obstacles for the frame. */
 const WALKABLE_NY = Math.cos(T.maxSlope);
@@ -81,9 +88,14 @@ export class RiddenBike {
     this.frameShape = new R.Cuboid(hx, hy, hz);
     this.frame = world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(0, this.frameY, 0).setCollisionGroups(BIKE_GROUPS), this.body);
     const me = this.body.handle;
-    // light dynamic bodies (parked bikes) are not obstacles for the frame cast: the kinematic frame shoves them
+    // light dynamic bodies (parked bikes) are not obstacles for the frame cast: the kinematic frame shoves them; nor
+    // are people standing on the bike (a passenger in the cargo box)
     this.notMe = (c) => {
       if (c.isSensor()) return false;
+      if (c.collisionGroups() >>> 16 === CHARACTER_GROUPS >>> 16) {
+        const feet = c.translation().y - CHARACTER_CENTRE, bottom = this.body.translation().y + this.frameY - hy;
+        if (feet > bottom + PASSENGER_ABOVE) return false;
+      }
       const b = c.parent();
       return !b || (b.handle !== me && !(b.isDynamic() && b.mass() < LIGHT_BODY_KG));
     };
@@ -184,12 +196,13 @@ export class RiddenBike {
 
     // forward movement blocked by the frame cast (not by the controller, which now and then returns a zero move on
     // flat ground for one step): crash when fast and head-on, otherwise lose the blocked speed
-    let crashed = false;
+    let crashed = false, crashSpeed = 0;
     const wantF = s.speed * DT;
     if (Math.abs(wantF) > 1e-6) {
       const got = (dx * fx + dz * fz) / wantF;
       if (frontal > T.crashBlocked && s.speed > T.crashKmh * KMH) {
         crashed = true;
+        crashSpeed = s.speed;
         s.speed = 0;
       } else if (got < 0.999) s.speed *= Math.max(0, got);
     }
@@ -200,7 +213,7 @@ export class RiddenBike {
     if (pedal > 0 && s.speed > 0) s.crank += (s.speed / BIKE_WHEEL_RADIUS / BIKE_GEAR) * DT;
     this.body.setNextKinematicTranslation({ x: s.x, y: s.y + this.centre, z: s.z });
     this.body.setNextKinematicRotation(q);
-    return { crashed, landed: !wasGrounded && s.grounded };
+    return { crashed, landed: !wasGrounded && s.grounded, crashSpeed };
   }
 
   /**

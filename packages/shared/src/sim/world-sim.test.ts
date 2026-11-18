@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import type { WorldAssets } from './assets';
 import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
@@ -43,10 +43,23 @@ const worlds: [string, () => Promise<WorldAssets>, boolean][] = [
 
 for (const [name, assets, skip] of worlds) {
   describe.skipIf(skip)(`WorldSim (${name})`, () => {
+    /**
+     * Every sim a test creates, freed after it: the real city's physics world is large, and a whole file of them
+     * left alive runs the Rapier (wasm) heap out of memory.
+     */
+    const live: WorldSim[] = [];
+    const create = async (a: WorldAssets): Promise<WorldSim> => {
+      const sim = await WorldSim.create(a);
+      live.push(sim);
+      return sim;
+    };
+    afterEach(() => {
+      for (const sim of live.splice(0)) sim.pw.world.free();
+    });
     /** A sim with player 1 standing 2.5 m left of the picked car. */
     async function nextToCar(): Promise<{ sim: WorldSim; car: number }> {
       const a = await assets();
-      const sim = await WorldSim.create(a);
+      const sim = await create(a);
       const car = pickCar(a);
       sim.addPlayer(1, leftOf(sim.cars.poses[car]!, 2.5));
       run(sim, 10);
@@ -54,7 +67,7 @@ for (const [name, assets, skip] of worlds) {
     }
 
     test('two players spawn apart', async () => {
-      const sim = await WorldSim.create(await assets());
+      const sim = await create(await assets());
       sim.addPlayer(0);
       sim.addPlayer(1);
       expect(dist(sim.player(0).pos, sim.player(1).pos)).toBeGreaterThanOrEqual(1.4);
@@ -98,7 +111,7 @@ for (const [name, assets, skip] of worlds) {
 
     test('same-tick enter: lower queue order wins', async () => {
       const a = await assets();
-      const sim = await WorldSim.create(a);
+      const sim = await create(a);
       const car = pickCar(a);
       sim.addPlayer(1, leftOf(sim.cars.poses[car]!, 2.5));
       sim.addPlayer(2, leftOf(sim.cars.poses[car]!, 2, 1.2));
@@ -163,7 +176,7 @@ for (const [name, assets, skip] of worlds) {
       const a = await assets();
       const car = pickCar(a);
       const play = async () => {
-        const sim = await WorldSim.create(a);
+        const sim = await create(a);
         const c = sim.cars.poses[car]!;
         sim.addPlayer(1, leftOf(c, 2.5));
         sim.addPlayer(2);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { TUNING } from '../physics/tuning';
+import { KNOCKDOWN_S } from '../net/constants';
 import { fixtureAssets } from './fixture.test-util';
 import { WorldSim, type SimEvent } from './world-sim';
 
@@ -19,7 +20,7 @@ function launch(sim: WorldSim, v: number): void {
 const kmh = (v: number) => v / 3.6;
 
 describe('people and cars', () => {
-  test('car at 30 km/h knocks a walker down for 1 s', async () => {
+  test('car at 30 km/h knocks a walker down for KNOCKDOWN_S', async () => {
     const sim = await newSim();
     sim.addPlayer(1, { x: 5, z: 10 });
     sim.step(new Map());
@@ -27,14 +28,14 @@ describe('people and cars', () => {
     const start = sim.player(1).pos;
     const ev: SimEvent[] = [];
     let downTicks = 0;
-    for (let t = 0; t < 240; t++) {
+    for (let t = 0; t < 60 * (KNOCKDOWN_S + 2); t++) {
       if (!ev.some((e) => e.t === 'knock')) launch(sim, kmh(30)); // an undriven car brakes: hold 30 km/h up to the hit
       ev.push(...sim.step(new Map()));
       if (sim.player(1).mode === 'down') downTicks++;
     }
     expect(ev.filter((e) => e.t === 'knock')).toEqual([{ t: 'knock', id: 1, by: 0 }]);
     expect(ev.filter((e) => e.t === 'impact')).toHaveLength(1);
-    expect(Math.abs(downTicks - 60)).toBeLessThanOrEqual(1);
+    expect(Math.abs(downTicks - KNOCKDOWN_S * 60)).toBeLessThanOrEqual(1);
     expect(sim.player(1).mode).toBe('walk');
     expect(sim.player(1).pos.z - start.z).toBeGreaterThan(0); // displaced in the driving direction (+z)
   }, 30_000);

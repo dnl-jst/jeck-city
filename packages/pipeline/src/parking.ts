@@ -4,7 +4,8 @@ import type { ParkOrientation } from './crosssection.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt, pointInPolygon } from './polyline.js';
-import { edgeAt, inRamp, nearestOn, onCarriageway } from './roadprofile.js';
+import { placeRand } from './placerand.js';
+import { edgeAt, inRamp, onCarriageway } from './roadprofile.js';
 
 const KERB_SPACING = 6; // roads without parking-strip tags: cars along the kerb
 const KERB_OCCUPANCY = 0.4;
@@ -19,18 +20,6 @@ const CROSSING_MARGIN = 1; // car body this far clear of a crossing carriageway
 const MAX_SPOTS = 2600;
 const PARKABLE = new Set(['residential', 'tertiary']);
 const COS15 = Math.cos((15 * Math.PI) / 180);
-
-/** Deterministic PRNG (mulberry32) so a seed always yields the same spots. */
-export function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 type Spot = { pos: Pt; heading: number };
 /** Where cars stand on one side of a road: centre offset from the axis (signed, right of travel > 0), spacing, angle, occupancy. */
@@ -76,10 +65,10 @@ function parkHeading(dir: Pt, side: 1 | -1, oneway: boolean, angle: number): num
  * boundary (≥ 3 m from it, so also on the collision ground, which covers the boundary bbox + 200 m), outside every
  * building footprint, ≥ 10 m from junction nodes and tram stops, ≥ 3 m from tram tracks, and with the car body
  * ≥ 1 m clear of any crossing (non-parallel) carriageway, and not in a kerb ramp between ways (roadprofile.ts).
- * At most 2600, a deterministic random subset beyond that.
+ * Which candidates are taken (occupancy) and the subset beyond 2600 are drawn per position (placeRand), so cars stay
+ * put on streets the OSM data did not change.
  */
 export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: BuildingMesh[]): Spot[] {
-  const rand = rng(seed);
   const roads = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = [...junctions(roads.map((r) => dedupe(r.points))).values()];
   const blockers = [...junc, ...f.tramStops.map((s) => s.pos)];
@@ -110,12 +99,11 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
     const total = cum[cum.length - 1]!;
     for (const lane of lanes) {
       for (let s = lane.spacing / 2; s < total; s += lane.spacing) {
-        const occupied = rand() < lane.occupancy; // drawn for every candidate so the stream stays stable
-        if (!occupied) continue;
         if (inRamp(r, s - halfLength, s + halfLength)) continue; // the kerb moves there
         const { p, dir } = pointAt(pts, cum, s);
         const off = lane.off(s);
         const pos = { x: p.x - dir.z * off, z: p.z + dir.x * off };
+        if (placeRand(seed, pos) >= lane.occupancy) continue; // keyed by the spot: stable across OSM changes elsewhere
         if (blockers.some((b) => dist(b, pos) < CLEARANCE)) continue;
         if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) continue;
         if (!inPlayArea(pos) || insideAnyFootprint(pos, buildings)) continue;
@@ -125,74 +113,8 @@ export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: Building
     }
   }
   if (spots.length <= MAX_SPOTS) return spots;
-  // deterministic random subset, original order kept
-  const keep = spots.map((_, i) => i);
-  for (let i = keep.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [keep[i], keep[j]] = [keep[j]!, keep[i]!];
-  }
+  // deterministic subset keyed by position (the spots with the lowest draw), original order kept
+  const key = spots.map((sp) => placeRand(seed, sp.pos, 1));
+  const keep = spots.map((_, i) => i).sort((a, b) => key[a]! - key[b]! || a - b);
   return keep.slice(0, MAX_SPOTS).sort((a, b) => a - b).map((i) => spots[i]!);
-}
-
-const SPAWN_ROAD = 'Neusser Straße';
-const SPAWN_CAR_AHEAD = 1.2; // metres in front of the player, along the spawn heading
-const ENTER_REACH = 2.7; // car centre at most this far from the spawn (enter radius 3 m)
-const PLAYER_CLEARANCE = 0.8; // car body at least this far from the spawn point
-const CAR_HALF_WIDTH = 0.9;
-const CAR_CLEAR_ALONG = 6;
-const CAR_CLEAR_ACROSS = 2.5;
-
-/** Distance from p to the outline of a car (oriented box 1.8 m × vehicle length) standing at `car`. */
-export function carContourDistance(car: Spot, p: Pt): number {
-  const fx = Math.sin(car.heading), fz = Math.cos(car.heading);
-  const dx = p.x - car.pos.x, dz = p.z - car.pos.z;
-  const along = Math.max(0, Math.abs(dx * fx + dz * fz) - TUNING.vehicle.length / 2);
-  const across = Math.max(0, Math.abs(dx * fz - dz * fx) - CAR_HALF_WIDTH);
-  return Math.hypot(along, across);
-}
-
-/**
- * The car next to the spawn: on the spawn's side of Neusser Straße, in the middle of the parking strip there (or
- * 1 m inside the kerb / cycle lane without a strip), oriented like the other cars of that side, 1.2 m ahead of
- * the player along the spawn heading. Throws when the spot is out of reach (> 2.7 m) or crowds the player (body
- * < 0.8 m away), outside the play area, on the tracks or in a building.
- */
-export function spawnCarSpot(f: OsmFeatures, spawn: Pt & { heading: number }, buildings: BuildingMesh[]): Spot {
-  let best: { road: Road; n: ReturnType<typeof nearestOn> } | undefined;
-  for (const r of f.roads) {
-    if (r.name !== SPAWN_ROAD || dedupe(r.points).length < 2) continue;
-    const n = nearestOn(r, spawn);
-    if (!best || n.dist < best.n.dist) best = { road: r, n };
-  }
-  if (!best) throw new Error(`spawnCarSpot: no road named ${SPAWN_ROAD}`);
-  const { road, n } = best;
-  const side = n.d >= 0 ? 1 : -1; // the spawn's side of the road, relative to the way direction
-  const c = road.cross;
-  const park = side > 0 ? c.parkRight : c.parkLeft;
-  const o = (side > 0 ? c.parkRightOrientation : c.parkLeftOrientation) ?? 'parallel';
-  const ahead = { x: Math.sin(spawn.heading), z: Math.cos(spawn.heading) };
-  const s = n.s + (ahead.x * n.dir.x + ahead.z * n.dir.z >= 0 ? 1 : -1) * SPAWN_CAR_AHEAD; // ahead, along the road
-  const pts = dedupe(road.points);
-  const { p, dir } = pointAt(pts, cumulative(pts), s);
-  const off = (park > 0 ? stripCentre(road, side) : kerbRow(road, side))(s);
-  const pos = { x: p.x - dir.z * off, z: p.z + dir.x * off };
-  const spot = { pos, heading: parkHeading(dir, side, road.oneway, park > 0 ? STRIP_ANGLE[o] : 0) };
-  const reach = dist(pos, spawn), body = carContourDistance(spot, spawn);
-  if (reach > ENTER_REACH) throw new Error(`spawnCarSpot: car ${reach.toFixed(2)} m from the spawn (> ${ENTER_REACH})`);
-  if (body < PLAYER_CLEARANCE) throw new Error(`spawnCarSpot: car body ${body.toFixed(2)} m from the spawn (< ${PLAYER_CLEARANCE})`);
-  const ring = [...f.boundary, f.boundary[0]!];
-  if (!pointInPolygon(pos, f.boundary) || distToPolyline(pos, ring) < BOUNDARY_CLEARANCE) throw new Error('spawnCarSpot: outside the play area');
-  if (f.tramTracks.some((t) => distToPolyline(pos, t) < TRACK_CLEARANCE)) throw new Error('spawnCarSpot: on the tracks');
-  if (insideAnyFootprint(pos, buildings)) throw new Error('spawnCarSpot: inside a building');
-  return spot;
-}
-
-/** `spot` first, followed by those `spots` that do not overlap it (< 6 m along or < 2.5 m across its axis). */
-export function withSpawnCar(spot: Spot, spots: Spot[]): Spot[] {
-  const fx = Math.sin(spot.heading), fz = Math.cos(spot.heading);
-  const overlaps = (s: Spot) => {
-    const dx = s.pos.x - spot.pos.x, dz = s.pos.z - spot.pos.z;
-    return Math.abs(dx * fx + dz * fz) < CAR_CLEAR_ALONG && Math.abs(dx * fz - dz * fx) < CAR_CLEAR_ACROSS;
-  };
-  return [spot, ...spots.filter((s) => !overlaps(s))];
 }
