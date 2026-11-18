@@ -47,6 +47,7 @@ Umgebungsvariablen:
 | `MAX_PLAYERS` | 40 | gleichzeitige Spieler; mehr ist möglich (bis 100), lässt aber den NPCs weniger Rechenzeit (die Last-Bremse dünnt sie dann aus) |
 | `PUBLIC_URL` | – | nur nötig, wenn die Spiel-Verbindung über eine andere Adresse laufen soll als die Seite (z. B. `spiel.example.org`); ohne Angabe nutzt der Client die Adresse der Seite |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `NN_NPCS` | `on` | `off`: keine NPCs (Passanten, Radfahrer, Autos, Parkgruppen) |
 | `NN_WEATHER` | `live` | `live`: alle 15 min von Open-Meteo; `off`: kein Abruf, klares Wetter; im Entwicklungsmodus auch ein festes Wetter: `clear`, `cloudy`, `mist`, `fog`, `drizzle`, `rain`, `heavyrain`, `snow` |
 
 Ohne Docker: ein bloßes `npm start` ohne `NODE_ENV=production` startet den Server im Entwicklungsmodus (Teleport, Fliegen, Schreib-Hooks für Tests). In Produktion immer `NODE_ENV=production` setzen; das Docker-Image tut das.

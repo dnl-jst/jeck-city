@@ -49,6 +49,8 @@ export const NPC_DESPAWN = 300;
 export const NPC_MAX = 400;
 /** NPCs this close (m) to a player get kinematic bodies in the physics world. */
 export const NPC_BODY_RADIUS = 60;
+/** People (walkers, cyclists, sitters) get bodies only this close (m) to a player; cars within NPC_BODY_RADIUS. */
+export const NPC_PERSON_BODY_RADIUS = 25;
 /** NPCs this close (m) to a player check every tick whether the player is in their way. */
 export const NPC_REACT_RADIUS = 30;
 /** An NPC says something at most once per this many seconds. */

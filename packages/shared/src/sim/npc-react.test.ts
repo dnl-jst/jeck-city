@@ -158,5 +158,7 @@ test('bodiesNear lists only NPCs within the radius of a point', () => {
   walker(40); // x = -60
   walker(85); // x = -15
   expect(d.bodiesNear(0, [{ x: -60, z: 5 }], 20).length).toBe(1);
-  expect(d.bodiesNear(0, [{ x: -60, z: 5 }], 60).length).toBe(2);
+  // people get bodies only within NPC_PERSON_BODY_RADIUS (25 m), even when a larger radius is asked
+  expect(d.bodiesNear(0, [{ x: -60, z: 5 }], 60).length).toBe(1);
+  expect(d.bodiesNear(0, [{ x: -37, z: 5 }], 60).length).toBe(2);
 });

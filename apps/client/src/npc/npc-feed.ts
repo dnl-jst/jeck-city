@@ -1,5 +1,5 @@
 import {
-  NPC_BLEND_S, NPC_FADE_IN_S, planAt, type NpcAction, type NpcBatch, type NpcBody, type NpcKind, type NpcLook, type NpcPose,
+  NPC_BLEND_S, NPC_FADE_IN_S, NPC_PERSON_BODY_RADIUS, planAt, type NpcAction, type NpcBatch, type NpcBody, type NpcKind, type NpcLook, type NpcPose,
   type NpcSource, type Plan,
 } from '@nn/shared';
 
@@ -103,7 +103,8 @@ export class ClientNpcFeed implements NpcSource {
     for (const [id, e] of this.npcs) {
       if (e.goneMs !== null) continue;
       const p = planAt(e.plan, tick);
-      if (!points.some((q) => Math.hypot(p.x - q.x, p.z - q.z) <= r)) continue;
+      const rr = e.plan.kind === 'driver' ? r : Math.min(r, NPC_PERSON_BODY_RADIUS);
+      if (!points.some((q) => Math.hypot(p.x - q.x, p.z - q.z) <= rr)) continue;
       out.push({ id, kind: e.plan.kind, x: p.x, y: p.y, z: p.z, heading: p.heading, pitch: p.pitch, vehicleType: e.plan.look.vehicleType, lying: e.plan.action === 'down' });
     }
     return out;

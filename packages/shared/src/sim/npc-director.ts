@@ -1,5 +1,5 @@
 import {
-  KNOCKDOWN_KMH, KNOCKDOWN_S, NPC_DESPAWN, NPC_GIVE_UP_S, NPC_MAX, NPC_PLAN_LEAD_S, NPC_REACT_RADIUS, NPC_SAY_AFTER_S, NPC_SAY_COOLDOWN_S,
+  KNOCKDOWN_KMH, KNOCKDOWN_S, NPC_DESPAWN, NPC_PERSON_BODY_RADIUS, NPC_GIVE_UP_S, NPC_MAX, NPC_PLAN_LEAD_S, NPC_REACT_RADIUS, NPC_SAY_AFTER_S, NPC_SAY_COOLDOWN_S,
   NPC_SPAWN_FIRST_MIN, NPC_SPAWN_MAX, NPC_SPAWN_MIN, TICK_HZ,
 } from '../net/constants';
 import { linesFor } from '../npc/lines';
@@ -76,8 +76,12 @@ export type NpcBody = { id: number; kind: NpcKind; x: number; y: number; z: numb
 
 const LAYER_OF: Record<'walker' | 'cyclist' | 'driver', NetLayer> = { walker: 'walk', cyclist: 'cycle', driver: 'drive' };
 
-/** Traffic is checked every this many ticks per NPC (phase: id). */
-const TRAFFIC_EVERY = 6;
+/** Traffic is checked every this many ticks per NPC (phase: id); NPCs far from every player less often. */
+const TRAFFIC_EVERY = 6, TRAFFIC_FAR = 12;
+/** "Far from every player" (m, per axis). */
+const FAR_FROM_PLAYERS = 100;
+/** With the density lowered, surplus NPCs this far (m) from every player and out of their view are dissolved. */
+const SURPLUS_FROM = 120;
 /** Plan changes by traffic that are not needed for safety (resume, speed cap) at most this often (ticks). */
 const TRAFFIC_CALM = 30;
 /** Length and half width (m) of what traffic sees. */
@@ -148,6 +152,8 @@ export class NpcDirector {
   /** Positions of the moving NPCs and players, refreshed every TRAFFIC_EVERY ticks. */
   private obstacles: Obstacle[] = [];
   private obstacleGrid = new Map<string, Obstacle[]>();
+  /** NPCs farther than FAR_FROM_PLAYERS from every player (at the last refresh). */
+  private farIds = new Set<number>();
   /** Turn arcs vehicles have committed to (past the point where they could still stop), by NPC id. */
   private readonly claims = new Map<number, { j: number; layer: 'drive' | 'cycle'; turn: number }>();
   /** Player id → the NPC scolding them and until when (one at a time). */
@@ -253,7 +259,9 @@ export class NpcDirector {
     const nearPlayers = this.nearPlayerIds();
     for (const n of [...this.npcs.values()]) {
       if (n.kind === 'sitter' || n.downUntil || n.getupUntil) continue;
-      if ((n.id + tick) % TRAFFIC_EVERY === 0 || nearPlayers.has(n.id)) this.traffic(n, tick, msgs);
+      // near a player: vehicles every tick, walkers every third; far from all players: every TRAFFIC_FAR ticks
+      const every = nearPlayers.has(n.id) ? (n.kind === 'walker' ? 3 : 1) : this.farIds.has(n.id) ? TRAFFIC_FAR : TRAFFIC_EVERY;
+      if ((n.id + tick) % every === 0) this.traffic(n, tick, msgs);
     }
     if (tick % CENSUS_EVERY === 0) this.census(tick, foci, msgs);
     return msgs;
@@ -427,6 +435,10 @@ export class NpcDirector {
       });
     }
     this.obstacles = list;
+    this.farIds = new Set();
+    for (const o of list) {
+      if (!this.players.some((p) => Math.abs(p.x - o.x) < FAR_FROM_PLAYERS && Math.abs(p.z - o.z) < FAR_FROM_PLAYERS)) this.farIds.add(o.id);
+    }
     this.obstacleGrid = new Map();
     for (const o of list) {
       const k = `${Math.floor(o.x / OBST_CELL)},${Math.floor(o.z / OBST_CELL)}`;
@@ -992,7 +1004,8 @@ export class NpcDirector {
     for (const n of cand) {
       if (seen.has(n.id) || !this.npcs.has(n.id)) continue;
       const p = planAt(n.plan, tick);
-      if (!points.some((q) => Math.hypot(p.x - q.x, p.z - q.z) <= r)) continue;
+      const rr = n.kind === 'driver' ? r : Math.min(r, NPC_PERSON_BODY_RADIUS);
+      if (!points.some((q) => Math.hypot(p.x - q.x, p.z - q.z) <= rr)) continue;
       seen.add(n.id);
       out.push({ id: n.id, kind: n.kind, x: p.x, y: p.y, z: p.z, heading: p.heading, pitch: p.pitch, vehicleType: n.look.vehicleType, lying: n.plan.action === 'down' });
     }
@@ -1057,6 +1070,7 @@ export class NpcDirector {
       }
     }
     if (!foci.length) return;
+    if (this.density < 1) this.dissolveSurplus(tick, foci, pos, msgs);
 
     let budget = SPAWN_PER_CENSUS;
     const start = Math.floor(tick / CENSUS_EVERY) % foci.length;
@@ -1090,6 +1104,29 @@ export class NpcDirector {
       }
     }
     this.smallTalk(tick, foci, msgs);
+  }
+
+  /**
+   * The load brake lowered the density: per player area and kind, NPCs beyond the target (+ 25 %) go, a few per
+   * census, only those farther than SURPLUS_FROM from every player and out of their view.
+   */
+  private dissolveSurplus(tick: number, foci: readonly Focus[], pos: Map<number, { x: number; z: number; n: NpcState }>, msgs: NpcMsg[]): void {
+    let budget = 4;
+    for (const f of foci) {
+      for (const kind of ['walker', 'cyclist', 'driver'] as const) {
+        const near = [...pos.values()].filter((p) => p.n.kind === kind && Math.hypot(p.x - f.x, p.z - f.z) <= AREA);
+        let surplus = near.length - Math.ceil(NPC_TARGETS[kind] * this.density * 1.25);
+        for (const p of near) {
+          if (surplus <= 0 || budget <= 0) break;
+          if (!this.spawnOk(p.x, p.z, foci, true) || foci.some((g) => Math.hypot(g.x - p.x, g.z - p.z) < SURPLUS_FROM)) continue;
+          this.remove(p.n, msgs);
+          pos.delete(p.n.id);
+          surplus--;
+          budget--;
+        }
+      }
+      if (budget <= 0) return;
+    }
   }
 
   /** Whether (x, z) is a fair spawn spot for all foci: far enough away and, in populated areas, out of view. */

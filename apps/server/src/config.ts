@@ -33,6 +33,8 @@ export type Config = {
   /** Joins allowed per address in a sliding 60 s window; NN_JOIN_PER_MIN raises it, in dev only (load test: all bots share one address). */
   joinPerMin: number;
   weather: WeatherSource;
+  /** NN_NPCS = on | off: the server's NPCs (on when the world has npc.json). */
+  npcs: boolean;
 };
 
 type Env = Record<string, string | undefined>;
@@ -72,6 +74,13 @@ function parseFakeLag(raw: string): FakeLag {
   return { ms: ms!, jitterMs: jitterMs!, stallPct: stallPct! };
 }
 
+function parseOnOff(raw: string | undefined, name: string, fallback: boolean): boolean {
+  if (raw === undefined || raw === '') return fallback;
+  if (raw === 'on') return true;
+  if (raw === 'off') return false;
+  throw new Error(`${name} must be on or off, got "${raw}"`);
+}
+
 /** NN_WEATHER = live | off | a preset name; presets are dev-only (production falls back to live). */
 function parseWeather(raw: string | undefined, dev: boolean): WeatherSource {
   if (!raw || raw === 'live') return 'live';
@@ -98,6 +107,7 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
     reconnectS: RECONNECT_S,
     joinPerMin: dev ? intEnv(env, 'NN_JOIN_PER_MIN', JOIN_PER_IP_PER_MIN, 1, 100_000) : JOIN_PER_IP_PER_MIN,
     weather: parseWeather(env.NN_WEATHER, dev),
+    npcs: parseOnOff(env.NN_NPCS, 'NN_NPCS', true),
     ...overrides,
   };
 }

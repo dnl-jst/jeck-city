@@ -100,7 +100,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     this.joins = new JoinLimiter(cfg.joinPerMin);
     this.setState(new NippesState());
     this.sim = await WorldSim.create(assets);
-    if (assets.npc) {
+    if (assets.npc && cfg.npcs) {
       // NPCs stand on whatever the collision has there (sidewalk, road, lawn), looked up once per metre
       const heights = new Map<number, number>();
       const pw = this.sim.pw, terrain = assets.terrain;

@@ -141,6 +141,25 @@ test('deterministic: same seed and foci → same messages', () => {
   expect(JSON.stringify(ma)).toBe(JSON.stringify(mb));
 });
 
+test('the load brake dissolves surplus NPCs out of sight, never close to a player', () => {
+  const d = new NpcDirector(gridNet(), flat, 15);
+  const f: Focus = { x: 0, z: 0, heading: 0 };
+  let t = run(d, [f], 0, 600);
+  const before = within(d, t, f, 250).filter((n) => n.kind === 'walker').length;
+  d.density = 0.2;
+  // where each NPC was the tick before it went: never within 120 m of the player
+  for (let k = 0; k < 1800; k++, t++) {
+    const was = new Map([...d.all()].map((n) => [n.id, planAt(n.plan, t)] as const));
+    for (const m of d.update(t, [f])) {
+      if (m.t !== 'gone') continue;
+      const p = was.get(m.id)!;
+      expect(Math.hypot(p.x - f.x, p.z - f.z)).toBeGreaterThan(120);
+    }
+  }
+  const after = within(d, t, f, 250).filter((n) => n.kind === 'walker').length;
+  expect(after).toBeLessThan(before * 0.6);
+});
+
 test('density 0.5 halves the targets', () => {
   const d = new NpcDirector(gridNet(), flat, 11);
   d.density = 0.5;

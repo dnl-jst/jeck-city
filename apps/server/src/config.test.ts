@@ -11,6 +11,13 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ MAX_PLAYERS: '0' })).toThrow();
   });
 
+  it('NN_NPCS switches the NPCs off (default on)', () => {
+    expect(loadConfig({}).npcs).toBe(true);
+    expect(loadConfig({ NN_NPCS: 'off' }).npcs).toBe(false);
+    expect(loadConfig({ NN_NPCS: 'on' }).npcs).toBe(true);
+    expect(() => loadConfig({ NN_NPCS: 'maybe' })).toThrow();
+  });
+
   it('PUBLIC_URL becomes a scheme-less public address (the client adds wss:// itself)', () => {
     expect(loadConfig({}).publicUrl).toBeNull();
     expect(loadConfig({ PUBLIC_URL: 'https://nippes.example.org/' }).publicUrl).toBe('nippes.example.org');
