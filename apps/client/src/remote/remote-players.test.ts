@@ -42,7 +42,6 @@ class FakeCar implements CarView {
   setPose(): void {}
   setWheels(): void {}
   setLights(_n: number, braking: boolean, power: number): void { this.lights = { braking, power }; }
-  updateGlare(): void {}
 }
 
 function setup(me = 0) {
@@ -54,7 +53,7 @@ function setup(me = 0) {
   const rigs: FakeRig[] = [];
   const variantsAsked: number[] = [];
   const rp = new RemotePlayers(scene, { setHidden: (ids) => hidden.push(new Set(ids)) }, {
-    me, colorOf: () => 0xff0000, typeOf: () => 'kleinwagen', occluded: () => false,
+    me, colorOf: () => 0xff0000, typeOf: () => 'kleinwagen',
     makeLabel: (n) => new FakeLabel(n, labels),
     makeCar: () => { const c = new FakeCar(); cars.push(c); return c; },
     bikeTypeOf: (id) => (id === 4 ? 'longjohn' : 'dutch'),

@@ -1,6 +1,6 @@
 import {
-  type BufferGeometry, CanvasTexture, Color, Group, type Material, type Object3D,
-  AdditiveBlending, type Camera, DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight, Sprite, SpriteMaterial,
+  type BufferGeometry, Color, Group, type Material, type Object3D,
+  DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
   Vector3, type Scene,
 } from 'three';
 import {
@@ -105,122 +105,6 @@ function beamTexture(): DataTexture {
   return t;
 }
 
-/** Radial glare: a hot core with a long soft falloff (white; tinted per lamp via the material colour). */
-function haloTexture(): CanvasTexture {
-  const n = 128;
-  const c = document.createElement('canvas');
-  c.width = c.height = n;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(n, n);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      const r = Math.hypot((i + 0.5) / n - 0.5, (j + 0.5) / n - 0.5) * 2;
-      const k = r >= 1 ? 0 : (Math.exp(-r * r * 60) + 0.35 * Math.exp(-r * r * 9) + 0.12 * Math.exp(-r * 3.5)) * (1 - r) ** 2;
-      const o = (j * n + i) * 4;
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = Math.min(255, 255 * k);
-      img.data[o + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  return new CanvasTexture(c);
-}
-
-/** Thin horizontal streak, brightest in the middle (an anamorphic-style flare line). */
-function streakTexture(): CanvasTexture {
-  const w = 256, h = 32;
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const g = c.getContext('2d')!;
-  const img = g.createImageData(w, h);
-  for (let j = 0; j < h; j++) {
-    for (let i = 0; i < w; i++) {
-      const x = ((i + 0.5) / w) * 2 - 1, y = ((j + 0.5) / h) * 2 - 1;
-      const k = Math.exp(-y * y * 30) * (1 - x * x) ** 3 * (0.4 + 0.6 * Math.exp(-x * x * 12));
-      const o = (j * w + i) * 4;
-      img.data[o] = img.data[o + 1] = img.data[o + 2] = 255 * k;
-      img.data[o + 3] = 255;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  return new CanvasTexture(c);
-}
-
-/** Is the straight line between two world points blocked (by buildings, walls…)? */
-export type Occluded = (from: Vector3, to: Vector3) => boolean;
-
-/** How strongly a lamp facing `forward` glares at a viewer in direction `toViewer` (both unit): 0 beside/behind, 1 head-on. */
-export function glareFacing(forward: Vector3, toViewer: Vector3, sharpness: number): number {
-  return Math.max(0, forward.dot(toViewer)) ** sharpness;
-}
-
-/**
- * Lens glare of one lamp: a halo and a horizontal streak, drawn on top of everything (constant screen size)
- * and faded by how directly the lamp faces the camera; a ray towards the camera hides it behind buildings.
- */
-class Glare {
-  private readonly halo: Sprite;
-  private readonly streak: Sprite;
-  private readonly world = new Vector3();
-  private readonly fwd = new Vector3();
-  private readonly to = new Vector3();
-  private shown = 0;
-
-  constructor(
-    parent: Group, readonly at: Vector3, private readonly forward: Vector3,
-    color: number, private readonly size: number, private readonly sharpness: number, private readonly streakGain: number, maps: { halo: CanvasTexture; streak: CanvasTexture },
-  ) {
-    const mat = (map: CanvasTexture) => new SpriteMaterial({
-      map, color, blending: AdditiveBlending, transparent: true, depthTest: false, depthWrite: false, sizeAttenuation: false, fog: false, opacity: 0,
-    });
-    this.halo = new Sprite(mat(maps.halo));
-    this.streak = new Sprite(mat(maps.streak));
-    for (const sp of [this.halo, this.streak]) {
-      sp.position.copy(at);
-      sp.renderOrder = 20;
-      sp.frustumCulled = false;
-      sp.visible = false;
-      parent.add(sp);
-    }
-  }
-
-  /** Moves the lamp (chassis frame). */
-  place(at: Vector3): void {
-    this.at.copy(at);
-    this.halo.position.copy(at);
-    this.streak.position.copy(at);
-  }
-
-  /** k = lamp brightness 0..1 (night, brake…); dt smooths the occlusion fade. */
-  update(camera: Camera, parent: Group, k: number, occluded: Occluded, dt: number): void {
-    let want = 0;
-    if (k > 0.01) {
-      this.world.copy(this.at).applyMatrix4(parent.matrixWorld);
-      this.fwd.copy(this.forward).transformDirection(parent.matrixWorld);
-      this.to.copy(camera.position).sub(this.world);
-      const d = this.to.length();
-      this.to.divideScalar(d);
-      const f = glareFacing(this.fwd, this.to, this.sharpness);
-      // a lamp only glares when its glass is visible: the hood/boot hides it shortly off-axis, buildings fully
-      if (f > 0.002 && !occluded(this.world, camera.position)) want = k * f * Math.min(1, 14 / Math.max(d, 1)) ** 0.5;
-    }
-    this.shown += (want - this.shown) * Math.min(1, dt * 18);
-    const o = this.shown;
-    const vis = o > 0.003;
-    this.halo.visible = this.streak.visible = vis;
-    if (!vis) return;
-    this.halo.material.opacity = Math.min(1, o * 1.4);
-    this.halo.scale.setScalar(this.size * (0.5 + 0.5 * o));
-    this.streak.material.opacity = o * 0.8 * this.streakGain;
-    this.streak.scale.set(this.size * (1.6 + 2.4 * o), this.size * 0.09, 1);
-  }
-
-  hide(): void {
-    this.shown = 0;
-    this.halo.visible = this.streak.visible = false;
-  }
-}
-
 /** What the wheels follow: a Vehicle, or a stand-in built from a streamed car state. */
 export type WheelSource = { speed(): number; wheelSteering(w: number): number; wheelSuspension(w: number): number };
 
@@ -289,13 +173,10 @@ export class DrivenCar {
   private readonly rig = new Group();
   private readonly beams: SpotLight[] = [];
   private readonly tails: SpotLight[] = [];
-  private readonly glares: { glare: Glare; head: boolean; side: 'l' | 'r' }[] = [];
   private readonly rigs = new Map<CarType, Rig>();
   private current: Rig | null = null;
   private spin = 0;
   private radius: number = TUNING.vehicle.wheelRadius;
-  private headK = 0;
-  private tailK = 0;
   private shown = false;
   private readonly qSteer = new Quaternion();
   private readonly qSpin = new Quaternion();
@@ -303,7 +184,7 @@ export class DrivenCar {
   private readonly axisY = new Vector3(0, 1, 0);
 
   /**
-   * beams: false = another player's car: no spotlights (only the emissive lamp materials and glare sprites), so the
+   * beams: false = another player's car: no spotlights (only the emissive lamp materials), so the
    * scene's light count stays constant and no extra shadow maps are rendered.
    */
   constructor(scene: Scene, private readonly models?: CarModels, { beams = true }: { beams?: boolean } = {}) {
@@ -331,16 +212,11 @@ export class DrivenCar {
       this.rig.add(l, l.target);
       this.tails.push(l);
     }
-    const maps = { halo: haloTexture(), streak: streakTexture() };
-    for (const side of ['l', 'r'] as const) {
-      this.glares.push({ head: true, side, glare: new Glare(this.group, new Vector3(), new Vector3(0, 0, 1), 0xfff2dc, 0.55, 3, 1, maps) });
-      this.glares.push({ head: false, side, glare: new Glare(this.group, new Vector3(), new Vector3(0, 0, -1), 0xff2a14, 0.22, 2, 0.35, maps) });
-    }
     this.placeLamps({ fl: new Vector3(0.6, G + 0.8, 2.1), fr: new Vector3(-0.6, G + 0.8, 2.1), rl: new Vector3(0.74, G + 0.76, -2.1), rr: new Vector3(-0.74, G + 0.76, -2.1) });
     scene.add(this.rig);
   }
 
-  /** Spotlights and glare sprites at the lamps of the current model. */
+  /** Spotlights at the lamps of the current model. */
   private placeLamps(l: Rig['lamps']): void {
     [l.fl, l.fr].forEach((p, k) => {
       const b = this.beams[k], s = Math.sign(p.x) || 1;
@@ -355,14 +231,6 @@ export class DrivenCar {
       t.position.set(p.x, p.y, p.z - 0.05);
       t.target.position.set(p.x + Math.sign(p.x) * 0.16, G - 0.6, p.z - 8);
     });
-    for (const { glare, head, side } of this.glares) glare.place(head ? (side === 'l' ? l.fl : l.fr) : side === 'l' ? l.rl : l.rr);
-  }
-
-  /** Lens glare of head- and tail lamps for the current camera; call after setPose/setLights, before rendering. */
-  updateGlare(camera: Camera, occluded: Occluded, dt: number): void {
-    if (!this.shown) return;
-    this.group.updateMatrixWorld();
-    for (const { glare, head } of this.glares) glare.update(camera, this.group, head ? this.headK : this.tailK, occluded, dt);
   }
 
   show(type: CarType, color: number): void {
@@ -389,7 +257,6 @@ export class DrivenCar {
     this.shown = false;
     this.setBeams(0);
     for (const l of this.tails) l.intensity = 0;
-    for (const { glare } of this.glares) glare.hide();
   }
 
   setPose(p: CarPose): void {
@@ -424,8 +291,6 @@ export class DrivenCar {
     this.setBeams(this.shown && power > 0.5 ? night * power : 0);
     const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
     for (const l of this.tails) l.intensity = tail * power;
-    this.headK = night * power;
-    this.tailK = (brake ? 1 : 0.3 * night) * power;
   }
 
   /**
