@@ -1,12 +1,12 @@
 /** Ticks per check (5 s at 60 Hz). */
 const WINDOW = 300;
-/** Above this tick p95 (ms) the NPC density goes down, below LOW it goes up again. */
-const HIGH = 14, LOW = 10;
+/** Above this tick p95 (ms) the NPC density goes down, below LOW it goes up again (spec: 14/10; see the load test note). */
+const HIGH = 15, LOW = 12.5;
 const STEP = 0.1, MIN = 0.1;
 
 /**
  * The NPCs' safety net: every 5 s the p95 of the tick times of the last 5 s decides whether the NPC density goes down
- * (> 14 ms) or up (< 10 ms) by 0.1, within 0.1..1. Measured on the machine the server runs on.
+ * (> 15 ms) or up (< 12.5 ms) by 0.1, within 0.1..1 (1.7 ms below the 16.7 ms budget). Measured on the machine the server runs on.
  */
 export class LoadBrake {
   private readonly ms = new Float64Array(WINDOW);
