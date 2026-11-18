@@ -1,4 +1,0 @@
-# Brotli/gzip variants reused between builds, see scripts/precompress.mjs --cache. Generated, not versioned;
-# the directory itself stays so the Dockerfile can always COPY it.
-*
-!.gitignore

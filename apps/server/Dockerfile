@@ -25,10 +25,7 @@ RUN for f in manifest.json collision.bin terrain.bin; do \
 COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
-# Brotli/gzip variants of earlier builds (CI fills it on the runner, see .github/workflows/docker-image.yml; locally it
-# is usually empty): unchanged world files are not compressed again.
-COPY .precompress-cache/ /precompress-cache/
-RUN NN_PRECOMPRESS_CACHE=/precompress-cache npm run build
+RUN npm run build
 
 # ---- runtime: server (tsx) + built client ----
 FROM node:24-bookworm-slim
