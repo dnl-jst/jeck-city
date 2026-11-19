@@ -70,8 +70,11 @@ const UNIT_LENGTH = TRAIN.sections * TRAIN.sectionLength + (TRAIN.sections - 1) 
 export const TRAIN_LENGTH = TRAIN.units * UNIT_LENGTH + (TRAIN.units - 1) * TRAIN.coupling;
 export const TRAIN_SECTIONS = TRAIN.units * TRAIN.sections;
 
-/** Driving: acceleration and braking (m/s²), top speed (m/s; 60 km/h), time at a platform (s). */
-const ACCEL = 1.0, VMAX = 60 / 3.6, DWELL = 22;
+/**
+ * Driving: acceleration and braking (m/s²), top speed (m/s; 60 km/h), time at a platform (s): with the doors' timing
+ * below they are open, or moving, for 15 s.
+ */
+const ACCEL = 1.0, VMAX = 60 / 3.6, DWELL = 17;
 /** Doors: open this long after the stop, start closing this long before leaving, take this long to move (s). */
 const DOOR_AFTER = 0.8, DOOR_BEFORE = 3, DOOR_MOVE = 1.6;
 /** A train starts and ends with its tail (head) this far from the track's ends. */
@@ -84,8 +87,10 @@ export function sectionOffset(i: number): number {
   return unit + (k - (TRAIN.sections - 1) / 2) * (TRAIN.sectionLength + TRAIN.joint);
 }
 
-type Leg = { t0: number; s0: number; d: number; tAcc: number; tCruise: number; v: number };
-type Dwell = { t0: number; t1: number; side: 1 | -1; station: number };
+/** A stretch between two standstills: from t0 over d metres from s0, speeding up at `a` for tAcc to v, cruising, braking at `a`. */
+type Leg = { t0: number; s0: number; d: number; tAcc: number; tCruise: number; v: number; a: number };
+/** A stop of a run: the train stands from t0 to t1; its doors are shut again by `doors` (it may wait on for its time). */
+type Dwell = { t0: number; t1: number; doors: number; side: 1 | -1; station: number };
 /**
  * One run along a track: how the train moves (legs) and where it stands (dwells), by seconds from the run's start.
  * at: the dwell per stop of the track (undefined: not served). lead: when the first served stop's timetable time is.
@@ -118,52 +123,87 @@ export type TransitModel = {
 /** Quickest run over d metres from standstill to standstill (s). */
 const quickest = (d: number): number => (d >= (VMAX * VMAX) / ACCEL ? d / VMAX + VMAX / ACCEL : 2 * Math.sqrt(Math.max(0, d) / ACCEL));
 
-/** A leg over d metres from s0, starting at t0 and taking `time` seconds (at least the quickest run). */
-function legOf(t0: number, s0: number, d: number, time: number): Leg {
-  const D = Math.max(time, quickest(d));
-  // accelerate to v, cruise, brake: d = v · (D − v / a)
-  const v = Math.min(VMAX, (ACCEL * D - Math.sqrt(Math.max(0, ACCEL * ACCEL * D * D - 4 * ACCEL * d))) / 2);
-  const tAcc = v / ACCEL;
-  return { t0, s0, d, tAcc, tCruise: Math.max(0, D - 2 * tAcc), v };
-}
+/** With time to spare a train speeds up and brakes as gently as this (m/s²), and cruises no slower than this (m/s; 30 km/h). */
+const GENTLE = 0.4, SLOW = 30 / 3.6;
+
+/** The longest a train takes over d metres when it has time to spare: gentle all the way, cruising at SLOW. */
+const easiest = (d: number): number => (d >= (SLOW * SLOW) / GENTLE ? d / SLOW + SLOW / GENTLE : 2 * Math.sqrt(Math.max(0, d) / GENTLE));
 
 /**
- * A train stands at a stop from STAND_BEFORE seconds before its timetable time (given in whole minutes) to
- * DWELL − STAND_BEFORE after it.
+ * A leg over d metres from s0, starting at t0 and taking `time` seconds (at least the quickest run). With more time
+ * than that it speeds up and brakes more gently before it gives up top speed: first one long gentle rise and fall of
+ * the speed, then, at the gentlest, a slower cruise between.
  */
-const STAND_BEFORE = 8;
+function legOf(t0: number, s0: number, d: number, time: number): Leg {
+  const D = Math.max(time, quickest(d));
+  if (d <= 0) return { t0, s0, d: 0, tAcc: 0, tCruise: D, v: 0, a: ACCEL };
+  // speeding up for half the time and braking for the other half
+  const even = (4 * d) / (D * D), peak = (2 * d) / D;
+  if (even <= ACCEL && even >= GENTLE && peak <= VMAX) return { t0, s0, d, tAcc: D / 2, tCruise: 0, v: peak, a: even };
+  if (peak > VMAX) {
+    // a long stretch: at top speed between, as gentle as the time allows
+    const a = Math.min(ACCEL, Math.max(GENTLE, VMAX / Math.max(1e-6, D - d / VMAX)));
+    if (a > GENTLE || d / VMAX + VMAX / GENTLE >= D) {
+      const tAcc = VMAX / a;
+      return { t0, s0, d, tAcc, tCruise: Math.max(0, D - 2 * tAcc), v: VMAX, a };
+    }
+  }
+  // accelerate at a to v, cruise, brake: d = v · (D − v / a)
+  const a = even < GENTLE ? GENTLE : ACCEL;
+  const v = Math.min(VMAX, (a * D - Math.sqrt(Math.max(0, a * a * D * D - 4 * a * d))) / 2);
+  const tAcc = v / a;
+  return { t0, s0, d, tAcc, tCruise: Math.max(0, D - 2 * tAcc), v, a };
+}
+
+/** A train reaches a stop STAND_BEFORE seconds before its timetable time (which is given in whole minutes). */
+const STAND_BEFORE = 6;
 
 /**
  * The profile of a run over the stops of a track. times: per stop its timetable time in seconds after the first
- * served one (−1: not served) – then the train keeps those times (later where the way is too long for them); without
- * times it serves every stop as quickly as it can.
+ * served one (−1: not served). Then the run starts and ends on time, the stops between within about half a minute
+ * (see below); without times it serves every stop as quickly as it can.
  */
 function profileOf(tr: TransitTrack, length: number, times?: readonly number[]): Profile {
   const first = TRAIN_LENGTH / 2 + END_MARGIN, last = length - TRAIN_LENGTH / 2 - END_MARGIN;
   const served = tr.stops.map((_, i) => i).filter((i) => !times || times[i]! >= 0);
   const legs: Leg[] = [], dwells: Dwell[] = [], at: (Dwell | undefined)[] = tr.stops.map(() => undefined);
-  let time = 0, pos = first, lead = 0, late = 0;
+  let lead = 0, time = 0, pos = first;
+  // The timetable is in whole minutes: kept stop by stop, a train would crawl over one stretch and race over the next.
+  // So only the run as a whole keeps the timetable (first to last served stop): every stretch is driven slower than
+  // the quickest run by the same share, as far as driving gently allows (see legOf, easiest), and only what time is
+  // left then is waited out in equal parts at the stops, doors shut.
+  let ease = 1, wait = 0;
+  const hopOf = (n: number): number => tr.stops[served[n]!]!.s - tr.stops[served[n - 1]!]!.s;
+  const runOf = (n: number, share: number): number => Math.min(quickest(hopOf(n)) * share, Math.max(quickest(hopOf(n)), easiest(hopOf(n))));
+  if (times && served.length > 1) {
+    const hops = served.length - 1, given = times[served[hops]!]! - hops * DWELL;
+    const total = (share: number): number => { let sum = 0; for (let n = 1; n <= hops; n++) sum += runOf(n, share); return sum; };
+    // the share that uses the time up, if gentle driving can
+    let lo = 1, hi = 8;
+    for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (total(mid) < given) lo = mid; else hi = mid; }
+    ease = lo;
+    wait = Math.max(0, (given - total(ease)) / hops);
+  }
   served.forEach((i, n) => {
     const stop = tr.stops[i]!;
-    // from the track's start to its first stop (a run that begins further on appears standing at its first stop)
-    if (n > 0 || i === 0) {
-      const d = Math.max(0, stop.s - pos);
-      // the time the timetable leaves for the way (none: as quick as possible)
-      const due = times && n > 0 ? lead + times[i]! + late - STAND_BEFORE - time : 0;
-      const leg = legOf(time, pos, d, due);
+    let arrive: number;
+    if (n === 0) {
+      // from the track's start to its first stop (a run that begins further on appears standing at its first stop)
+      const leg = legOf(0, i === 0 ? first : stop.s, i === 0 ? Math.max(0, stop.s - first) : 0, 0);
       legs.push(leg);
-      const took = 2 * leg.tAcc + leg.tCruise;
-      if (times && n > 0 && took > due) late += took - due;
-      time += took;
+      arrive = 2 * leg.tAcc + leg.tCruise;
+      lead = arrive + STAND_BEFORE;
     } else {
-      legs.push(legOf(time, stop.s, 0, 0));
+      const prev = dwells[dwells.length - 1]!, d = Math.max(0, stop.s - pos), run = runOf(n, ease);
+      prev.t1 = prev.t0 + DWELL + wait;
+      arrive = prev.t1 + run;
+      legs.push(legOf(prev.t1, pos, d, run));
     }
     pos = stop.s;
-    if (n === 0) lead = time + STAND_BEFORE;
-    const dwell: Dwell = { t0: time, t1: time + DWELL, side: stop.side, station: stop.station };
+    const dwell: Dwell = { t0: arrive, t1: arrive + DWELL, doors: arrive + DWELL, side: stop.side, station: stop.station };
     dwells.push(dwell);
     at[i] = dwell;
-    time += DWELL;
+    time = dwell.t1;
   });
   // on to the track's end (a run that ends before the last stop disappears standing there)
   if (served.length === 0 || served[served.length - 1] === tr.stops.length - 1) {
@@ -318,18 +358,18 @@ function tripDistance(tr: Profile, t: number): { s: number; v: number; leg: numb
   const u = t - leg.t0, total = 2 * leg.tAcc + leg.tCruise;
   const at = (s: number, v: number) => ({ s, v, leg: leg.d > 0 ? Math.min(1, Math.max(0, (s - leg.s0) / leg.d)) : 1 });
   if (u >= total) return at(leg.s0 + leg.d, 0);
-  if (u < leg.tAcc) return at(leg.s0 + 0.5 * ACCEL * u * u, ACCEL * u);
-  const sAcc = 0.5 * ACCEL * leg.tAcc * leg.tAcc;
+  if (u < leg.tAcc) return at(leg.s0 + 0.5 * leg.a * u * u, leg.a * u);
+  const sAcc = 0.5 * leg.a * leg.tAcc * leg.tAcc;
   if (u < leg.tAcc + leg.tCruise) return at(leg.s0 + sAcc + leg.v * (u - leg.tAcc), leg.v);
   const r = total - u;
-  return at(leg.s0 + leg.d - 0.5 * ACCEL * r * r, ACCEL * r);
+  return at(leg.s0 + leg.d - 0.5 * leg.a * r * r, leg.a * r);
 }
 
 /** How far the doors on `side` are open (0..1) `t` seconds into a trip. */
 function doorOpen(tr: Profile, t: number, side: 1 | -1): number {
   for (const d of tr.dwells) {
     if (d.side !== side || t < d.t0 || t > d.t1) continue;
-    const opening = (t - d.t0 - DOOR_AFTER) / DOOR_MOVE, closing = (d.t1 - DOOR_BEFORE + DOOR_MOVE - t) / DOOR_MOVE;
+    const opening = (t - d.t0 - DOOR_AFTER) / DOOR_MOVE, closing = (d.doors - DOOR_BEFORE + DOOR_MOVE - t) / DOOR_MOVE;
     return Math.max(0, Math.min(1, opening, closing));
   }
   return 0;

@@ -20,7 +20,9 @@ const here = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig(async (): Promise<UserConfig> => ({
   define: { __NN_DOWNLOAD__: JSON.stringify(await measureDownload(here("public"), here("node_modules/.cache/nn-download-size.json"))) },
-  server: { host: true, port: clientPort, strictPort: true, proxy },
+  // No hot reload: a saved file must not reload the game under a player (the world takes a while to load, and an
+  // online session would rejoin). Reload the page to see a change; NN_HMR=1 turns hot reload back on.
+  server: { host: true, port: clientPort, strictPort: true, proxy, hmr: process.env.NN_HMR === '1' },
   // vite preview does not compress; a real static host does. gzip text/binary assets so `npm run accept` measures
   // what a deployment would transfer.
   preview: { port: 4173 },

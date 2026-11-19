@@ -50,7 +50,7 @@ test('someone standing in a train is carried along when it leaves', async () => 
   const a = fixtureAssets();
   a.manifest.transit = transit;
   const sim = await WorldSim.create(a);
-  sim.setTransitTick(39 * 60); // standing at the stop, about to leave
+  sim.setTransitTick(34 * 60); // standing at the stop, about to leave
   const z0 = sectionOffset(3);
   sim.addPlayer(1, { x: 60.3, z: z0 });
   const N = NEUTRAL_INPUT(0);
@@ -175,7 +175,7 @@ test('someone sitting on a bench stays there while the train leaves and runs', a
   const a = fixtureAssets();
   a.manifest.transit = { ...transit, tracks: [{ ...transit.tracks[0]!, pts: [60, 0.65, -120, 60, 0.65, 120] }] };
   const sim = await WorldSim.create(a);
-  sim.setTransitTick(39 * 60); // about to leave
+  sim.setTransitTick(34 * 60); // about to leave
   const S = SECTION_STRIDE, z0 = sectionOffset(4);
   sim.addPlayer(1, { x: 20, z: 20 });
   const ch = (sim as unknown as { list: Map<number, { char: { teleport(p: { x: number; y: number; z: number }): void } }> }).list.get(1)!.char;

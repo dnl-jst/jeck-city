@@ -36,6 +36,8 @@ const RAMP = 130;
 const DEEP_EXTRA = 5.5;
 /** Platforms: found up to this far beside a track; at least this wide; a run shorter than this many samples is none. */
 const PLATFORM_REACH = 9, PLATFORM_MIN_RUN = 10;
+/** Two tracks this far apart at most (m) with a platform between them share it as an island. */
+const ISLAND_REACH = 20;
 /** A side platform is at least this wide, whatever OSM draws (m): room for a stair beside the way along it. */
 const SIDE_PLATFORM_W = STATION.platformWidth;
 
@@ -254,10 +256,14 @@ export async function buildNetwork(
       l.push([w, i]);
     }
   }
-  /** The nearest other track beside point i of w on `side` (1 left, −1 right): its distance across and its way. */
-  const neighbour = (w: Way, i: number, side: number, reach: number): { d: number; way: Way } | null => {
+  /**
+   * The nearest other track beside point i of w on `side` (1 left, −1 right): its distance across, its way, the point
+   * of it there and which of its sides (0 left, 1 right) faces w.
+   */
+  type Beside = { d: number; way: Way; j: number; facing: 0 | 1 };
+  const neighbour = (w: Way, i: number, side: number, reach: number): Beside | null => {
     const nx = w.fz[i]! * side, nz = -w.fx[i]! * side;
-    let best: { d: number; way: Way } | null = null;
+    let best: Beside | null = null;
     const r = Math.ceil((reach + 2) / CELL);
     const cx = Math.floor(w.x[i]! / CELL), cz = Math.floor(w.z[i]! / CELL);
     for (let gx = cx - r; gx <= cx + r; gx++) {
@@ -268,7 +274,8 @@ export async function buildNetwork(
           const dx = o.x[j]! - w.x[i]!, dz = o.z[j]! - w.z[i]!;
           const along = dx * w.fx[i]! + dz * w.fz[i]!, across = dx * nx + dz * nz;
           if (Math.abs(along) > 1.3 || across < 0.4 || across > reach) continue;
-          if (!best || across < best.d) best = { d: across, way: o };
+          // (w lies to the left of the other track if the way back points along its left normal)
+          if (!best || across < best.d) best = { d: across, way: o, j, facing: -dx * o.fz[j]! + dz * o.fx[j]! > 0 ? 0 : 1 };
         }
       }
     }
@@ -281,32 +288,49 @@ export async function buildNetwork(
     if (n < 0) n = names.push(p.name) - 1;
     return { ring: p.outline, name: n, minX: Math.min(...xs) - 1, maxX: Math.max(...xs) + 1, minZ: Math.min(...zs) - 1, maxZ: Math.max(...zs) + 1 };
   });
+  // first what OSM draws beside every track point: a platform outline (how far it reaches, its name) …
+  const drawn = new Map<Way, { far: [Float64Array, Float64Array]; name: [Int32Array, Int32Array] }>();
   for (const w of tunnelWays) {
+    const far: [Float64Array, Float64Array] = [new Float64Array(w.n), new Float64Array(w.n)];
+    const name: [Int32Array, Int32Array] = [new Int32Array(w.n).fill(-1), new Int32Array(w.n).fill(-1)];
+    drawn.set(w, { far, name });
+    for (let i = 0; i < w.n; i++) {
+      if (w.node[i]! < 0) continue;
+      const near = platforms.filter((p) => w.x[i]! > p.minX - PLATFORM_REACH && w.x[i]! < p.maxX + PLATFORM_REACH && w.z[i]! > p.minZ - PLATFORM_REACH && w.z[i]! < p.maxZ + PLATFORM_REACH);
+      if (near.length === 0) continue;
+      for (const s of [0, 1] as const) {
+        const side = s === 0 ? 1 : -1, nx = w.fz[i]! * side, nz = -w.fx[i]! * side;
+        let d0 = 0, d1 = 0;
+        for (let u = 0.8; u <= PLATFORM_REACH; u += 0.25) {
+          const q = { x: w.x[i]! + nx * u, z: w.z[i]! + nz * u };
+          const hit = near.find((p) => q.x >= p.minX && q.x <= p.maxX && q.z >= p.minZ && q.z <= p.maxZ && pointInPolygon(q, p.ring));
+          if (hit) { if (d0 === 0) { d0 = u; name[s][i] = hit.name; } d1 = u; } else if (d0 > 0) break;
+        }
+        if (d0 > 0 && d0 <= 2.6) far[s][i] = d1;
+        else name[s][i] = -1;
+      }
+    }
+  }
+  // … then what stands there. Between two tracks at one level no further apart than ISLAND_REACH lies one island
+  // platform, whichever of the two the outline is drawn at (a wide island is often drawn as two strips, or only on one
+  // side): no wall between them. The track with the lower way id builds it.
+  for (const w of tunnelWays) {
+    const mine = drawn.get(w)!;
     for (let i = 0; i < w.n; i++) {
       if (w.node[i]! < 0) continue;
       for (const s of [0, 1] as const) {
-        const side = s === 0 ? 1 : -1, nx = w.fz[i]! * side, nz = -w.fx[i]! * side;
-        // a platform beside the track: where the OSM outline begins and ends along the normal
-        let d0 = 0, d1 = 0, name = -1;
-        const near = platforms.filter((p) => w.x[i]! > p.minX - PLATFORM_REACH && w.x[i]! < p.maxX + PLATFORM_REACH && w.z[i]! > p.minZ - PLATFORM_REACH && w.z[i]! < p.maxZ + PLATFORM_REACH);
-        if (near.length) {
-          for (let u = 0.8; u <= PLATFORM_REACH; u += 0.25) {
-            const q = { x: w.x[i]! + nx * u, z: w.z[i]! + nz * u };
-            const hit = near.find((p) => q.x >= p.minX && q.x <= p.maxX && q.z >= p.minZ && q.z <= p.maxZ && pointInPolygon(q, p.ring));
-            if (hit) { if (d0 === 0) { d0 = u; name = hit.name; } d1 = u; } else if (d0 > 0) break;
-          }
-        }
-        const nb = neighbour(w, i, side, 24);
-        if (d0 > 0 && d0 <= 2.6) {
-          // an island if the next track lies right beyond the platform
-          if (nb && nb.d - EDGE <= d1 + 1.5) {
-            w.plat[s][i] = w.id < nb.way.id ? 2 : 3;
-            w.far[s][i] = nb.d - EDGE;
-          } else {
-            w.plat[s][i] = 1;
-            w.far[s][i] = Math.max(d1, EDGE + SIDE_PLATFORM_W);
-          }
-          w.name[s][i] = name;
+        const side = s === 0 ? 1 : -1;
+        const nb = neighbour(w, i, side, ISLAND_REACH), theirs = nb ? drawn.get(nb.way)! : null;
+        const own = mine.far[s][i]! > 0, other = nb && theirs ? theirs.far[nb.facing][nb.j]! > 0 : false;
+        if (nb && nb.d >= 2 * EDGE + 1 && (own || other)) {
+          w.plat[s][i] = w.id < nb.way.id ? 2 : 3;
+          w.far[s][i] = nb.d - EDGE;
+          w.name[s][i] = own ? mine.name[s][i]! : theirs!.name[nb.facing][nb.j]!;
+          w.ext[s][i] = EDGE;
+        } else if (own) {
+          w.plat[s][i] = 1;
+          w.far[s][i] = Math.max(mine.far[s][i]!, EDGE + SIDE_PLATFORM_W);
+          w.name[s][i] = mine.name[s][i]!;
           w.ext[s][i] = EDGE;
         } else if (nb && nb.d < 2 * WALL_CLEAR) {
           w.ext[s][i] = nb.d / 2;

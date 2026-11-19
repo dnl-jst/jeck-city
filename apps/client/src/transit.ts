@@ -153,6 +153,8 @@ function doorGeometry(): { body: BufferGeometry; glass: BufferGeometry } {
 
 /** Departure signals: this far ahead of a stop (m; beyond the platform's end), green this long before a train leaves and after (s). */
 const SIGNAL_AHEAD = 45, GREEN_BEFORE = 12, GREEN_AFTER = 7;
+/** The "next stop" display in a section: width, height and thickness of its case's face (m), its middle above the rail top; and "dark". */
+const NEXT_W = 1.2, NEXT_H = 0.15, NEXT_T = 0.12, NEXT_Y = TRAIN.ceiling - 0.11, NEXT_DARK = -3;
 /** Door sounds are played for trains within this distance of the camera (m). */
 const DOOR_SOUND_DIST = 40;
 /** The closing sound starts this long before the doors move (s): its warning beeps (train-sound.ts synthTrainDoorClose). */
@@ -185,6 +187,8 @@ export class TransitView {
   private readonly owned: (BufferGeometry | Material | CanvasTexture)[] = [];
   private readonly boards: Board[] = [];
   private readonly nextTexts = new Map<number, MeshBasicMaterial>();
+  /** The "next stop" display switched off. */
+  private nextOff!: MeshBasicMaterial;
   /** Departure signals: red, green shortly before a train leaves and until it has gone by. */
   private readonly signals: { from: { track: number; stop: number }[]; lamp: Mesh }[] = [];
   private readonly signalPost = new BoxGeometry(0.1, 3.2, 0.1);
@@ -224,7 +228,9 @@ export class TransitView {
     this.owned.push(door.body, door.glass);
     const variants = new Map<string, { body: BufferGeometry; glass: BufferGeometry }>();
     const displayGeo = new PlaneGeometry(1.9, 0.34);
-    const nextGeo = new PlaneGeometry(1.2, 0.26), nextCase = new BoxGeometry(1.26, 0.32, 0.02), nextDark = new MeshBasicMaterial({ color: 0x101214 });
+    // (a flat strip close under the ceiling, clear of the handrails below it, in a case a hand thick)
+    const nextGeo = new PlaneGeometry(NEXT_W, NEXT_H), nextCase = new BoxGeometry(NEXT_W + 0.08, NEXT_H + 0.05, NEXT_T), nextDark = new MeshBasicMaterial({ color: 0x101214 });
+    this.nextOff = nextDark;
     this.owned.push(nextGeo, nextCase, nextDark);
     const displays = transit.tracks.map((tr) => {
       const tex = displayTexture(`${tr.line ?? ''} ${tr.to ?? ''}`.trim()), mat = new MeshBasicMaterial({ map: tex });
@@ -261,13 +267,13 @@ export class TransitView {
       this.root.add(group);
       // the next stop, on a display across the aisle under the ceiling, read from both ways
       const faces = [0, Math.PI].map((turn) => {
-        const m = new Mesh(nextGeo, this.nextStopText(-1));
-        m.position.set(0, TRAIN.ceiling - 0.2, turn === 0 ? 0.012 : -0.012);
+        const m = new Mesh(nextGeo, nextDark);
+        m.position.set(0, NEXT_Y, (turn === 0 ? 1 : -1) * (NEXT_T / 2 + 0.003));
         m.rotation.y = turn;
         group.add(m);
         return m;
       });
-      group.add(new Mesh(nextCase, nextDark).translateY(TRAIN.ceiling - 0.2));
+      group.add(new Mesh(nextCase, nextDark).translateY(NEXT_Y));
       const view: SectionView = { group, doors, nextStop: { faces, shown: -2 } };
       if (lights !== 0) {
         // line and terminus over the windscreen at both ends of the train
@@ -302,8 +308,9 @@ export class TransitView {
 
   /** Name signs on the wall facing every platform, and a departure board over it. */
   private addSigns(): void {
-    const platformsSeen = new Map<string, { board: Board; signal: { from: { track: number; stop: number }[] } }>();
+    const platformsSeen = new Map<string, { board: Board; signal: { from: { track: number; stop: number }[] }; station: number; side: number; x: number; z: number }>();
     let platformKey = '';
+    const edges: { station: number; from: { track: number; stop: number }[]; tr: Transit['tracks'][number]; cum: number[]; stop: Transit['tracks'][number]['stops'][number]; x: number; y: number; z: number; yaw: number; rail: number }[] = [];
     for (const [trackIndex, tr] of this.transit.tracks.entries()) {
       const n = tr.pts.length / 3;
       const cum = [0];
@@ -313,7 +320,14 @@ export class TransitView {
         if (!stop.under) continue;
         {
           const at = Math.max(1, Math.min(n - 1, cum.findIndex((c) => c >= stop.s)));
-          const k = `${Math.round(tr.pts[at * 3]! / 4)}_${Math.round(tr.pts[at * 3 + 2]! / 4)}_${stop.side}`;
+          // (lines on one track may stop some metres apart along it; the next track lies a few metres across)
+          const sx = tr.pts[at * 3]!, sz = tr.pts[at * 3 + 2]!;
+          const dx = sx - tr.pts[at * 3 - 3]!, dz = sz - tr.pts[at * 3 - 1]!, dl = Math.hypot(dx, dz) || 1;
+          let k = `${stop.station}_${stop.side}_${Math.round(sx)}_${Math.round(sz)}`;
+          for (const [key, p] of platformsSeen) {
+            const ox = p.x - sx, oz = p.z - sz;
+            if (p.station === stop.station && p.side === stop.side && Math.abs(ox * dz - oz * dx) / dl < 2 && Math.abs(ox * dx + oz * dz) / dl < 70) k = key;
+          }
           const have = platformsSeen.get(k);
           if (have) {
             have.board.from.push({ track: trackIndex, stop: stopIndex });
@@ -362,8 +376,8 @@ export class TransitView {
           const j = Math.max(1, Math.min(n - 1, cum.findIndex((c) => c >= stop.s - 9)));
           const bx = tr.pts[j * 3]! + lx * 3.2, by = tr.pts[j * 3 + 1]! + TRAIN.floor + 2.9, bz = tr.pts[j * 3 + 2]! + lz * 3.2;
           const canvas = document.createElement('canvas');
-          canvas.width = 640;
-          canvas.height = 224;
+          canvas.width = 960;
+          canvas.height = 336;
           const btex = new CanvasTexture(canvas);
           btex.colorSpace = SRGBColorSpace;
           btex.anisotropy = 4;
@@ -391,7 +405,53 @@ export class TransitView {
           }
           const board: Board = { from: [{ track: trackIndex, stop: stopIndex }], x: bx, z: bz, canvas, tex: btex, shown: '' };
           this.boards.push(board);
-          if (signal) platformsSeen.set(platformKey, { board, signal });
+          edges.push({ station: stop.station, from: board.from, tr, cum, stop, x: bx, y: by + BH / 2, z: bz, yaw, rail: y });
+          if (signal) platformsSeen.set(platformKey, { board, signal, station: stop.station, side: stop.side, x, z });
+        }
+      }
+    }
+    // where a station has more than two tracks: which lines leave from each, on its board and along its platform edge
+    const count = new Map<number, number>();
+    for (const e of edges) count.set(e.station, (count.get(e.station) ?? 0) + 1);
+    const PW = 2.5, PH = 0.36, PT = 0.05;
+    const plate = new BoxGeometry(PW, PH, PT), face = new PlaneGeometry(PW - 0.04, PH - 0.04), rodMat = new MeshBasicMaterial({ color: 0x15181c });
+    this.owned.push(plate, face, rodMat);
+    for (const e of edges) {
+      if ((count.get(e.station) ?? 0) <= 2) continue;
+      const lines = [...new Set(e.from.map((f) => this.transit.tracks[f.track]!.line ?? ''))].filter(Boolean).sort((a, b) => Number(a) - Number(b));
+      const to = [...new Set(e.from.map((f) => this.transit.tracks[f.track]!.to ?? ''))].filter(Boolean);
+      if (lines.length === 0) continue;
+      const tex = lineSignTexture(lines, to), mat = new MeshBasicMaterial({ map: tex });
+      this.owned.push(tex, mat);
+      const put = (x: number, y: number, z: number, yaw: number): void => {
+        const body = new Mesh(plate, rodMat);
+        body.position.set(x, y, z);
+        body.rotation.y = yaw;
+        this.root.add(body);
+        for (const back of [0, Math.PI]) {
+          const m = new Mesh(face, mat), a = yaw + back;
+          m.position.set(x + Math.sin(a) * (PT / 2 + 0.003), y, z + Math.cos(a) * (PT / 2 + 0.003));
+          m.rotation.y = a;
+          this.root.add(m);
+        }
+      };
+      // on top of the departure board, read along the platform …
+      put(e.x, e.y + PH / 2, e.z, e.yaw);
+      // … and hung over the platform's edge, read across it
+      const n = e.tr.pts.length / 3, top = STATION.ceiling;
+      for (const off of [-15, 15]) {
+        const i = Math.max(1, Math.min(n - 1, e.cum.findIndex((c) => c >= e.stop.s + off)));
+        const x = e.tr.pts[i * 3]!, y = e.tr.pts[i * 3 + 1]!, z = e.tr.pts[i * 3 + 2]!;
+        const fx = x - e.tr.pts[i * 3 - 3]!, fz = z - e.tr.pts[i * 3 - 1]!, len = Math.hypot(fx, fz) || 1;
+        const lx = (fz / len) * e.stop.side, lz = (-fx / len) * e.stop.side;
+        const px = x + lx * (STATION.edge + 0.5), pz = z + lz * (STATION.edge + 0.5), py = y + TRAIN.floor + 2.75;
+        put(px, py, pz, Math.atan2(lx, lz));
+        const rod = new BoxGeometry(0.05, Math.max(0.05, y + top - (py + PH / 2)), 0.05);
+        this.owned.push(rod);
+        for (const side of [-1, 1]) {
+          const m = new Mesh(rod, rodMat), o = side * (PW / 2 - 0.3);
+          m.position.set(px + (fx / len) * o, (y + top + py + PH / 2) / 2, pz + (fz / len) * o);
+          this.root.add(m);
         }
       }
     }
@@ -459,10 +519,11 @@ export class TransitView {
       v.group.position.set(x, s[o + 2]!, z);
       const q = sectionQuat(s[o + 4]!, s[o + 5]!);
       v.group.quaternion.set(q.x, q.y, q.z, q.w);
-      const next = s[o + 11]!;
+      // the next stop: dark until it is announced (half way there), then lit until the train leaves that stop
+      const next = s[o + 9]! >= 0 || (s[o + 12]! >= 0.5 && s[o + 8]! > 0) ? s[o + 11]! : NEXT_DARK;
       if (v.nextStop.shown !== next) {
         v.nextStop.shown = next;
-        for (const f of v.nextStop.faces) f.material = this.nextStopText(next);
+        for (const f of v.nextStop.faces) f.material = next === NEXT_DARK ? this.nextOff : this.nextStopText(next);
       }
       if (v.display) {
         const texts = v.display.texts, trip = s[o + 10]!;
@@ -498,27 +559,35 @@ export class TransitView {
     for (const b of this.boards) {
       if (Math.hypot(b.x - camX, b.z - camZ) > BOARD_DIST) continue;
       // the next trains of every line that stops here, soonest first
-      const rows = b.from.flatMap((f) => {
+      const rows_ = b.from.flatMap((f) => {
         const tr = this.transit.tracks[f.track]!;
         return nextArrivals(this.model, f.track, f.stop, tick, BOARD_ROWS).map((a) => ({ line: tr.line ?? '', to: tr.to ?? '', wait: a.wait }));
       }).sort((x, y) => x.wait - y.wait).slice(0, BOARD_ROWS).map((r) => ({ ...r, when: r.wait < 60 ? 'sofort' : `${Math.floor(r.wait / 60)} min` }));
-      const key = rows.map((r) => `${r.line}${r.when}`).join('|');
+      const key = rows_.map((r) => `${r.line}${r.to}${r.when}`).join('|');
       if (key === b.shown) continue;
       b.shown = key;
-      const g = b.canvas.getContext('2d')!;
-      g.fillStyle = '#0b0d10';
-      g.fillRect(0, 0, b.canvas.width, b.canvas.height);
-      g.fillStyle = '#ffb000';
-      g.textBaseline = 'middle';
-      g.font = '600 46px "DejaVu Sans Mono", "Courier New", monospace';
-      rows.forEach((r, i) => {
-        const y = 42 + i * 70;
-        g.textAlign = 'left';
-        g.fillText(r.line, 22, y);
-        g.fillText(r.to.length > 13 ? `${r.to.slice(0, 12)}.` : r.to, 110, y);
-        g.textAlign = 'right';
-        g.fillText(r.when, b.canvas.width - 22, y);
-      });
+      // an LED matrix, as the boards on the platforms are: line, where to, and when, a row each
+      ledMatrix(b.canvas, (g, cols, rows) => {
+        // (as large as the rows allow, smaller if the longest row would not fit)
+        const longest = Math.max(...rows_.map((r) => r.to.length), 1) + 3 + 8;
+        let size = Math.round(rows / BOARD_ROWS * 0.72);
+        do {
+          g.font = `700 ${size}px ${LED_FONT}`;
+          size -= 1;
+        } while (g.measureText('0').width * longest > cols - 4 && size > 9);
+        const ch = g.measureText('0').width, toX = 2 + ch * 3;
+        rows_.forEach((r, i) => {
+          const y = (rows / BOARD_ROWS) * (i + 0.5) + 0.5;
+          g.textAlign = 'left';
+          g.fillText(r.line, 2, y);
+          const room = cols - 2 - toX - g.measureText(r.when).width - ch;
+          let to = r.to;
+          while (to.length > 3 && g.measureText(to).width > room) to = `${to.slice(0, -2)}.`;
+          g.fillText(to, toX, y);
+          g.textAlign = 'right';
+          g.fillText(r.when, cols - 2, y);
+        });
+      }, 3);
       b.tex.needsUpdate = true;
     }
   }
@@ -527,7 +596,7 @@ export class TransitView {
   private nextStopText(station: number): MeshBasicMaterial {
     let m = this.nextTexts.get(station);
     if (!m) {
-      const tex = displayTexture(station < 0 ? 'Endstation' : this.transit.stations[station]?.name ?? '', 'Nächster Halt');
+      const tex = displayTexture(station < 0 ? 'Endstation' : this.transit.stations[station]?.name ?? '', undefined, 76);
       m = new MeshBasicMaterial({ map: tex });
       this.owned.push(tex, m);
       this.nextTexts.set(station, m);
@@ -624,27 +693,98 @@ function signTexture(name: string): CanvasTexture {
   return t;
 }
 
-/** Amber text on black, as on a train's destination display; `small`: a line of small print above it. */
-function displayTexture(text: string, small?: string): CanvasTexture {
+/** A printed sign for a track: its lines in white boxes, then where they go, on blue. */
+function lineSignTexture(lines: string[], to: string[]): CanvasTexture {
   const c = document.createElement('canvas');
-  c.width = 608;
-  c.height = small ? 132 : 108;
+  c.width = 800;
+  c.height = 112;
   const g = c.getContext('2d')!;
-  g.fillStyle = '#0a0a0a';
+  g.fillStyle = '#16407a';
   g.fillRect(0, 0, c.width, c.height);
-  g.fillStyle = '#ffb400';
-  g.textAlign = 'center';
   g.textBaseline = 'middle';
-  let size = small ? 64 : 70;
+  g.textAlign = 'center';
+  g.font = '700 58px system-ui, "Helvetica Neue", Arial, sans-serif';
+  let x = 18;
+  for (const l of lines) {
+    const w = Math.max(70, g.measureText(l).width + 26);
+    g.fillStyle = '#ffffff';
+    g.fillRect(x, 16, w, 80);
+    g.fillStyle = '#16407a';
+    g.fillText(l, x + w / 2, 59);
+    x += w + 12;
+  }
+  g.fillStyle = '#ffffff';
+  g.textAlign = 'left';
+  // where to: one below the other if there are several
+  const half = Math.ceil(to.length / 2);
+  const rows = to.length > 1 ? [to.slice(0, half).join(' · '), to.slice(half).join(' · ')] : to;
+  let size = rows.length > 1 ? 40 : 48;
   do {
     g.font = `600 ${size}px system-ui, "Helvetica Neue", Arial, sans-serif`;
-    size -= 4;
-  } while (g.measureText(text).width > c.width - 30 && size > 24);
-  g.fillText(text, c.width / 2, small ? 84 : c.height / 2 + 4);
-  if (small) {
-    g.font = '500 30px system-ui, "Helvetica Neue", Arial, sans-serif';
-    g.fillText(small, c.width / 2, 24);
+    size -= 2;
+  } while (Math.max(...rows.map((r) => g.measureText(r).width)) > c.width - x - 24 && size > 18);
+  rows.forEach((r, i) => g.fillText(r, x + 10, rows.length > 1 ? 34 + i * 46 : 58));
+  const t = new CanvasTexture(c);
+  t.colorSpace = SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
+}
+
+const LED_FONT = '"DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace';
+/** Distance between two LEDs of a display, in canvas pixels. */
+const LED_PITCH = 4;
+
+/**
+ * Fills a canvas with a matrix of round amber LEDs: `paint` draws the picture small, one pixel per LED (white on
+ * nothing, text baseline in the middle); every pixel more lit than not becomes a bright dot, the others a faint grid.
+ */
+function ledMatrix(c: HTMLCanvasElement, paint: (g: CanvasRenderingContext2D, cols: number, rows: number) => void, pitch = LED_PITCH): void {
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#070707';
+  g.fillRect(0, 0, c.width, c.height);
+  const cols = Math.floor(c.width / pitch), rows = Math.floor(c.height / pitch);
+  const low = document.createElement('canvas');
+  low.width = cols;
+  low.height = rows;
+  const lg = low.getContext('2d', { willReadFrequently: true })!;
+  lg.fillStyle = '#fff';
+  lg.textBaseline = 'middle';
+  paint(lg, cols, rows);
+  const lit = lg.getImageData(0, 0, cols, rows).data;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const on = lit[(y * cols + x) * 4 + 3]! > 110;
+      g.fillStyle = on ? '#ffb400' : '#1c1505';
+      g.beginPath();
+      g.arc(x * pitch + pitch / 2, y * pitch + pitch / 2, pitch * (on ? 0.44 : 0.3), 0, Math.PI * 2);
+      g.fill();
+    }
   }
+}
+
+/**
+ * Amber text as on a train's display: a matrix of round LEDs (lit ones bright, the others a faint grid), not a
+ * printed font. `small`: a line of small print above it; height: the canvas's (a flatter display).
+ */
+function displayTexture(text: string, small?: string, height?: number): CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = 608;
+  c.height = height ?? (small ? 132 : 108);
+  ledMatrix(c, (lg, cols, rows) => {
+    lg.textAlign = 'center';
+    const line = (str: string, most: number, y: number): void => {
+      let size = most;
+      do {
+        lg.font = `700 ${size}px ${LED_FONT}`;
+        size -= 1;
+      } while (lg.measureText(str).width > cols - 4 && size > 7);
+      lg.fillText(str, cols / 2, y);
+    };
+    if (small) {
+      line(small, Math.round(rows * 0.3), rows * 0.2);
+      line(text, Math.round(rows * 0.56), rows * 0.66);
+    } else line(text, Math.round(rows * 0.82), rows / 2 + 0.5);
+  });
   const t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
   t.anisotropy = 4;
