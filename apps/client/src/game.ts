@@ -2,7 +2,7 @@ import { Quaternion, Vector3, type Object3D, type PerspectiveCamera, type Scene 
 import { WATER_TIME } from './materials/street';
 import {
   BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
-  type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
+  type PlayerSnapshot, type SimEvent, type SnapshotCar, type StationId, type WorldManifest,
   plateText, boardingPath, CAR_SEATS, CAR_SPECS, DRIVER_SEAT, fromCarPoint, standPoint, toCarPoint, VEHICLE_REST_Y, type CarPoint,
 } from '@nn/shared';
 import { enterStage, leaveStage } from './boarding';
@@ -21,7 +21,7 @@ import { storeCharacter, storedCharacter, type CharacterModels } from './charact
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
-import { RemotePlayers } from './remote/remote-players';
+import { RemotePlayers, streamedWheels } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
 import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
@@ -466,6 +466,12 @@ export class Game {
     }
   }
 
+  /** Car `id` as the server streams it, sampled for this frame; null offline or while it rests (not in the snapshots). */
+  private streamedCar(id: number): SnapshotCar | null {
+    for (const c of this.session.remote?.().cars.values() ?? []) if (c.id === id) return c;
+    return null;
+  }
+
   /** Where the car just left is now (somebody else may still sit in it, and drive on). */
   private leavingPose(car: number): CarPose {
     const { cars } = this.session.sim;
@@ -600,17 +606,26 @@ export class Game {
       const { sim } = this.session;
       const car = this.carId ?? this.pass!.car, seat = this.pass?.seat ?? DRIVER_SEAT;
       const prev = this.prevPose ?? this.currPose;
-      const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
-      // server correction still fading out: offset on top (rotation first)
-      pose.x += off.x; pose.y += off.y; pose.z += off.z;
-      if (off.qw !== 1) {
-        const q = this.qc.set(off.qx, off.qy, off.qz, off.qw).multiply(this.qa.set(pose.qx, pose.qy, pose.qz, pose.qw));
-        pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
+      let pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
+      // riding along, the car is somebody else's: drawn straight from the server's stream as sampled for this frame
+      // (as every other player's car is). Its stand-in in the own simulation only follows that stream step by step –
+      // blending between those steps on top makes it stutter.
+      const streamed = this.pass ? this.streamedCar(car) : null;
+      if (streamed) {
+        pose = { x: streamed.x, y: streamed.y, z: streamed.z, qx: streamed.qx, qy: streamed.qy, qz: streamed.qz, qw: streamed.qw };
+      } else {
+        // server correction still fading out: offset on top (rotation first)
+        pose.x += off.x; pose.y += off.y; pose.z += off.z;
+        if (off.qw !== 1) {
+          const q = this.qc.set(off.qx, off.qy, off.qz, off.qw).multiply(this.qa.set(pose.qx, pose.qy, pose.qz, pose.qw));
+          pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
+        }
       }
       this.driven.setPose(pose);
       this.drawnPose = pose;
       const vehicle = sim.cars.vehicle(car);
-      if (vehicle) this.driven.setWheels(vehicle, dt);
+      if (streamed) this.driven.setWheels(streamedWheels(streamed), dt);
+      else if (vehicle) this.driven.setWheels(vehicle, dt);
       const into = this.boarding?.kind === 'in' ? this.boarding : null;
       if (into) into.t += dt;
       const st = into ? enterStage(into.path, into.t) : null;
@@ -619,7 +634,7 @@ export class Game {
       // the lamps: the own ignition when driving; riding along, what the server says about the car
       const level = this.carId !== null ? sim.ignition(car).lightLevel() : this.session.roster?.().cars.get(car)?.level ?? 0;
       this.driven.setLights(night, sim.braking(car), lampPower(level, Math.random));
-      const v = vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
+      const v = streamed ? { x: streamed.vx, y: streamed.vy, z: streamed.vz } : vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
       // riding along: the car's radio, as the driver hears it
       if (this.pass) audio?.rideAlong(this.session.roster?.().cars.get(car)?.radio ?? null);
