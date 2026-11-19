@@ -10,6 +10,7 @@ import {
 import { loadConfig } from './config';
 import { INPUT_BURST, QUEUE_MAX } from './inputs';
 import { startServer, type RunningServer } from './server';
+import { SERVER_VERSION } from './version';
 
 const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
 writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
@@ -74,7 +75,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
         });
     });
     const w = await welcome;
-    expect(w).toMatchObject({ slot: 0, name: 'Jupp', devMode: cfg.dev });
+    expect(w).toMatchObject({ slot: 0, name: 'Jupp', devMode: cfg.dev, version: SERVER_VERSION });
     expect(typeof w.tick).toBe('number');
     const b = await join('jupp');
     const wb = await new Promise<Record<string, unknown>>((resolve) => b.onMessage('welcome', resolve));
@@ -419,6 +420,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(r.status).toBe(200);
     const h = (await r.json()) as { players: number; tickP95Ms: number; dropped: number; ticks: number; droppedTotal: number; rssMb: number };
     expect(h.players).toBe(1);
+    expect((h as { version?: string }).version).toBe(SERVER_VERSION);
     expect(h.ticks).toBeGreaterThan(0);
     expect(Number.isInteger(h.droppedTotal)).toBe(true);
     expect(h.rssMb).toBeGreaterThan(10);
