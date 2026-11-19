@@ -1,5 +1,6 @@
 import { heightAt } from '../assets/terrain';
 import type { BikeState, RiddenBike } from '../physics/bike';
+import { CAR_SEATS } from '../physics/carseats';
 import { CAR_SPECS } from '../physics/cartypes';
 import { Character, type CharacterState } from '../physics/character';
 import { BikeRacks, dismountSpot, ParkedBikes, type BikePose } from '../physics/parkedbikes';
@@ -11,6 +12,7 @@ import { createPhysicsWorld, timeSlicer, type PhysicsWorld } from '../physics/wo
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
+import { boardingPath, boardSeconds, DRIVER_SEAT, toCarPoint } from './boarding';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
@@ -574,7 +576,10 @@ export class WorldSim {
     pl.car = car;
     pl.jump = false;
     pl.char.setEnabled(false);
-    this.ignitions[car]!.start();
+    // the engine waits until the figure has walked to the door and sits (the clients show that; here the player is in already)
+    const at = this.cars.poses[car]!, type = this.cars.types[car]!;
+    const from = toCarPoint({ x: at.x, z: at.z, heading: headingOf(at) }, pos.x, pos.z);
+    this.ignitions[car]!.start(boardSeconds(boardingPath(CAR_SPECS[type], CAR_SEATS[type], DRIVER_SEAT, from)) * TICK_HZ);
     ev.push({ t: 'enter', id, car });
   }
 
@@ -586,7 +591,8 @@ export class WorldSim {
       return;
     }
     const pose = v.pose();
-    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) }, (x, z) => exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), v.spec.length);
+    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) }, (x, z) => exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), v.spec.length,
+      CAR_SEATS[this.cars.types[i]!].seats[DRIVER_SEAT]!.u);
     if (!spot) {
       ev.push({ t: 'exitDenied', id, reason: 'blocked' });
       return;

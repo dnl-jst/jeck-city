@@ -115,3 +115,28 @@ test('getting out only below 2 m/s, forwards or reversing', () => {
   expect(canGetOut(2.5)).toBe(false);
   expect(canGetOut(-3)).toBe(false);
 });
+
+test('ignition: started with a delay (the walk to the door), every event comes that many ticks later', () => {
+  const ig = new Ignition();
+  ig.start(90);
+  const seen: [IgnitionEvent, number][] = [];
+  for (let t = 1; t <= 300; t++) for (const e of ig.update()) seen.push([e, t]);
+  expect(seen).toEqual([
+    ['doorClose', 90 + Math.round(DOOR_CLOSE_AT * 60)], ['crank', 90 + Math.round(CRANK_AT * 60)],
+    ['running', 90 + Math.round((CRANK_AT + ENGINE_CATCH_S) * 60)],
+  ]);
+  const late = new Ignition();
+  late.start(90);
+  for (let t = 0; t < 90; t++) late.update();
+  expect(late.state).toBe('starting');
+  expect(late.lightLevel()).toBe(0); // still walking: no lamps yet
+});
+
+test('exit spot: beside the seat (ahead of the car\'s middle by the seat\'s position), not beside the middle', () => {
+  const car = { x: 0, z: 0, heading: 0 }; // forward = +z, left = +x
+  expect(exitSpot(car, () => true, 4, 0.7)).toEqual({ x: 1.5, z: 0.7 });
+  // left blocked: the right side, at the same position along the car
+  const right = exitSpot(car, (x) => x < 0, 4, 0.7)!;
+  expect(right.x).toBeCloseTo(-1.5);
+  expect(right.z).toBeCloseTo(0.7);
+});

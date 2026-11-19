@@ -5,6 +5,9 @@ import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from '.
 import { headingOf, type CarPose } from './rules';
 import { WorldSim, type SimEvent } from './world-sim';
 
+/** Ticks after pressing E by which the engine runs: the walk to the door, getting in, door, starter. */
+const STARTED = 240;
+
 const N = NEUTRAL_INPUT(0);
 const USE: PlayerInput = { ...N, use: true };
 const GAS: PlayerInput = { ...N, forward: 1 };
@@ -86,7 +89,7 @@ for (const [name, assets, skip] of worlds) {
       // E held: still one action
       ev = run(sim, 5, () => new Map([[1, USE]]));
       expect(sim.player(1).mode).toBe('drive');
-      ev.push(...run(sim, 84));
+      ev.push(...run(sim, STARTED));
       expect(ev.filter((e) => e.t === 'ignition').map((e) => e.t === 'ignition' && e.e)).toEqual(['doorClose', 'crank', 'running']);
       expect(sim.player(1).engine).toBe('running');
       ev = sim.step(new Map([[1, USE]]));
@@ -128,7 +131,7 @@ for (const [name, assets, skip] of worlds) {
     test('driver leaves → car free, engine off', async () => {
       const { sim, car } = await nextToCar();
       sim.step(new Map([[1, USE]]));
-      run(sim, 90);
+      run(sim, STARTED);
       sim.setRadio(1, 'einslive');
       expect(sim.cars.radio[car]).toBe('einslive');
       sim.removePlayer(1);
@@ -144,7 +147,7 @@ for (const [name, assets, skip] of worlds) {
     test('exit refused at speed', async () => {
       const { sim, car } = await nextToCar();
       sim.step(new Map([[1, USE]]));
-      run(sim, 90);
+      run(sim, STARTED);
       run(sim, 90, () => new Map([[1, GAS]]));
       expect(Math.abs(sim.cars.vehicle(car)!.speed())).toBeGreaterThan(2);
       const ev = sim.step(new Map([[1, { ...GAS, use: true }]]));
@@ -158,7 +161,7 @@ for (const [name, assets, skip] of worlds) {
       expect(sim.braking(car)).toBe(false);
       sim.step(new Map([[1, { ...N, brake: true }]]));
       expect(sim.braking(car)).toBe(true);
-      run(sim, 90);
+      run(sim, STARTED);
       expect(sim.braking(car)).toBe(false);
       run(sim, 90, () => new Map([[1, GAS]]));
       expect(sim.cars.vehicle(car)!.speed()).toBeGreaterThan(1);
@@ -182,8 +185,8 @@ for (const [name, assets, skip] of worlds) {
         sim.addPlayer(2);
         // player 1 walks into the car's side (yaw towards it), gets in after 5 s and drives a curve; player 2 strolls
         const towards = Math.atan2(c.x - leftOf(c, 2.5).x, c.z - leftOf(c, 2.5).z);
-        for (let t = 0; t < 600; t++) {
-          const p1: PlayerInput = t < 300 ? { ...NEUTRAL_INPUT(towards), forward: 0.5 } : t === 300 ? { ...N, use: true } : { ...N, forward: 1, right: t > 450 ? 0.6 : 0 };
+        for (let t = 0; t < 760; t++) {
+          const p1: PlayerInput = t < 300 ? { ...NEUTRAL_INPUT(towards), forward: 0.5 } : t === 300 ? { ...N, use: true } : { ...N, forward: 1, right: t > 610 ? 0.6 : 0 };
           const p2: PlayerInput = { ...NEUTRAL_INPUT(t * 0.01), forward: 1, run: t % 200 < 100, jump: t % 90 === 0 };
           sim.step(new Map([[1, p1], [2, p2]]));
         }

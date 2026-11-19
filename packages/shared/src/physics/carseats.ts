@@ -5,7 +5,8 @@ export type DoorName = 'door_fl' | 'door_fr' | 'door_rl' | 'door_rr';
 export type CarSeat = { x: number; u: number; h: number; door: DoorName };
 /** A front-hinged door: its hinge axis (vertical, at hingeX / hingeU), its rear edge and how far it swings open (rad). */
 export type CarDoor = { hingeX: number; hingeU: number; rearU: number; openAngle: number };
-export type SeatLayout = { seats: CarSeat[]; doors: Partial<Record<DoorName, CarDoor>> };
+/** floor: height of the cabin floor above the ground (where the feet rest). */
+export type SeatLayout = { seats: CarSeat[]; doors: Partial<Record<DoorName, CarDoor>>; floor: number };
 
 /**
  * Seats and doors per car type; the models carry the same points as nodes (seat_<n>, door_*; data/models/cars).
@@ -13,6 +14,7 @@ export type SeatLayout = { seats: CarSeat[]; doors: Partial<Record<DoorName, Car
  */
 export const CAR_SEATS: Record<CarType, SeatLayout> = {
   kleinwagen: {
+    floor: 0.22,
     seats: [
       { x: 0.37, u: 0.05, h: 0.5, door: 'door_fl' },
       { x: -0.37, u: 0.05, h: 0.5, door: 'door_fr' },
@@ -27,6 +29,7 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
     },
   },
   mittelklasse: {
+    floor: 0.2,
     seats: [
       { x: 0.38, u: 0.09, h: 0.47, door: 'door_fl' },
       { x: -0.38, u: 0.09, h: 0.47, door: 'door_fr' },
@@ -42,6 +45,7 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
   },
   // driver and the outer place of the double bench; the load space is not entered
   transporter: {
+    floor: 0.56,
     seats: [
       { x: 0.47, u: 0.75, h: 1, door: 'door_fl' },
       { x: -0.5, u: 0.75, h: 1, door: 'door_fr' },
@@ -52,6 +56,7 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
     },
   },
   smart: {
+    floor: 0.3,
     seats: [
       { x: 0.33, u: -0.2, h: 0.62, door: 'door_fl' },
       { x: -0.33, u: -0.2, h: 0.62, door: 'door_fr' },
