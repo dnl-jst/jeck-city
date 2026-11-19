@@ -12,7 +12,7 @@ import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
-import { DrivenCar, lampPower, ParkedCars, type CarModels } from './car';
+import { DrivenCar, lampPower, ParkedCars, setMirrorNight, type CarModels } from './car';
 import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
@@ -491,6 +491,7 @@ export class Game {
   }
 
   private render(dt: number, night: number): void {
+    setMirrorNight(night);
     const { audio } = this.ctx;
     const a = this.session.alpha;
     const off = this.session.renderOffset();

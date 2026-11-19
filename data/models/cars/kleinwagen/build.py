@@ -11,9 +11,9 @@ from mathutils import Matrix
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from carbody import V, build_lod_shell, build_shell, car_materials2, pair, recess, run2  # noqa: E402
+from carbody import V, build_lod_shell, build_shell, car_materials2, mirror2, pair, recess, run2  # noqa: E402
 from carinterior import blob, build_interior, seat_manikins  # noqa: E402
-from carparts import empty, exhaust, lamp_pair, mirror, poly_round, rrect, wheel, wipers  # noqa: E402
+from carparts import empty, exhaust, lamp_pair, poly_round, rrect, wheel, wipers  # noqa: E402
 
 NAME = 'kleinwagen'
 F, B = 2.075, -1.975  # u of the front and rear faces
@@ -144,7 +144,7 @@ def build(coll, lod=False):
         # rubbing strip low on the doors and wings
         for u0, u1 in ((0.91, 0.99), (-0.10, 0.89), (-0.86, -0.12)):
             sh.decal('trim', (s, -(u0 + u1) / 2, 0.4), sd, rrect(u1 - u0, 0.05, 0.02), off=0.006)
-        mirror(sh.part('details', (s * 0.83, -0.83, 1.0)), {**M, 'glass': M['chrome']}, (s * 0.83, -0.83, 1.0), s)
+        mirror2(sh.part('details', (s * 0.83, -0.83, 1.0)), M, (s * 0.83, -0.83, 1.0), s)
         if not lod:
             for ua in (S['wb'] / 2, -S['wb'] / 2):
                 arch_lip(sh, M, s, ua)
