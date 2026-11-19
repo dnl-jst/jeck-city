@@ -163,21 +163,16 @@ const DOOR_SOUND_GAP = 3;
 const CABIN_DIST = 25, CABIN_LIGHT = 3.5;
 /** Departure boards are redrawn within this distance of the camera (m). */
 const BOARD_DIST = 160;
-/**
- * What the boards show per track (0: northbound, 1: southbound): the lines sharing the tunnel take turns, each with
- * its terminus in that direction.
- */
-const SERVICES: { line: string; to: string }[][] = [
-  [{ line: '12', to: 'Merkenich' }, { line: '15', to: 'Chorweiler' }],
-  [{ line: '12', to: 'Zollstock' }, { line: '15', to: 'Ubierring' }],
-];
 const BOARD_ROWS = 3;
 
-type Board = { track: number; stop: number; x: number; z: number; canvas: HTMLCanvasElement; tex: CanvasTexture; shown: string };
+/** A departure board over a platform; `from`: the line paths that stop there (several lines share a platform). */
+type Board = { from: { track: number; stop: number }[]; x: number; z: number; canvas: HTMLCanvasElement; tex: CanvasTexture; shown: string };
 
 type SectionView = {
   group: Group; doors: { mesh: Group; side: 1 | -1; dir: 1 | -1 }[];
-  /** The destination display at a train's end and the texts it can show (by trip, see SERVICES). */
+  /** The "next stop" display inside (both faces) and the station it shows (−2: nothing yet). */
+  nextStop: { faces: Mesh[]; shown: number };
+  /** The destination display at a train's end and the texts it can show (the line and where it goes). */
   display?: { mesh: Mesh; texts: MeshBasicMaterial[] };
 };
 
@@ -189,8 +184,9 @@ export class TransitView {
   private readonly root = new Group();
   private readonly owned: (BufferGeometry | Material | CanvasTexture)[] = [];
   private readonly boards: Board[] = [];
+  private readonly nextTexts = new Map<number, MeshBasicMaterial>();
   /** Departure signals: red, green shortly before a train leaves and until it has gone by. */
-  private readonly signals: { track: number; stop: number; lamp: Mesh }[] = [];
+  private readonly signals: { from: { track: number; stop: number }[]; lamp: Mesh }[] = [];
   private readonly signalPost = new BoxGeometry(0.1, 3.2, 0.1);
   private readonly signalLamp = new BoxGeometry(0.2, 0.2, 0.12);
   private readonly signalDark = new MeshBasicMaterial({ color: 0x1a1c1f });
@@ -215,8 +211,9 @@ export class TransitView {
   /** The drivers: one figure per train, sitting in the cab at its head. */
   private readonly drivers: PlayerFigure[] = [];
 
-  constructor(scene: Scene, private readonly transit: Transit, characters?: CharacterModels) {
-    this.model = transitModel(transit);
+  constructor(scene: Scene, private readonly transit: Transit, characters?: CharacterModels, model?: TransitModel) {
+    // (the simulation's own model where there is one: both run on its clock)
+    this.model = model ?? transitModel(transit);
     this.state = new Float64Array(this.model.count * SECTION_STRIDE);
     this.stateSoon = new Float64Array(this.model.count * SECTION_STRIDE);
     this.stateThen = new Float64Array(this.model.count * SECTION_STRIDE);
@@ -227,11 +224,13 @@ export class TransitView {
     this.owned.push(door.body, door.glass);
     const variants = new Map<string, { body: BufferGeometry; glass: BufferGeometry }>();
     const displayGeo = new PlaneGeometry(1.9, 0.34);
-    const displays = SERVICES.map((list) => list.map((sv) => {
-      const tex = displayTexture(`${sv.line} ${sv.to}`), mat = new MeshBasicMaterial({ map: tex });
+    const nextGeo = new PlaneGeometry(1.2, 0.26), nextCase = new BoxGeometry(1.26, 0.32, 0.02), nextDark = new MeshBasicMaterial({ color: 0x101214 });
+    this.owned.push(nextGeo, nextCase, nextDark);
+    const displays = transit.tracks.map((tr) => {
+      const tex = displayTexture(`${tr.line ?? ''} ${tr.to ?? ''}`.trim()), mat = new MeshBasicMaterial({ map: tex });
       this.owned.push(tex, mat);
-      return mat;
-    }));
+      return [mat];
+    });
     this.owned.push(displayGeo);
     const trackOf: number[] = [];
     this.model.tracks.forEach((tr, k) => { for (let n = 0; n < tr.slots * TRAIN_SECTIONS; n++) trackOf.push(k); });
@@ -260,7 +259,16 @@ export class TransitView {
       }
       group.visible = false;
       this.root.add(group);
-      const view: SectionView = { group, doors };
+      // the next stop, on a display across the aisle under the ceiling, read from both ways
+      const faces = [0, Math.PI].map((turn) => {
+        const m = new Mesh(nextGeo, this.nextStopText(-1));
+        m.position.set(0, TRAIN.ceiling - 0.2, turn === 0 ? 0.012 : -0.012);
+        m.rotation.y = turn;
+        group.add(m);
+        return m;
+      });
+      group.add(new Mesh(nextCase, nextDark).translateY(TRAIN.ceiling - 0.2));
+      const view: SectionView = { group, doors, nextStop: { faces, shown: -2 } };
       if (lights !== 0) {
         // line and terminus over the windscreen at both ends of the train
         const mesh = new Mesh(displayGeo, displays[trackOf[i]! % displays.length]![0]);
@@ -294,17 +302,33 @@ export class TransitView {
 
   /** Name signs on the wall facing every platform, and a departure board over it. */
   private addSigns(): void {
+    const platformsSeen = new Map<string, { board: Board; signal: { from: { track: number; stop: number }[] } }>();
+    let platformKey = '';
     for (const [trackIndex, tr] of this.transit.tracks.entries()) {
       const n = tr.pts.length / 3;
       const cum = [0];
       for (let i = 1; i < n; i++) cum.push(cum[i - 1]! + Math.hypot(tr.pts[i * 3]! - tr.pts[i * 3 - 3]!, tr.pts[i * 3 + 2]! - tr.pts[i * 3 - 1]!));
       for (const [stopIndex, stop] of tr.stops.entries()) {
+        // signs, board and signal belong to an underground platform; lines sharing one share them
+        if (!stop.under) continue;
+        {
+          const at = Math.max(1, Math.min(n - 1, cum.findIndex((c) => c >= stop.s)));
+          const k = `${Math.round(tr.pts[at * 3]! / 4)}_${Math.round(tr.pts[at * 3 + 2]! / 4)}_${stop.side}`;
+          const have = platformsSeen.get(k);
+          if (have) {
+            have.board.from.push({ track: trackIndex, stop: stopIndex });
+            have.signal.from.push({ track: trackIndex, stop: stopIndex });
+            continue;
+          }
+          platformKey = k;
+        }
         const name = this.transit.stations[stop.station]?.name ?? '';
         const tex = signTexture(name);
         const mat = new MeshBasicMaterial({ map: tex });
         const geo = new PlaneGeometry(2.6, 0.8);
         this.owned.push(tex, mat, geo);
         const island = this.platformBetweenTracks(trackIndex, tr, cum, stop);
+        let signal: { from: { track: number; stop: number }[]; lamp: Mesh } | null = null;
         for (const off of [-18, 0, 18]) {
           let i = cum.findIndex((c) => c >= stop.s + off);
           i = Math.max(1, i < 0 ? n - 1 : i);
@@ -331,7 +355,8 @@ export class TransitView {
             post.position.set(sx, py + 1.6, sz);
             lamp.position.set(sx - (dx / dl) * 0.05, py + 2.7, sz - (dz / dl) * 0.05);
             this.root.add(post, lamp);
-            this.signals.push({ track: trackIndex, stop: stopIndex, lamp });
+            signal = { from: [{ track: trackIndex, stop: stopIndex }], lamp };
+            this.signals.push(signal);
           }
           // the departure board: between the name signs, across the platform, read from both directions
           const j = Math.max(1, Math.min(n - 1, cum.findIndex((c) => c >= stop.s - 9)));
@@ -364,7 +389,9 @@ export class TransitView {
             m.rotation.y = yaw + back;
             this.root.add(m);
           }
-          this.boards.push({ track: trackIndex, stop: stopIndex, x: bx, z: bz, canvas, tex: btex, shown: '' });
+          const board: Board = { from: [{ track: trackIndex, stop: stopIndex }], x: bx, z: bz, canvas, tex: btex, shown: '' };
+          this.boards.push(board);
+          if (signal) platformsSeen.set(platformKey, { board, signal });
         }
       }
     }
@@ -374,8 +401,11 @@ export class TransitView {
   update(tick: number, camX: number, camZ: number): void {
     this.updateBoards(tick, camX, camZ);
     for (const sg of this.signals) {
-      const d = departure(this.model, sg.track, sg.stop, tick);
-      sg.lamp.material = (d.standing ? d.seconds <= GREEN_BEFORE : d.seconds <= GREEN_AFTER) ? this.signalGreen : this.signalRed;
+      const green = sg.from.some((f) => {
+        const d = departure(this.model, f.track, f.stop, tick);
+        return d.standing ? d.seconds <= GREEN_BEFORE : d.seconds <= GREEN_AFTER;
+      });
+      sg.lamp.material = green ? this.signalGreen : this.signalRed;
     }
     const s = sectionStates(this.model, tick, this.state);
     let nearest = CABIN_DIST;
@@ -429,6 +459,11 @@ export class TransitView {
       v.group.position.set(x, s[o + 2]!, z);
       const q = sectionQuat(s[o + 4]!, s[o + 5]!);
       v.group.quaternion.set(q.x, q.y, q.z, q.w);
+      const next = s[o + 11]!;
+      if (v.nextStop.shown !== next) {
+        v.nextStop.shown = next;
+        for (const f of v.nextStop.faces) f.material = this.nextStopText(next);
+      }
       if (v.display) {
         const texts = v.display.texts, trip = s[o + 10]!;
         v.display.mesh.material = texts[((trip % texts.length) + texts.length) % texts.length]!;
@@ -462,11 +497,11 @@ export class TransitView {
   private updateBoards(tick: number, camX: number, camZ: number): void {
     for (const b of this.boards) {
       if (Math.hypot(b.x - camX, b.z - camZ) > BOARD_DIST) continue;
-      const services = SERVICES[b.track % SERVICES.length]!;
-      const rows = nextArrivals(this.model, b.track, b.stop, tick, BOARD_ROWS).map((a) => {
-        const s = services[((a.trip % services.length) + services.length) % services.length]!;
-        return { ...s, when: a.wait < 60 ? 'sofort' : `${Math.floor(a.wait / 60)} min` };
-      });
+      // the next trains of every line that stops here, soonest first
+      const rows = b.from.flatMap((f) => {
+        const tr = this.transit.tracks[f.track]!;
+        return nextArrivals(this.model, f.track, f.stop, tick, BOARD_ROWS).map((a) => ({ line: tr.line ?? '', to: tr.to ?? '', wait: a.wait }));
+      }).sort((x, y) => x.wait - y.wait).slice(0, BOARD_ROWS).map((r) => ({ ...r, when: r.wait < 60 ? 'sofort' : `${Math.floor(r.wait / 60)} min` }));
       const key = rows.map((r) => `${r.line}${r.when}`).join('|');
       if (key === b.shown) continue;
       b.shown = key;
@@ -480,12 +515,24 @@ export class TransitView {
         const y = 42 + i * 70;
         g.textAlign = 'left';
         g.fillText(r.line, 22, y);
-        g.fillText(r.to, 110, y);
+        g.fillText(r.to.length > 13 ? `${r.to.slice(0, 12)}.` : r.to, 110, y);
         g.textAlign = 'right';
         g.fillText(r.when, b.canvas.width - 22, y);
       });
       b.tex.needsUpdate = true;
     }
+  }
+
+  /** The display text for the next stop (one material per station, made on first use); −1: the end of the line. */
+  private nextStopText(station: number): MeshBasicMaterial {
+    let m = this.nextTexts.get(station);
+    if (!m) {
+      const tex = displayTexture(station < 0 ? 'Endstation' : this.transit.stations[station]?.name ?? '', 'Nächster Halt');
+      m = new MeshBasicMaterial({ map: tex });
+      this.owned.push(tex, m);
+      this.nextTexts.set(station, m);
+    }
+    return m;
   }
 
   /** Where someone at (x, y, z) (feet) sits, if they are on a bench of a train as drawn (see benchPlace); else null. */
@@ -506,6 +553,11 @@ export class TransitView {
     return { ...now, seat: this.seated(now.x, now.y, now.z) };
   }
 
+  /** A station's name. */
+  stationName(i: number): string {
+    return this.transit.stations[i]?.name ?? '';
+  }
+
   /** The door sounds due since the last call (see update()). */
   takeDoorEvents(): { opening: boolean; x: number; z: number }[] {
     const e = this.doorEvents;
@@ -515,17 +567,18 @@ export class TransitView {
 
   /**
    * The train section nearest to (x, y, z) as of the last update(): its distance, its speed (m/s) and whether the
-   * point lies inside it; null if no train is out.
+   * point lies inside it the next station it stops at (−1: none) and how far it is
+   * on the way there (0..1); null if no train is out.
    */
-  nearest(x: number, y: number, z: number): { dist: number; speed: number; inside: boolean } | null {
+  nearest(x: number, y: number, z: number): { dist: number; speed: number; inside: boolean; next: number; way: number } | null {
     const s = this.state;
-    let best: { dist: number; speed: number; inside: boolean } | null = null;
+    let best: { dist: number; speed: number; inside: boolean; next: number; way: number } | null = null;
     for (let o = 0; o < s.length; o += SECTION_STRIDE) {
       if (s[o] !== 1) continue;
       const dx = x - s[o + 1]!, dz = z - s[o + 3]!, dist = Math.hypot(dx, dz);
       if (best && dist >= best.dist) continue;
       const yaw = s[o + 4]!, along = dx * Math.sin(yaw) + dz * Math.cos(yaw), across = dx * Math.cos(yaw) - dz * Math.sin(yaw), up = y - s[o + 2]!;
-      best = { dist, speed: s[o + 8]!, inside: Math.abs(along) < L + 0.1 && Math.abs(across) < W && up > 0 && up < TRAIN.roof };
+      best = { dist, speed: s[o + 8]!, inside: Math.abs(along) < L + 0.1 && Math.abs(across) < W && up > 0 && up < TRAIN.roof, next: s[o + 11]!, way: s[o + 12]! };
     }
     return best;
   }
@@ -571,19 +624,27 @@ function signTexture(name: string): CanvasTexture {
   return t;
 }
 
-/** Amber text on black, as on a train's destination display. */
-function displayTexture(text: string): CanvasTexture {
+/** Amber text on black, as on a train's destination display; `small`: a line of small print above it. */
+function displayTexture(text: string, small?: string): CanvasTexture {
   const c = document.createElement('canvas');
   c.width = 608;
-  c.height = 108;
+  c.height = small ? 132 : 108;
   const g = c.getContext('2d')!;
   g.fillStyle = '#0a0a0a';
   g.fillRect(0, 0, c.width, c.height);
   g.fillStyle = '#ffb400';
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.font = '600 70px system-ui, "Helvetica Neue", Arial, sans-serif';
-  g.fillText(text, c.width / 2, c.height / 2 + 4);
+  let size = small ? 64 : 70;
+  do {
+    g.font = `600 ${size}px system-ui, "Helvetica Neue", Arial, sans-serif`;
+    size -= 4;
+  } while (g.measureText(text).width > c.width - 30 && size > 24);
+  g.fillText(text, c.width / 2, small ? 84 : c.height / 2 + 4);
+  if (small) {
+    g.font = '500 30px system-ui, "Helvetica Neue", Arial, sans-serif';
+    g.fillText(small, c.width / 2, 24);
+  }
   const t = new CanvasTexture(c);
   t.colorSpace = SRGBColorSpace;
   t.anisotropy = 4;

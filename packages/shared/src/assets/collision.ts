@@ -24,6 +24,8 @@ export function encodeCollision(a: CollisionAsset): ArrayBuffer {
   let o = HEADER;
   const prev = [0, 0, 0];
   a.vertices.forEach((v, i) => {
+    // (stored as differences: one value that is not a number would shift every vertex after it)
+    if (!Number.isFinite(v)) throw new Error('collision: non-finite vertex');
     const cm = Math.round(v * 100);
     view.setInt32(o, cm - prev[i % 3]!, true);
     prev[i % 3] = cm;
@@ -33,6 +35,17 @@ export function encodeCollision(a: CollisionAsset): ArrayBuffer {
   for (const v of a.indices) { view.setInt32(o, v - p, true); p = v; o += 4; }
   for (const v of a.boundary) { view.setFloat32(o, v, true); o += 4; }
   return buf;
+}
+
+/** `a` with the triangles of `b` added (b's boundary is ignored): e.g. the city plus the underground Stadtbahn's own file. */
+export function mergeCollision(a: CollisionAsset, b: CollisionAsset): CollisionAsset {
+  const vertices = new Float32Array(a.vertices.length + b.vertices.length), indices = new Uint32Array(a.indices.length + b.indices.length);
+  vertices.set(a.vertices);
+  vertices.set(b.vertices, a.vertices.length);
+  indices.set(a.indices);
+  const base = a.vertices.length / 3;
+  for (let i = 0; i < b.indices.length; i++) indices[a.indices.length + i] = b.indices[i]! + base;
+  return { vertices, indices, boundary: a.boundary };
 }
 
 export function decodeCollision(buf: ArrayBuffer): CollisionAsset {

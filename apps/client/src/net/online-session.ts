@@ -152,6 +152,8 @@ export class OnlineSession implements Session {
   constructor(readonly sim: WorldSim, private readonly link: NetLink, opts: { now?: () => number } = {}) {
     this.me = link.welcome.slot;
     this.now = opts.now ?? (() => performance.now());
+    // the trains run by the server's clock
+    if (typeof link.welcome.transitEpoch === 'number') sim.setTransitEpoch(link.welcome.transitEpoch);
     this.unsubscribe = [
       link.onSnapshot((s) => {
         this.inbox.push(s);
@@ -159,6 +161,7 @@ export class OnlineSession implements Session {
         this.lastSnapshotMs = this.now();
       }),
       link.onWelcome((w) => {
+        if (typeof w.transitEpoch === 'number') this.sim.setTransitEpoch(w.transitEpoch);
         // after a reconnect the server's clock and the remote entities start over
         this.walkerBuf.clear();
         this.carBuf.clear();

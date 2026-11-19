@@ -152,11 +152,23 @@ export class WorldSim {
     return this.transitAt ?? this.tick;
   }
 
+  /** The real time of the trains' tick 0 (ms since the epoch; the timetable runs on the clock), or null without trains. */
+  get transitEpoch(): number | null {
+    return this.trains?.model.epochMs ?? null;
+  }
+
+  /** The trains' clock: tick 0 was at `ms` (the client takes the server's; offline a chosen time of day). */
+  setTransitEpoch(ms: number): void {
+    if (!this.trains || this.trains.model.epochMs === ms) return;
+    this.trains.model.epochMs = ms;
+    this.trains.place(this.transitTick, this.playerPoints());
+  }
+
   /** Client prediction: the trains run on the server's tick from here on (the next step moves them to tick + 1). */
   setTransitTick(tick: number): void {
     if (this.transitAt === tick) return;
     this.transitAt = tick;
-    this.trains?.place(tick);
+    this.trains?.place(tick, this.playerPoints());
   }
 
   /**
@@ -281,7 +293,7 @@ export class WorldSim {
       this.cars.updateProximity(foci);
       this.bikes.updateProximity(foci);
     }
-    this.trains?.advance(this.transitTick + 1);
+    this.trains?.advance(this.transitTick + 1, this.playerPoints());
     this.pw.step();
     if (this.transitAt !== null) this.transitAt++;
     this.cars.sync();
@@ -365,7 +377,7 @@ export class WorldSim {
     // the trains as they were when the server made `from`; they run along with the replayed steps
     if (transitTick !== undefined) {
       this.transitAt = transitTick;
-      this.trains?.place(transitTick);
+      this.trains?.place(transitTick, this.playerPoints());
     }
     this.setOwn(id, pl, from);
     // a correction may move the player far (a teleport, a respawn): the city there must exist before the replay

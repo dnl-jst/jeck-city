@@ -29,6 +29,13 @@ loops were made seamless with a short tail-into-head crossfade (sample-continuou
 | rain.ogg | [rain medium on street pavement.flac](https://freesound.org/s/454143/) | kyles | CC0 | stereo, 33.5 s loop (whole 35.5 s take, 2 s tail-into-head crossfade) |
 | static.ogg | [Radio static](https://freesound.org/s/110739/) | clesquir | CC0 | steady section 26–46 s |
 
+## Announcements
+
+`stops/*.ogg` (the trains' "Nächster Halt" and the station names) are synthesised locally by
+`scripts/make-announcements.mjs` with [Piper](https://github.com/rhasspy/piper) (MIT) and its German voice
+`de_DE-ramona-low`, trained on the [M-AILABS Speech Dataset](https://github.com/imdatceleste/m-ailabs-dataset)
+(BSD-style licence: use in any form including commercial; LibriVox recordings in the public domain).
+
 ## Music
 
 | File | Source | Notes |

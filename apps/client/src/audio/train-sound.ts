@@ -85,6 +85,19 @@ export function synthTrainDoorClose(rate: number): Float32Array {
   return normalise(out, 0.7);
 }
 
+/** The chime before an announcement: two soft bell tones falling a major third (880 Hz, then 698 Hz), 1.1 s. */
+export function synthTrainChime(rate: number): Float32Array {
+  const out = new Float32Array(Math.round(rate * 1.1));
+  for (const [t0, f] of [[0, 880], [0.38, 698.5]] as const) {
+    const i0 = Math.round(t0 * rate);
+    for (let i = 0; i0 + i < out.length; i++) {
+      const t = i / rate, env = Math.min(1, t / 0.008) * Math.exp(-t / 0.28);
+      out[i0 + i]! += (Math.sin(2 * Math.PI * f * t) + 0.25 * Math.sin(2 * Math.PI * 2 * f * t)) * env;
+    }
+  }
+  return normalise(out, 0.6);
+}
+
 function normalise(a: Float32Array, peak: number): Float32Array {
   let max = 0;
   for (const v of a) max = Math.max(max, Math.abs(v));

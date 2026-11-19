@@ -3,6 +3,7 @@ import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
 import { EXTMeshoptCompression, KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { OsmFeatures, Pt } from './osm.js';
+import type { CityEnv } from './transitenv.js';
 
 /**
  * The underground Stadtbahn, built from OSM: the two tunnel tracks of a line become one tunnel box around their
@@ -28,30 +29,30 @@ export const LINES: Line[] = [{
 /** Seconds between two trains per direction (lines 12 and 15 together run about this often by day). */
 const HEADWAY = 150;
 /** Sample spacing along the line (m). */
-const STEP = 2;
+export const STEP = 2;
 /** Rail top below the lowest ground above the tunnel (m). */
-const DEPTH = 6.3;
+export const DEPTH = 6.3;
 /** Inner ceiling above the rail top, floor (slab) below it. */
-const CEIL = STATION.ceiling, FLOOR = -0.16;
+export const CEIL = STATION.ceiling, FLOOR = -0.16;
 /** Tunnel wall beyond the outer track's centre; platform edge from a track's centre; side platform width; platform height. */
-const WALL_CLEAR = STATION.wallClear, EDGE = STATION.edge, PLATFORM_W = STATION.platformWidth, PLATFORM_H = 0.35;
+export const WALL_CLEAR = STATION.wallClear, EDGE = STATION.edge, PLATFORM_W = STATION.platformWidth, PLATFORM_H = 0.35;
 /** Tracks this far apart (half the distance) have an island platform between them. */
 const ISLAND_MIN_H = 4;
 /** A station's platform length (m): at least / at most. */
 const PLATFORM_MIN = 66, PLATFORM_MAX = 84;
 /** The tunnel goes on this far beyond the first station, the tracks back together (trains start and end out of sight). */
 const STUB = 150, STUB_KEEP = 46, STUB_TAPER = 50;
-const GAUGE = 1.435, RAIL_W = 0.07;
+export const GAUGE = 1.435, RAIL_W = 0.07;
 /** Stairs: width, the steepest rise per metre, a step's height; walls stand this high above the pavement around the opening. */
-const STAIR_W = 2.4, STAIR_SLOPE = 0.56, STEP_H = 0.165, PARAPET = 1.05, PARAPET_T = 0.3;
+export const STAIR_W = 2.4, STAIR_SLOPE = 0.56, STEP_H = 0.165, PARAPET = 1.05, PARAPET_T = 0.3;
 /** Kerb height of the pavement (streets.ts CURB_H). */
-const PAVEMENT_H = 0.12;
+export const PAVEMENT_H = 0.12;
 
-type V3 = [number, number, number];
-type RGB = [number, number, number];
+export type V3 = [number, number, number];
+export type RGB = [number, number, number];
 
 /** Triangles with a colour per vertex. */
-class ColorMesh {
+export class ColorMesh {
   pos: number[] = [];
   col: number[] = [];
   quad(a: V3, b: V3, c: V3, d: V3, color: RGB, light: [number, number, number, number] | number = 1): void {
@@ -74,7 +75,7 @@ class ColorMesh {
   }
 }
 
-const COLORS = {
+export const COLORS = {
   slab: [0.2, 0.19, 0.18] as RGB, rail: [0.55, 0.56, 0.58] as RGB, wall: [0.5, 0.5, 0.48] as RGB, ceiling: [0.3, 0.3, 0.3] as RGB,
   panel: [0.8, 0.79, 0.73] as RGB, joint: [0.42, 0.42, 0.4] as RGB, column: [0.86, 0.86, 0.82] as RGB, fence: [0.6, 0.61, 0.62] as RGB,
   bench: [0.92, 0.92, 0.9] as RGB, bin: [0.82, 0.16, 0.1] as RGB, signal: [1, 0.12, 0.06] as RGB,
@@ -85,13 +86,13 @@ const COLORS = {
  * Station walls: narrow upright tiles in mixed grey-green and brown tones, as in the stations under Neusser Straße
  * (Florastraße). Each station tints them a little differently.
  */
-const TILE_TONES: RGB[] = [[0.47, 0.5, 0.44], [0.55, 0.58, 0.51], [0.4, 0.43, 0.38], [0.62, 0.64, 0.57], [0.34, 0.29, 0.24], [0.5, 0.53, 0.47]];
+export const TILE_TONES: RGB[] = [[0.47, 0.5, 0.44], [0.55, 0.58, 0.51], [0.4, 0.43, 0.38], [0.62, 0.64, 0.57], [0.34, 0.29, 0.24], [0.5, 0.53, 0.47]];
 const tinted = (t: RGB): RGB[] => TILE_TONES.map((c) => [c[0] * t[0], c[1] * t[1], c[2] * t[2]] as RGB);
 /**
  * Tile tones per station (by name; others get the plain mix) and an accent colour for a band on its columns:
  * Neusser Straße/Gürtel has pale yellow and dark blue tiles and blue on the columns.
  */
-const STATION_LOOK: Record<string, { tones: RGB[]; accent?: RGB }> = {
+export const STATION_LOOK: Record<string, { tones: RGB[]; accent?: RGB }> = {
   Ebertplatz: { tones: tinted([1.08, 1, 0.9]) },
   'Lohsestraße': { tones: tinted([0.96, 1, 1.08]) },
   'Neusser Straße/Gürtel': {
@@ -99,9 +100,9 @@ const STATION_LOOK: Record<string, { tones: RGB[]; accent?: RGB }> = {
     accent: [0.2, 0.3, 0.56],
   },
 };
-const TILE_W = 0.125;
+export const TILE_W = 0.125;
 /** Deterministic 0..1 from integers (tile colours, paving shades). */
-function hash(a: number, b: number, c = 0): number {
+export function hash(a: number, b: number, c = 0): number {
   let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(c | 0, 2147483647)) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
@@ -117,15 +118,7 @@ export type TransitBuild = {
   openings: Pt[][];
 };
 
-type Env = {
-  terrain: TerrainGrid;
-  /** Whether (x, z) lies inside a building. */
-  built(p: Pt): boolean;
-  /** Whether (x, z) is pavement (sidewalk or square): PAVEMENT_H above the terrain. */
-  pavement(p: Pt): boolean;
-  /** Whether (x, z) lies on a carriageway. */
-  roadway(p: Pt): boolean;
-};
+type Env = CityEnv & { terrain: TerrainGrid };
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -196,8 +189,115 @@ function nearest(p: Pt, line: Pt[]): { q: Pt; d: number; atEnd: boolean } {
   return best;
 }
 
-type Stair = { u0: number; u1: number; bottom: number; top: number; topY: number };
 type Station = { name: string; i0: number; i1: number; island: boolean; tones: RGB[]; accent?: RGB; stairs: Stair[] };
+
+/** What a stair is built into: the cross-section along its track, the rail's height there, the ground above and the meshes. */
+export type StairSite = {
+  /** A point at sample position `at` (may be fractional), u metres across and y above the rail top there. */
+  P(at: number, u: number, y: number): V3;
+  /** The rail top's height at sample position `at`. */
+  rail(at: number): number;
+  /** Height of the walkable ground at a point (terrain, plus the kerb on pavement). */
+  surface(p: Pt): number;
+  inside: ColorMesh; outside: ColorMesh;
+  /** Adds a quad to the collision. */
+  solid(a: V3, b: V3, c: V3, d: V3): void;
+  /** The shaft's wall colour (a tile tone of the station). */
+  tone: RGB;
+};
+/** A stair from a platform up to the street: across u0..u1, from sample `bottom` to sample `top`, its top at height topY. */
+export type Stair = { u0: number; u1: number; bottom: number; top: number; topY: number };
+
+/**
+ * Builds a stair with its shaft and the walls around its opening; returns the opening in the ground (its footprint, a
+ * little beyond its top and half under the walls, which hide the ragged edge of the cut).
+ */
+export function buildStair(site: StairSite, t: Stair): Pt[] {
+  const { P, rail, surface, inside, outside, solid, tone } = site;
+  const xz = (v: V3): Pt => ({ x: v[0], z: v[2] });
+  const dir = Math.sign(t.top - t.bottom), run = Math.abs(t.top - t.bottom);
+  const y0 = PLATFORM_H, at = (k: number) => t.bottom + dir * k;
+  /** Height above the rail top (at the stair's top end the rail differs a little: all heights relative to the bottom's). */
+  const base = rail(t.bottom), rel = (k: number, y: number): number => y + base - rail(at(k));
+  const rise = t.topY - (base + y0);
+  const steps = Math.max(1, Math.round(rise / STEP_H)), h = rise / steps, d = run / steps;
+  const Q = (k: number, u: number, y: number): V3 => P(at(k), u, rel(k, y));
+  for (let k = 0; k < steps; k++) {
+    // Up to the station's ceiling the steps lie in its light (fading towards the shaft); above it, in the shaft,
+    // they and the shaft's walls are lit like everything outdoors: by the day, and dark at night.
+    const yk = y0 + (k + 1) * h, up = Math.min(1, (yk - y0) / (CEIL - y0)), outdoors = yk > CEIL - 0.2;
+    const mesh = outdoors ? outside : inside, l = outdoors ? 1 : 1 - 0.75 * up * up;
+    mesh.quad(Q(k * d, t.u0, yk - h), Q(k * d, t.u1, yk - h), Q(k * d, t.u1, yk), Q(k * d, t.u0, yk), COLORS.stair, l * 0.7);
+    mesh.quad(Q(k * d, t.u0, yk), Q(k * d, t.u1, yk), Q((k + 1) * d, t.u1, yk), Q((k + 1) * d, t.u0, yk), COLORS.stair, l);
+    // the step's cheeks: closed down to the platform on both sides
+    for (const u of [t.u0, t.u1]) inside.quad(Q(k * d, u, y0), Q((k + 1) * d, u, y0), Q((k + 1) * d, u, yk), Q(k * d, u, yk), COLORS.face, 0.8);
+  }
+  // walked on as a ramp through the middle of the steps
+  for (let k = 0; k < run; k++) {
+    const ya = y0 + (rise * k) / run + h / 2, yb = y0 + (rise * (k + 1)) / run + h / 2;
+    solid(Q(k, t.u0, ya), Q(k, t.u1, ya), Q(k + 1, t.u1, yb), Q(k + 1, t.u0, yb));
+  }
+  // closed below (both sides and the high end), the shaft above the ceiling, walls around the opening
+  const wallU = [t.u0, t.u1];
+  for (let k = 0; k < run; k++) {
+    const ya = y0 + (rise * k) / run, yb = y0 + (rise * (k + 1)) / run;
+    for (const u of wallU) {
+      const under: [V3, V3, V3, V3] = [Q(k, u, y0), Q(k + 1, u, y0), Q(k + 1, u, yb), Q(k, u, ya)];
+      solid(...under);
+      const ga = surface(xz(Q(k, u, 0))) - base, gb = surface(xz(Q(k + 1, u, 0))) - base;
+      const shaft: [V3, V3, V3, V3] = [Q(k, u, CEIL), Q(k + 1, u, CEIL), Q(k + 1, u, gb), Q(k, u, ga)];
+      outside.quad(...shaft, tone, 0.9);
+      const full: [V3, V3, V3, V3] = [Q(k, u, CEIL), Q(k + 1, u, CEIL), Q(k + 1, u, gb + PARAPET), Q(k, u, ga + PARAPET)];
+      solid(...full);
+      // the wall around the opening: inner face, outer face and top
+      const o = u === t.u0 ? -PARAPET_T : PARAPET_T;
+      const oa = surface(xz(Q(k, u + o, 0))) - base, ob = surface(xz(Q(k + 1, u + o, 0))) - base;
+      outside.quad(Q(k, u, ga), Q(k + 1, u, gb), Q(k + 1, u, gb + PARAPET), Q(k, u, ga + PARAPET), COLORS.concrete, 0.9);
+      outside.quad(Q(k, u + o, oa - 0.3), Q(k + 1, u + o, ob - 0.3), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET), COLORS.concrete, 0.9);
+      outside.quad(Q(k, u, ga + PARAPET), Q(k + 1, u, gb + PARAPET), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET), COLORS.concrete, 1);
+      solid(Q(k, u + o, oa - 0.3), Q(k + 1, u + o, ob - 0.3), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET));
+    }
+  }
+  for (const u of wallU) {
+    // the walls' ends at the way in (they are hollow: an inner and an outer face)
+    const o = u === t.u0 ? -PARAPET_T : PARAPET_T, g = surface(xz(Q(run, u, 0))) - base;
+    outside.quad(Q(run, u, g - 0.3), Q(run, u + o, g - 0.3), Q(run, u + o, g + PARAPET), Q(run, u, g + PARAPET), COLORS.concrete, 0.8);
+    solid(Q(run, u, g - 0.3), Q(run, u + o, g - 0.3), Q(run, u + o, g + PARAPET), Q(run, u, g + PARAPET));
+  }
+  {
+    // the landing at the top: over the edge of the cut in the pavement, a finger's width above it
+    const far = run + 0.7 / STEP, lift = 0.015;
+    const q: [V3, V3, V3, V3] = [Q(run, t.u0 - PARAPET_T, y0 + rise + lift), Q(run, t.u1 + PARAPET_T, y0 + rise + lift), Q(far, t.u1 + PARAPET_T, y0 + rise + lift), Q(far, t.u0 - PARAPET_T, y0 + rise + lift)];
+    outside.quad(...q, COLORS.stair, 1);
+    solid(...q);
+  }
+  {
+    // the high end below the stair, and the low end's wall from the ceiling up
+    const end: [V3, V3, V3, V3] = [Q(run, t.u0, y0), Q(run, t.u1, y0), Q(run, t.u1, y0 + rise), Q(run, t.u0, y0 + rise)];
+    inside.quad(...end, COLORS.face, 0.8);
+    solid(...end);
+    const g0 = surface(xz(Q(0, t.u0, 0))) - base, g1 = surface(xz(Q(0, t.u1, 0))) - base;
+    outside.quad(Q(0, t.u0, CEIL), Q(0, t.u1, CEIL), Q(0, t.u1, g1), Q(0, t.u0, g0), tone, 0.85);
+    solid(Q(0, t.u0, CEIL), Q(0, t.u1, CEIL), Q(0, t.u1, g1 + PARAPET), Q(0, t.u0, g0 + PARAPET));
+    const b = -PARAPET_T / STEP; // the wall's thickness in samples
+    outside.quad(Q(0, t.u0 - PARAPET_T, g0), Q(0, t.u1 + PARAPET_T, g1), Q(0, t.u1 + PARAPET_T, g1 + PARAPET), Q(0, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 0.85);
+    outside.quad(Q(b, t.u0 - PARAPET_T, g0 - 0.3), Q(b, t.u1 + PARAPET_T, g1 - 0.3), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 0.85);
+    outside.quad(Q(0, t.u0 - PARAPET_T, g0 + PARAPET), Q(0, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 1);
+    solid(Q(b, t.u0 - PARAPET_T, g0 - 0.3), Q(b, t.u1 + PARAPET_T, g1 - 0.3), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET));
+    // the sign: a post with a blue cube at the way in
+    const sx = t.u1 + PARAPET_T + 0.25, sk = run + 0.2 / STEP, gy = surface(xz(Q(sk, sx, 0))) - base;
+    const ring = (y: number, r: number): V3[] => [Q(sk - r / STEP, sx - r, y), Q(sk + r / STEP, sx - r, y), Q(sk + r / STEP, sx + r, y), Q(sk - r / STEP, sx + r, y)];
+    outside.box([...ring(gy, 0.06), ...ring(gy + 3, 0.06)], COLORS.post);
+    outside.box([...ring(gy + 3, 0.4), ...ring(gy + 3.8, 0.4)], COLORS.sign);
+  }
+  // the opening in the ground: the stair's footprint, a little beyond its top and half under the walls around it
+  // (which hide the ragged edge of the cut)
+  const ring: Pt[] = [];
+  const reach = run + 0.4 / STEP, under = PARAPET_T / 2, first = -under / STEP;
+  for (let k = 0; k <= run; k++) ring.push(xz(Q(k === run ? reach : k === 0 ? first : k, t.u0 - under, 0)));
+  for (let k = run; k >= 0; k--) ring.push(xz(Q(k === run ? reach : k === 0 ? first : k, t.u1 + under, 0)));
+  return ring;
+}
 
 export async function buildTransit(f: OsmFeatures, env: Env, line: Line = LINES[0]!): Promise<TransitBuild | null> {
   const ways = new Map(f.tunnelTracks.map((w) => [w.id, w.pts]));
@@ -549,92 +649,12 @@ export async function buildTransit(f: OsmFeatures, env: Env, line: Line = LINES[
 
   // stairs and their shafts
   const openings: Pt[][] = [];
-  const shaftTone = (s: Station): RGB => s.tones[1]!;
+  const railAt = (at: number): number => {
+    const i = Math.min(n - 2, Math.max(0, Math.floor(at)));
+    return rail[i]! + (rail[i + 1]! - rail[i]!) * (at - i);
+  };
   for (const s of stations) {
-    for (const t of s.stairs) {
-      const dir = Math.sign(t.top - t.bottom), run = Math.abs(t.top - t.bottom);
-      const y0 = PLATFORM_H, at = (k: number) => t.bottom + dir * k;
-      /** Height above the rail top (at the stair's top end the rail differs a little: all heights relative to the bottom's). */
-      const base = rail[t.bottom]!, rel = (k: number, y: number): number => y + base - (rail[Math.floor(at(k))]! + (rail[Math.ceil(at(k))]! - rail[Math.floor(at(k))]!) * (at(k) - Math.floor(at(k))));
-      const rise = t.topY - (base + y0);
-      const steps = Math.max(1, Math.round(rise / STEP_H)), h = rise / steps, d = run / steps;
-      const Q = (k: number, u: number, y: number): V3 => P(at(k), u, rel(k, y));
-      for (let k = 0; k < steps; k++) {
-        // Up to the station's ceiling the steps lie in its light (fading towards the shaft); above it, in the shaft,
-        // they and the shaft's walls are lit like everything outdoors: by the day, and dark at night.
-        const yk = y0 + (k + 1) * h, up = Math.min(1, (yk - y0) / (CEIL - y0)), outdoors = yk > CEIL - 0.2;
-        const mesh = outdoors ? outside : inside, l = outdoors ? 1 : 1 - 0.75 * up * up;
-        mesh.quad(Q(k * d, t.u0, yk - h), Q(k * d, t.u1, yk - h), Q(k * d, t.u1, yk), Q(k * d, t.u0, yk), COLORS.stair, l * 0.7);
-        mesh.quad(Q(k * d, t.u0, yk), Q(k * d, t.u1, yk), Q((k + 1) * d, t.u1, yk), Q((k + 1) * d, t.u0, yk), COLORS.stair, l);
-        // the step's cheeks: closed down to the platform on both sides
-        for (const u of [t.u0, t.u1]) inside.quad(Q(k * d, u, y0), Q((k + 1) * d, u, y0), Q((k + 1) * d, u, yk), Q(k * d, u, yk), COLORS.face, 0.8);
-      }
-      // walked on as a ramp through the middle of the steps
-      for (let k = 0; k < run; k++) {
-        const ya = y0 + (rise * k) / run + h / 2, yb = y0 + (rise * (k + 1)) / run + h / 2;
-        solid(Q(k, t.u0, ya), Q(k, t.u1, ya), Q(k + 1, t.u1, yb), Q(k + 1, t.u0, yb));
-      }
-      // closed below (both sides and the high end), the shaft above the ceiling, walls around the opening
-      const wallU = [t.u0, t.u1];
-      for (let k = 0; k < run; k++) {
-        const ya = y0 + (rise * k) / run, yb = y0 + (rise * (k + 1)) / run;
-        for (const u of wallU) {
-          const under: [V3, V3, V3, V3] = [Q(k, u, y0), Q(k + 1, u, y0), Q(k + 1, u, yb), Q(k, u, ya)];
-          solid(...under);
-          const ga = surface(xz(Q(k, u, 0))) - base, gb = surface(xz(Q(k + 1, u, 0))) - base;
-          const shaft: [V3, V3, V3, V3] = [Q(k, u, CEIL), Q(k + 1, u, CEIL), Q(k + 1, u, gb), Q(k, u, ga)];
-          outside.quad(...shaft, shaftTone(s), 0.9);
-          const full: [V3, V3, V3, V3] = [Q(k, u, CEIL), Q(k + 1, u, CEIL), Q(k + 1, u, gb + PARAPET), Q(k, u, ga + PARAPET)];
-          solid(...full);
-          // the wall around the opening: inner face, outer face and top
-          const o = u === t.u0 ? -PARAPET_T : PARAPET_T;
-          const oa = surface(xz(Q(k, u + o, 0))) - base, ob = surface(xz(Q(k + 1, u + o, 0))) - base;
-          outside.quad(Q(k, u, ga), Q(k + 1, u, gb), Q(k + 1, u, gb + PARAPET), Q(k, u, ga + PARAPET), COLORS.concrete, 0.9);
-          outside.quad(Q(k, u + o, oa - 0.3), Q(k + 1, u + o, ob - 0.3), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET), COLORS.concrete, 0.9);
-          outside.quad(Q(k, u, ga + PARAPET), Q(k + 1, u, gb + PARAPET), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET), COLORS.concrete, 1);
-          solid(Q(k, u + o, oa - 0.3), Q(k + 1, u + o, ob - 0.3), Q(k + 1, u + o, gb + PARAPET), Q(k, u + o, ga + PARAPET));
-        }
-      }
-      for (const u of wallU) {
-        // the walls' ends at the way in (they are hollow: an inner and an outer face)
-        const o = u === t.u0 ? -PARAPET_T : PARAPET_T, g = surface(xz(Q(run, u, 0))) - base;
-        outside.quad(Q(run, u, g - 0.3), Q(run, u + o, g - 0.3), Q(run, u + o, g + PARAPET), Q(run, u, g + PARAPET), COLORS.concrete, 0.8);
-        solid(Q(run, u, g - 0.3), Q(run, u + o, g - 0.3), Q(run, u + o, g + PARAPET), Q(run, u, g + PARAPET));
-      }
-      {
-        // the landing at the top: over the edge of the cut in the pavement, a finger's width above it
-        const far = run + 0.7 / STEP, lift = 0.015;
-        const q: [V3, V3, V3, V3] = [Q(run, t.u0 - PARAPET_T, y0 + rise + lift), Q(run, t.u1 + PARAPET_T, y0 + rise + lift), Q(far, t.u1 + PARAPET_T, y0 + rise + lift), Q(far, t.u0 - PARAPET_T, y0 + rise + lift)];
-        outside.quad(...q, COLORS.stair, 1);
-        solid(...q);
-      }
-      {
-        // the high end below the stair, and the low end's wall from the ceiling up
-        const end: [V3, V3, V3, V3] = [Q(run, t.u0, y0), Q(run, t.u1, y0), Q(run, t.u1, y0 + rise), Q(run, t.u0, y0 + rise)];
-        inside.quad(...end, COLORS.face, 0.8);
-        solid(...end);
-        const g0 = surface(xz(Q(0, t.u0, 0))) - base, g1 = surface(xz(Q(0, t.u1, 0))) - base;
-        outside.quad(Q(0, t.u0, CEIL), Q(0, t.u1, CEIL), Q(0, t.u1, g1), Q(0, t.u0, g0), shaftTone(s), 0.85);
-        solid(Q(0, t.u0, CEIL), Q(0, t.u1, CEIL), Q(0, t.u1, g1 + PARAPET), Q(0, t.u0, g0 + PARAPET));
-        const b = -PARAPET_T / STEP; // the wall's thickness in samples
-        outside.quad(Q(0, t.u0 - PARAPET_T, g0), Q(0, t.u1 + PARAPET_T, g1), Q(0, t.u1 + PARAPET_T, g1 + PARAPET), Q(0, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 0.85);
-        outside.quad(Q(b, t.u0 - PARAPET_T, g0 - 0.3), Q(b, t.u1 + PARAPET_T, g1 - 0.3), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 0.85);
-        outside.quad(Q(0, t.u0 - PARAPET_T, g0 + PARAPET), Q(0, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET), COLORS.concrete, 1);
-        solid(Q(b, t.u0 - PARAPET_T, g0 - 0.3), Q(b, t.u1 + PARAPET_T, g1 - 0.3), Q(b, t.u1 + PARAPET_T, g1 + PARAPET), Q(b, t.u0 - PARAPET_T, g0 + PARAPET));
-        // the sign: a post with a blue cube at the way in
-        const sx = t.u1 + PARAPET_T + 0.25, sk = run + 0.2 / STEP, gy = surface(xz(Q(sk, sx, 0))) - base;
-        const ring = (y: number, r: number): V3[] => [Q(sk - r / STEP, sx - r, y), Q(sk + r / STEP, sx - r, y), Q(sk + r / STEP, sx + r, y), Q(sk - r / STEP, sx + r, y)];
-        outside.box([...ring(gy, 0.06), ...ring(gy + 3, 0.06)], COLORS.post);
-        outside.box([...ring(gy + 3, 0.4), ...ring(gy + 3.8, 0.4)], COLORS.sign);
-      }
-      // the opening in the ground: the stair's footprint, a little beyond its top and half under the walls around it
-      // (which hide the ragged edge of the cut)
-      const ring: Pt[] = [];
-      const reach = run + 0.4 / STEP, under = PARAPET_T / 2, first = -under / STEP;
-      for (let k = 0; k <= run; k++) ring.push(xz(Q(k === run ? reach : k === 0 ? first : k, t.u0 - under, 0)));
-      for (let k = run; k >= 0; k--) ring.push(xz(Q(k === run ? reach : k === 0 ? first : k, t.u1 + under, 0)));
-      openings.push(ring);
-    }
+    for (const t of s.stairs) openings.push(buildStair({ P, rail: railAt, surface, inside, outside, solid, tone: s.tones[1]! }, t));
   }
 
   // tracks: east (northbound) to the right of the centre line, west (southbound) to the left and the other way round
@@ -671,7 +691,7 @@ export async function buildTransit(f: OsmFeatures, env: Env, line: Line = LINES[
 }
 
 /** One GLB per chunk: the inside (unlit, light baked into the vertex colours) and the parts above ground (lit). */
-async function encodeModels(inside: ColorMesh, outside: ColorMesh): Promise<Map<string, Uint8Array>> {
+export async function encodeModels(inside: ColorMesh, outside: ColorMesh): Promise<Map<string, Uint8Array>> {
   await MeshoptEncoder.ready;
   const parts = new Map<string, { in: { pos: number[]; col: number[] }; out: { pos: number[]; col: number[]; nor: number[] } }>();
   const part = (key: string) => {

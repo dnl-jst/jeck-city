@@ -24,6 +24,9 @@ const STEPS: SoundId[] = ['step1', 'step2', 'step3', 'step4'];
  * The game's sound: turns player/car state into mixer cues and drives the car radio.
  * Loops (ambience, engine) start only once the sounds are loaded and the mixer is unlocked.
  */
+/** Pause between "Nächster Halt" and the station's name in a train's announcement (ms). */
+const STOP_PAUSE_MS = 280;
+
 export class GameAudio {
   /** Radio callbacks; main.ts hands these to the Radio. */
   readonly radioEvents = {
@@ -54,6 +57,10 @@ export class GameAudio {
   private ambience: LoopVoice | null = null;
   /** 0..1: how far underground the listener is (see transit()). */
   private under = 0;
+  /** Recorded stop announcements (see stopClips), the clip playing and a counter: a newer announcement replaces an older one. */
+  private clips: Promise<Record<string, string> | null> | null = null;
+  private clip: HTMLAudioElement | null = null;
+  private announcement = 0;
   private trainRoll: LoopVoice | null = null;
   private trainMotor: LoopVoice | null = null;
   /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
@@ -112,6 +119,7 @@ export class GameAudio {
     this.d.mixer.setMuted(this.muted);
     this.d.radio.setMuted(this.muted);
     this.d.remote?.setMuted(this.muted);
+    if (this.muted) this.clip?.pause();
     this.d.flash(this.muted ? 'Ton aus' : 'Ton an');
   }
 
@@ -325,6 +333,59 @@ export class GameAudio {
       this.trainMotor?.stop();
       this.trainRoll = this.trainMotor = null;
     }
+  }
+
+  /**
+   * The announcement in a train: a chime, then "Nächster Halt" and the station's name from the recorded clips in
+   * /audio/stops/ (made by scripts/make-announcements.mjs). Without a clip for the station: spoken by the browser's
+   * speech synthesis (German voice if there is one; silent where the browser has none). null: the end of the line.
+   */
+  announceStop(name: string | null): void {
+    if (!this.loaded || !this.unlocked) return;
+    this.d.mixer.oneShot('trainChime', { gain: MIX.trainChime });
+    const turn = ++this.announcement;
+    void this.stopClips().then((clips) => {
+      if (turn !== this.announcement || this.muted) return;
+      const file = name === null ? 'end.ogg' : clips?.[name];
+      if (!file) return this.speakStop(name);
+      // after the chime: the prefix, then the name (the end-of-line clip stands alone)
+      const play = (f: string, then?: () => void): void => {
+        const a = new Audio(`/audio/stops/${f}`);
+        a.volume = 0.9;
+        this.clip = a;
+        a.onended = () => then?.();
+        a.onerror = () => { if (name !== null) this.speakStop(name); };
+        void a.play().catch(() => { /* not allowed to play yet: nothing is announced */ });
+      };
+      setTimeout(() => {
+        if (turn !== this.announcement) return;
+        this.clip?.pause();
+        if (name === null) play(file);
+        // (a short pause between "Nächster Halt" and the name)
+        else play('next.ogg', () => setTimeout(() => { if (turn === this.announcement) play(file); }, STOP_PAUSE_MS));
+      }, 900);
+    });
+  }
+
+  /** The recorded announcements: station name → file (index.json), fetched once; null if there are none. */
+  private stopClips(): Promise<Record<string, string> | null> {
+    this.clips ??= fetch('/audio/stops/index.json').then((r) => (r.ok ? r.json() as Promise<Record<string, string>> : null)).catch(() => null);
+    return this.clips;
+  }
+
+  private speakStop(name: string | null): void {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return;
+    // (spoken as written, but without what a voice stumbles over: "/" and abbreviations)
+    const spoken = name === null ? 'Endstation. Bitte alle aussteigen.' : `Nächster Halt: ${name.replace(/\//g, ', ').replace(/\bBf\b/g, 'Bahnhof').replace(/Str\./g, 'Straße')}.`;
+    const u = new SpeechSynthesisUtterance(spoken);
+    u.lang = 'de-DE';
+    u.rate = 0.95;
+    u.volume = 0.85;
+    const voice = synth.getVoices().find((v) => v.lang.startsWith('de'));
+    if (voice) u.voice = voice;
+    synth.cancel();
+    setTimeout(() => synth.speak(u), 900);
   }
 
   /** A train's doors start to open, or to close (three warning beeps first), at (x, z). */

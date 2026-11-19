@@ -3,7 +3,10 @@ import { BENCH, SECTION_STRIDE, sectionBenches, sectionQuat, sectionStates, TRAI
 import { TRAIN_FLOOR_GROUPS, TRAIN_GROUPS, type PhysicsWorld } from './world';
 
 /** Where idle sections wait (far below the world). */
-const PARKED_Y = -500;
+const PARKED_Y = -500, PARK_SPACING = 20;
+/** Sections within this distance (m, per axis) of a player have a body in the world. */
+const NEAR = 250;
+type XZ = { x: number; z: number };
 
 type Section = { body: RAPIER.RigidBody; left: RAPIER.Collider; right: RAPIER.Collider; active: boolean };
 
@@ -16,6 +19,8 @@ export class Trains {
   readonly model: TransitModel;
   private readonly sections: Section[] = [];
   private readonly state: Float64Array;
+  /** The points trains are simulated around (the players), or null: everywhere. */
+  private near: readonly XZ[] | null = null;
 
   constructor(private readonly pw: PhysicsWorld, transit: Transit) {
     this.model = transitModel(transit);
@@ -25,7 +30,7 @@ export class Trains {
     const L = TRAIN.sectionLength / 2, W = TRAIN.halfWidth, wall = TRAIN.wall / 2, door = TRAIN.doorWidth / 2;
     const wallH = (TRAIN.ceiling - TRAIN.floor) / 2, wallY = TRAIN.floor + wallH;
     for (let i = 0; i < this.model.count; i++) {
-      const body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, PARKED_Y, 0));
+      const body = world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(i * PARK_SPACING, PARKED_Y, 0));
       const box = (hx: number, hy: number, hz: number, x: number, y: number, z: number, groups = TRAIN_GROUPS): RAPIER.Collider =>
         world.createCollider(R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(x, y, z).setCollisionGroups(groups), body);
       // (a little longer than the body: the floors of two sections meet over the joint. Over a gap nobody would be
@@ -59,25 +64,37 @@ export class Trains {
     return this.state;
   }
 
-  /** Puts every section where it is at `tick`, at once (start, replay). */
-  place(tick: number): void {
+  /**
+   * Puts every section where it is at `tick`, at once (start, replay). near: only sections within NEAR of one of these
+   * points get a body in the world (the others wait parked): hundreds of moving bodies cost the step far more than
+   * the few trains anyone can reach.
+   */
+  place(tick: number, near?: readonly XZ[]): void {
+    if (near) this.near = near;
     this.apply(tick, true);
     this.pw.world.propagateModifiedBodyPositionsToColliders();
   }
 
-  /** Before a physics step: the sections move to where they are at `tick` during it. */
-  advance(tick: number): void {
+  /** Before a physics step: the sections move to where they are at `tick` during it (near: see place). */
+  advance(tick: number, near?: readonly XZ[]): void {
+    if (near) this.near = near;
     this.apply(tick, false);
   }
 
   private apply(tick: number, jump: boolean): void {
     const s = sectionStates(this.model, tick, this.state);
     for (let i = 0; i < this.sections.length; i++) {
-      const sec = this.sections[i]!, o = i * SECTION_STRIDE, active = s[o] === 1;
+      const sec = this.sections[i]!, o = i * SECTION_STRIDE;
+      let active = s[o] === 1;
+      if (active && this.near) {
+        const x = s[o + 1]!, z = s[o + 3]!;
+        active = this.near.some((p) => Math.abs(p.x - x) < NEAR && Math.abs(p.z - z) < NEAR);
+      }
       if (!active) {
         if (sec.active || jump) {
-          sec.body.setTranslation({ x: 0, y: PARKED_Y, z: 0 }, false);
-          sec.body.setNextKinematicTranslation({ x: 0, y: PARKED_Y, z: 0 });
+          // (each in a place of its own: hundreds of bodies in one spot would all overlap in the broad phase)
+          sec.body.setTranslation({ x: i * PARK_SPACING, y: PARKED_Y, z: 0 }, false);
+          sec.body.setNextKinematicTranslation({ x: i * PARK_SPACING, y: PARKED_Y, z: 0 });
         }
         sec.active = false;
         continue;

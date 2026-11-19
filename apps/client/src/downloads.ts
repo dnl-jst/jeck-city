@@ -21,7 +21,7 @@ export function categoryOf(url: string): DownloadCategory {
   const path = url.split(/[?#]/)[0]!;
   const file = path.slice(path.lastIndexOf('/') + 1);
   if (path.includes('/audio/')) return 'sound';
-  if (file === 'collision.bin' || file === 'terrain.bin') return 'physics';
+  if (file === 'collision.bin' || file === 'terrain.bin' || file === 'transit-collision.bin') return 'physics';
   if (file.startsWith('chunk_') || file.startsWith('model_')) return 'city';
   if (/^(car|bike|rack|character)_/.test(file)) return 'models';
   if (file === 'map.json' || file === 'manifest.json' || file === 'roadgraph.json') return 'map';

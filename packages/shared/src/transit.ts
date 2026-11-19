@@ -8,9 +8,27 @@ import { TICK_HZ } from './net/constants';
 export type TransitTrack = {
   /** Centre line at rail-top height, flat x, y, z; trains run from the first point to the last. */
   pts: number[];
-  /** Where a train's centre stops: distance along `pts` (m), the station and the platform's side (1 left, −1 right of travel). */
-  stops: { station: number; s: number; side: 1 | -1 }[];
+  /**
+   * Where a train's centre stops: distance along `pts` (m), the station and the platform's side (1 left, −1 right of
+   * travel). under: the stop is underground (a station with walls for signs, a ceiling for the departure board).
+   */
+  stops: { station: number; s: number; side: 1 | -1; under?: boolean }[];
+  /** The line's number and where it goes (the trains' displays, the departure boards). Missing: unnamed. */
+  line?: string;
+  to?: string;
+  /** Seconds between two trains on this path, and how far its departures are shifted; missing: the common headway, shifted by half of it per path. */
+  headway?: number;
+  phase?: number;
+  /** The real timetable of this path (see Timetable); with it, headway and phase are not used. */
+  timetable?: Timetable;
 };
+
+/**
+ * A path's timetable. patterns: the stop times of a kind of trip, per stop of the path in seconds after the first
+ * served one (−1: not served). days: per kind of day (weekday, Saturday, Sunday) the trips as pairs of pattern and
+ * the first served stop's time (seconds after the service day's midnight; past 24 h for trips after midnight).
+ */
+export type Timetable = { patterns: number[][]; days: [number[], number[], number[]] };
 
 export type Transit = {
   /** Seconds between two trains on a track. */
@@ -67,20 +85,94 @@ export function sectionOffset(i: number): number {
 }
 
 type Leg = { t0: number; s0: number; d: number; tAcc: number; tCruise: number; v: number };
+type Dwell = { t0: number; t1: number; side: 1 | -1; station: number };
+/**
+ * One run along a track: how the train moves (legs) and where it stands (dwells), by seconds from the run's start.
+ * at: the dwell per stop of the track (undefined: not served). lead: when the first served stop's timetable time is.
+ */
+type Profile = { legs: Leg[]; dwells: Dwell[]; at: (Dwell | undefined)[]; duration: number; lead: number };
 type Track = {
   pts: number[]; cum: Float64Array; length: number;
-  legs: Leg[];
-  /** Per stop: when the train stands there (s after the trip's start) and the platform side. */
-  dwells: { t0: number; t1: number; side: 1 | -1; station: number }[];
-  duration: number;
   /** Trains needed at once (the pool per track). */
   slots: number;
-  /** Seconds this track's departures are shifted by. */
-  phase: number;
+  /** Without a timetable: one run every `headway` seconds, shifted by `phase`. */
+  periodic: { profile: Profile; headway: number; phase: number } | null;
+  /**
+   * With a timetable: the runs' profiles, and per kind of day (weekday, Saturday, Sunday) the trips by their start
+   * (seconds after the service day's midnight; may pass 24 h) with their profile. longest: the longest run (s).
+   */
+  profiles: Profile[];
+  days: { start: Float64Array; profile: Int32Array }[];
+  longest: number;
 };
 
 /** The tracks with everything precomputed that the poses need. */
-export type TransitModel = { headway: number; tracks: Track[]; /** Sections in total (all tracks, all slots). */ count: number };
+export type TransitModel = {
+  headway: number; tracks: Track[];
+  /** Sections in total (all tracks, all slots). */
+  count: number;
+  /** The real time of tick 0 (ms since the epoch): timetables run on the clock in Köln. Both sides of a connection use the server's. */
+  epochMs: number;
+};
+
+/** Quickest run over d metres from standstill to standstill (s). */
+const quickest = (d: number): number => (d >= (VMAX * VMAX) / ACCEL ? d / VMAX + VMAX / ACCEL : 2 * Math.sqrt(Math.max(0, d) / ACCEL));
+
+/** A leg over d metres from s0, starting at t0 and taking `time` seconds (at least the quickest run). */
+function legOf(t0: number, s0: number, d: number, time: number): Leg {
+  const D = Math.max(time, quickest(d));
+  // accelerate to v, cruise, brake: d = v · (D − v / a)
+  const v = Math.min(VMAX, (ACCEL * D - Math.sqrt(Math.max(0, ACCEL * ACCEL * D * D - 4 * ACCEL * d))) / 2);
+  const tAcc = v / ACCEL;
+  return { t0, s0, d, tAcc, tCruise: Math.max(0, D - 2 * tAcc), v };
+}
+
+/**
+ * A train stands at a stop from STAND_BEFORE seconds before its timetable time (given in whole minutes) to
+ * DWELL − STAND_BEFORE after it.
+ */
+const STAND_BEFORE = 8;
+
+/**
+ * The profile of a run over the stops of a track. times: per stop its timetable time in seconds after the first
+ * served one (−1: not served) – then the train keeps those times (later where the way is too long for them); without
+ * times it serves every stop as quickly as it can.
+ */
+function profileOf(tr: TransitTrack, length: number, times?: readonly number[]): Profile {
+  const first = TRAIN_LENGTH / 2 + END_MARGIN, last = length - TRAIN_LENGTH / 2 - END_MARGIN;
+  const served = tr.stops.map((_, i) => i).filter((i) => !times || times[i]! >= 0);
+  const legs: Leg[] = [], dwells: Dwell[] = [], at: (Dwell | undefined)[] = tr.stops.map(() => undefined);
+  let time = 0, pos = first, lead = 0, late = 0;
+  served.forEach((i, n) => {
+    const stop = tr.stops[i]!;
+    // from the track's start to its first stop (a run that begins further on appears standing at its first stop)
+    if (n > 0 || i === 0) {
+      const d = Math.max(0, stop.s - pos);
+      // the time the timetable leaves for the way (none: as quick as possible)
+      const due = times && n > 0 ? lead + times[i]! + late - STAND_BEFORE - time : 0;
+      const leg = legOf(time, pos, d, due);
+      legs.push(leg);
+      const took = 2 * leg.tAcc + leg.tCruise;
+      if (times && n > 0 && took > due) late += took - due;
+      time += took;
+    } else {
+      legs.push(legOf(time, stop.s, 0, 0));
+    }
+    pos = stop.s;
+    if (n === 0) lead = time + STAND_BEFORE;
+    const dwell: Dwell = { t0: time, t1: time + DWELL, side: stop.side, station: stop.station };
+    dwells.push(dwell);
+    at[i] = dwell;
+    time += DWELL;
+  });
+  // on to the track's end (a run that ends before the last stop disappears standing there)
+  if (served.length === 0 || served[served.length - 1] === tr.stops.length - 1) {
+    const leg = legOf(time, pos, Math.max(0, last - pos), 0);
+    legs.push(leg);
+    time += 2 * leg.tAcc + leg.tCruise;
+  }
+  return { legs, dwells, at, duration: time, lead };
+}
 
 export function transitModel(t: Transit): TransitModel {
   const tracks = t.tracks.map((tr, k): Track => {
@@ -89,25 +181,120 @@ export function transitModel(t: Transit): TransitModel {
       cum[i] = cum[i - 1]! + Math.hypot(tr.pts[i * 3]! - tr.pts[i * 3 - 3]!, tr.pts[i * 3 + 1]! - tr.pts[i * 3 - 2]!, tr.pts[i * 3 + 2]! - tr.pts[i * 3 - 1]!);
     }
     const length = cum[n - 1]!;
-    const way = [TRAIN_LENGTH / 2 + END_MARGIN, ...tr.stops.map((s) => s.s), length - TRAIN_LENGTH / 2 - END_MARGIN];
-    const legs: Leg[] = [], dwells: Track['dwells'] = [];
-    let time = 0;
-    for (let i = 0; i + 1 < way.length; i++) {
-      const d = Math.max(0, way[i + 1]! - way[i]!);
-      const full = d >= (VMAX * VMAX) / ACCEL;
-      const tAcc = full ? VMAX / ACCEL : Math.sqrt(d / ACCEL), v = full ? VMAX : tAcc * ACCEL;
-      const tCruise = full ? (d - (VMAX * VMAX) / ACCEL) / VMAX : 0;
-      legs.push({ t0: time, s0: way[i]!, d, tAcc, tCruise, v });
-      time += 2 * tAcc + tCruise;
-      const stop = tr.stops[i];
-      if (stop && i + 2 < way.length) {
-        dwells.push({ t0: time, t1: time + DWELL, side: stop.side, station: stop.station });
-        time += DWELL;
-      }
+    const base = { pts: tr.pts, cum, length };
+    const tt = tr.timetable;
+    if (!tt || tt.patterns.length === 0) {
+      const profile = profileOf(tr, length), headway = tr.headway ?? t.headway;
+      return { ...base, slots: Math.ceil(profile.duration / headway) + 1, periodic: { profile, headway, phase: tr.phase ?? (k * headway) / 2 }, profiles: [profile], days: [], longest: profile.duration };
     }
-    return { pts: tr.pts, cum, length, legs, dwells, duration: time, slots: Math.ceil(time / t.headway) + 1, phase: (k * t.headway) / 2 };
+    const profiles = tt.patterns.map((times) => profileOf(tr, length, times));
+    const longest = Math.max(...profiles.map((p) => p.duration));
+    let most = 1;
+    const days = tt.days.map((list) => {
+      const trips: [number, number][] = [];
+      for (let i = 0; i + 1 < list.length; i += 2) trips.push([list[i + 1]! - profiles[list[i]!]!.lead, list[i]!]);
+      trips.sort((a, b) => a[0] - b[0]);
+      // how many are out at once: a trip is over when a later one starts after its end
+      trips.forEach(([start, p], i) => {
+        let out = 1;
+        for (let j = i - 1; j >= 0 && start - trips[j]![0] < longest; j--) if (trips[j]![0] + profiles[trips[j]![1]]!.duration > start) out++;
+        most = Math.max(most, out);
+        void p;
+      });
+      return { start: Float64Array.from(trips.map((x) => x[0])), profile: Int32Array.from(trips.map((x) => x[1])) };
+    });
+    return { ...base, slots: most + 1, periodic: null, profiles, days, longest };
   });
-  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0) };
+  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0), epochMs: Date.now() };
+}
+
+/** The clock in Köln: milliseconds to add to UTC, cached by the hour (daylight saving changes on the hour). */
+let offsetHour = NaN, offsetMs = 0;
+function kölnOffset(ms: number): number {
+  const hour = Math.floor(ms / 3_600_000);
+  if (hour !== offsetHour) {
+    offsetHour = hour;
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date(ms));
+    const v = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+    offsetMs = Date.UTC(v('year'), v('month') - 1, v('day'), v('hour'), v('minute'), v('second')) - Math.floor(ms / 1000) * 1000;
+  }
+  return offsetMs;
+}
+
+/** Kind of day of a local day number (days since 1970-01-01, a Thursday): 0 Monday–Friday, 1 Saturday, 2 Sunday. */
+const kindOfDay = (day: number): number => { const w = (((day + 4) % 7) + 7) % 7; return w === 0 ? 2 : w === 6 ? 1 : 0; };
+
+/** The local time at `tick`: seconds since midnight and the local day number. */
+function clockAt(m: TransitModel, tick: number): { sec: number; day: number } {
+  const ms = m.epochMs + (tick / TICK_HZ) * 1000, local = ms + kölnOffset(ms);
+  const day = Math.floor(local / 86_400_000);
+  return { sec: (local - day * 86_400_000) / 1000, day };
+}
+
+/**
+ * The runs of a track that are on their way at `tick`: `run` gets the slot (which of the track's trains), the trip's
+ * number, its profile and the seconds since its start.
+ */
+function eachRun(m: TransitModel, tr: Track, tick: number, run: (slot: number, trip: number, p: Profile, t: number) => void): void {
+  const per = tr.periodic;
+  if (per) {
+    const now = tick / TICK_HZ;
+    for (let slot = 0; slot < tr.slots; slot++) {
+      // the trip of this slot that is on the way now: trip k leaves at phase + k · headway, slot = k mod slots
+      const newest = Math.floor((now - per.phase) / per.headway);
+      const k = newest - ((((newest - slot) % tr.slots) + tr.slots) % tr.slots);
+      const t = now - per.phase - k * per.headway;
+      if (t >= 0 && t < per.profile.duration) run(slot, k, per.profile, t);
+    }
+    return;
+  }
+  const { sec, day } = clockAt(m, tick);
+  let taken = 0;
+  // today's trips, and yesterday's that run past midnight
+  for (const back of [0, 1]) {
+    const list = tr.days[kindOfDay(day - back)];
+    if (!list) continue;
+    const now = sec + back * 86400, start = list.start;
+    let lo = 0, hi = start.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (start[mid]! <= now) lo = mid + 1; else hi = mid; }
+    for (let i = lo - 1; i >= 0 && now - start[i]! <= tr.longest; i--) {
+      const p = tr.profiles[list.profile[i]!]!, t = now - start[i]!;
+      const slot = i % tr.slots;
+      if (t >= p.duration || taken & (1 << slot)) continue;
+      taken |= 1 << slot;
+      run(slot, i, p, t);
+    }
+  }
+}
+
+/** Per stop of a track at `tick`: every time a train stands there, as seconds from now (from, to), soonest first, from `since` seconds ago on. */
+function standing(m: TransitModel, tr: Track, stop: number, tick: number, since: number, limit: number): [number, number][] {
+  const out: [number, number][] = [];
+  const per = tr.periodic;
+  if (per) {
+    const d = per.profile.at[stop];
+    if (!d) return out;
+    const now = tick / TICK_HZ - per.phase;
+    for (let k = Math.floor((now - since - d.t1) / per.headway) + 1; out.length < limit; k++) out.push([k * per.headway + d.t0 - now, k * per.headway + d.t1 - now]);
+    return out;
+  }
+  const { sec, day } = clockAt(m, tick);
+  // yesterday's late trips, today's, tomorrow's
+  for (const off of [-1, 0, 1]) {
+    const list = tr.days[kindOfDay(day + off)];
+    if (!list) continue;
+    const base = off * 86400 - sec, start = list.start;
+    let lo = 0, hi = start.length;
+    const from = -since - base - tr.longest;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (start[mid]! < from) lo = mid + 1; else hi = mid; }
+    for (let i = lo; i < start.length && out.length < limit; i++) {
+      const d = tr.profiles[list.profile[i]!]!.at[stop];
+      if (d && base + start[i]! + d.t1 >= -since) out.push([base + start[i]! + d.t0, base + start[i]! + d.t1]);
+    }
+    if (out.length >= limit) break;
+  }
+  return out.sort((a, b) => a[0] - b[0]);
 }
 
 /** Point of a track at distance s (clamped), written to out[o..o+2]. */
@@ -125,20 +312,21 @@ function trackPoint(tr: Track, s: number, out: Float64Array, o: number): void {
 }
 
 /** Distance along the track `t` seconds into a trip, and the speed there. */
-function tripDistance(tr: Track, t: number): { s: number; v: number } {
+function tripDistance(tr: Profile, t: number): { s: number; v: number; leg: number } {
   let leg = tr.legs[0]!;
   for (const l of tr.legs) if (l.t0 <= t) leg = l;
   const u = t - leg.t0, total = 2 * leg.tAcc + leg.tCruise;
-  if (u >= total) return { s: leg.s0 + leg.d, v: 0 };
-  if (u < leg.tAcc) return { s: leg.s0 + 0.5 * ACCEL * u * u, v: ACCEL * u };
+  const at = (s: number, v: number) => ({ s, v, leg: leg.d > 0 ? Math.min(1, Math.max(0, (s - leg.s0) / leg.d)) : 1 });
+  if (u >= total) return at(leg.s0 + leg.d, 0);
+  if (u < leg.tAcc) return at(leg.s0 + 0.5 * ACCEL * u * u, ACCEL * u);
   const sAcc = 0.5 * ACCEL * leg.tAcc * leg.tAcc;
-  if (u < leg.tAcc + leg.tCruise) return { s: leg.s0 + sAcc + leg.v * (u - leg.tAcc), v: leg.v };
+  if (u < leg.tAcc + leg.tCruise) return at(leg.s0 + sAcc + leg.v * (u - leg.tAcc), leg.v);
   const r = total - u;
-  return { s: leg.s0 + leg.d - 0.5 * ACCEL * r * r, v: ACCEL * r };
+  return at(leg.s0 + leg.d - 0.5 * ACCEL * r * r, ACCEL * r);
 }
 
 /** How far the doors on `side` are open (0..1) `t` seconds into a trip. */
-function doorOpen(tr: Track, t: number, side: 1 | -1): number {
+function doorOpen(tr: Profile, t: number, side: 1 | -1): number {
   for (const d of tr.dwells) {
     if (d.side !== side || t < d.t0 || t > d.t1) continue;
     const opening = (t - d.t0 - DOOR_AFTER) / DOOR_MOVE, closing = (d.t1 - DOOR_BEFORE + DOOR_MOVE - t) / DOOR_MOVE;
@@ -148,36 +336,35 @@ function doorOpen(tr: Track, t: number, side: 1 | -1): number {
 }
 
 /** Floats per section in sectionStates' output. */
-export const SECTION_STRIDE = 11;
+export const SECTION_STRIDE = 13;
 
 /**
  * Every section of every train at `tick` (may be fractional), SECTION_STRIDE floats each: active (0/1), x, y, z (the
  * section's centre at rail-top height), yaw (forward = (sin, cos) in x/z), pitch (nose up), doors open left and right
- * (0..1), speed (m/s), the station the train stands at (index, −1 while driving) and the trip's number. Sections are ordered by track,
+ * (0..1), speed (m/s), the station the train stands at (index, −1 while driving), the trip's number and the next
+ * station it stops at (where it stands, while it stands; −1 after its last stop) and how far it is on the way there
+ * from the last stop (0..1).
+ * Sections are ordered by track,
  * then slot, then along the train from its tail.
  */
 export function sectionStates(m: TransitModel, tick: number, out: Float64Array = new Float64Array(m.count * SECTION_STRIDE)): Float64Array {
-  const now = tick / TICK_HZ;
   const p = new Float64Array(6);
-  let o = 0;
+  let base = 0;
   for (const tr of m.tracks) {
-    for (let slot = 0; slot < tr.slots; slot++) {
-      // the trip of this slot that is on the way now: trip k leaves at phase + k · headway, slot = k mod slots
-      const newest = Math.floor((now - tr.phase) / m.headway);
-      const k = newest - ((((newest - slot) % tr.slots) + tr.slots) % tr.slots);
-      const t = now - tr.phase - k * m.headway;
-      const active = t >= 0 && t < tr.duration;
-      const at = active ? tripDistance(tr, t) : { s: 0, v: 0 };
-      let station = -1;
-      if (active) for (const d of tr.dwells) if (t >= d.t0 && t <= d.t1) station = d.station;
-      const left = active ? doorOpen(tr, t, 1) : 0, right = active ? doorOpen(tr, t, -1) : 0;
+    for (let k = 0; k < tr.slots * TRAIN_SECTIONS; k++) out[base + k * SECTION_STRIDE] = 0;
+    eachRun(m, tr, tick, (slot, trip, prof, t) => {
+      const at = tripDistance(prof, t);
+      let station = -1, next = -1;
+      for (const d of prof.dwells) if (t >= d.t0 && t <= d.t1) station = d.station;
+      for (const d of prof.dwells) if (t <= d.t1) { next = d.station; break; }
+      const left = doorOpen(prof, t, 1), right = doorOpen(prof, t, -1);
+      let o = base + slot * TRAIN_SECTIONS * SECTION_STRIDE;
       for (let i = 0; i < TRAIN_SECTIONS; i++, o += SECTION_STRIDE) {
-        out[o] = active ? 1 : 0;
-        if (!active) continue;
         const c = at.s + sectionOffset(i);
         trackPoint(tr, c - TRAIN.bogie, p, 0);
         trackPoint(tr, c + TRAIN.bogie, p, 3);
         const dx = p[3]! - p[0]!, dy = p[4]! - p[1]!, dz = p[5]! - p[2]!;
+        out[o] = 1;
         out[o + 1] = (p[0]! + p[3]!) / 2;
         out[o + 2] = (p[1]! + p[4]!) / 2;
         out[o + 3] = (p[2]! + p[5]!) / 2;
@@ -187,9 +374,12 @@ export function sectionStates(m: TransitModel, tick: number, out: Float64Array =
         out[o + 7] = right;
         out[o + 8] = at.v;
         out[o + 9] = station;
-        out[o + 10] = k;
+        out[o + 10] = trip;
+        out[o + 11] = next;
+        out[o + 12] = at.leg;
       }
-    }
+    });
+    base += tr.slots * TRAIN_SECTIONS * SECTION_STRIDE;
   }
   return out;
 }
@@ -199,12 +389,10 @@ export function sectionStates(m: TransitModel, tick: number, out: Float64Array =
  * arrives (0: standing at the platform now) and its trip number (trips count up, one per headway).
  */
 export function nextArrivals(m: TransitModel, track: number, stop: number, tick: number, n = 2): { wait: number; trip: number }[] {
-  const tr = m.tracks[track], d = tr?.dwells[stop];
-  if (!tr || !d) return [];
-  // trip k stands here from phase + k · headway + t0 to … + t1
-  const since = tick / TICK_HZ - tr.phase - d.t0;
-  const first = Math.floor((since - (d.t1 - d.t0)) / m.headway) + 1;
-  return Array.from({ length: n }, (_, i) => ({ wait: Math.max(0, (first + i) * m.headway - since), trip: first + i }));
+  const tr = m.tracks[track];
+  if (!tr) return [];
+  // (a train that stands there counts until it leaves)
+  return standing(m, tr, stop, tick, 0, n).map(([from], i) => ({ wait: Math.max(0, from), trip: i }));
 }
 
 /** A double bench in a section's frame (x left, z ahead, from the section's centre): its box and which way it faces along z. */
@@ -299,10 +487,14 @@ export function benchPlace(states: Float64Array, x: number, y: number, z: number
  * the last one left.
  */
 export function departure(m: TransitModel, track: number, stop: number, tick: number): { standing: boolean; seconds: number } {
-  const tr = m.tracks[track], d = tr?.dwells[stop];
-  if (!tr || !d) return { standing: false, seconds: Infinity };
-  const dwell = d.t1 - d.t0, u = ((((tick / TICK_HZ - tr.phase - d.t0) % m.headway) + m.headway) % m.headway);
-  return u < dwell ? { standing: true, seconds: dwell - u } : { standing: false, seconds: u - dwell };
+  const tr = m.tracks[track];
+  if (!tr) return { standing: false, seconds: Infinity };
+  // the trains that stood there in the last minutes or stand there now
+  const times = standing(m, tr, stop, tick, 600, 8);
+  const here = times.find(([from, to]) => from <= 0 && to >= 0);
+  if (here) return { standing: true, seconds: here[1] };
+  const gone = times.filter(([, to]) => to < 0).map(([, to]) => -to);
+  return { standing: false, seconds: gone.length ? Math.min(...gone) : Infinity };
 }
 
 /** Rotation of a section: yaw about +y, then the nose up by pitch. */

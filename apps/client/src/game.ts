@@ -119,6 +119,8 @@ export class Game {
   /** Lamps knocked over since the last takeFallenLamps(). */
   private fallen: number[] = [];
   private readonly tramStops: WorldManifest['tramStops'];
+  /** The stop last announced to the player in a train (station index; −1 the end of the line, −2 none yet). */
+  private announced = -2;
   /** 0..1: sitting on a bench in a train (eased; lowers the camera). */
   private sitDrop = 0;
   /** 0..1: how far the player is underground (set by the frame loop; fades the city's sounds, see GameAudio.transit). */
@@ -147,7 +149,7 @@ export class Game {
     const heading = devCam ? devCam.yawDeg * DEG : m.spawn.heading;
     this.figure.heading = heading;
     this.cars = new ParkedCars(scene, sim.cars, ctx.carModels);
-    this.transit = m.transit ? new TransitView(scene, m.transit, ctx.characters) : null;
+    this.transit = m.transit ? new TransitView(scene, m.transit, ctx.characters, sim.trains?.model) : null;
     if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, sim.bikes, m.bikeRacks, sim.racks.ys);
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
@@ -677,7 +679,15 @@ export class Game {
     }
     if (audio) {
       const f = this.focus();
-      audio.transit(this.underground, this.transit?.nearest(f.x, f.y, f.z) ?? null);
+      const train = this.transit?.nearest(f.x, f.y, f.z) ?? null;
+      audio.transit(this.underground, train);
+      // riding: about half way to the next stop, it is announced
+      if (train?.inside && this.transit) {
+        if (train.speed > 1.5 && train.way >= 0.5 && train.next !== this.announced) {
+          this.announced = train.next;
+          audio.announceStop(train.next < 0 ? null : this.transit.stationName(train.next));
+        }
+      } else this.announced = -2;
       for (const e of this.transit?.takeDoorEvents() ?? []) audio.trainDoors(e.opening, e.x, e.z);
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }

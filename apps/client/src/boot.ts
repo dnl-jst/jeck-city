@@ -2,7 +2,7 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, SECTION_STRIDE, sectionStates, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
+  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, SECTION_STRIDE, sectionStates, sunState, surfaceY, withTransitCollision, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
   type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
@@ -362,7 +362,8 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundar
   // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain] = await Promise.all([
-    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => decodeCollision(await r.arrayBuffer())),
+    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
+      async (file) => (await fetchOk(`/world/${file}`, { cache: 'no-cache' })).arrayBuffer())),
     fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
@@ -459,6 +460,12 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   } else {
     sim.addPlayer(OFFLINE_ME, start);
     session = new OfflineSession(sim, OFFLINE_ME);
+    // offline with ?time=HH:MM: the trains' timetable runs from that time of today (the sun does too)
+    const at = parseTimeOverride(timeOverride);
+    if (at) {
+      const d = new Date();
+      sim.setTransitEpoch(Date.now() + (at.h * 3600 + at.m * 60 - (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds())) * 1000);
+    }
   }
   game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level

@@ -80,13 +80,11 @@ test('nextArrivals counts down to the moment the train stands at the stop', () =
   while (sectionStates(m, arrive)[9] !== 0) arrive++;
   const before = nextArrivals(m, 0, 0, arrive - 600);
   expect(before[0]!.wait).toBeCloseTo(10, 1);
-  expect(before[0]!.trip).toBe(0);
   expect(before[1]!.wait).toBeCloseTo(310, 1);
-  expect(nextArrivals(m, 0, 0, arrive + 300)[0]).toEqual({ wait: 0, trip: 0 }); // standing
+  expect(nextArrivals(m, 0, 0, arrive + 300)[0]!.wait).toBe(0); // standing
   let leave = arrive;
   while (sectionStates(m, leave)[9] === 0) leave++;
   const after = nextArrivals(m, 0, 0, leave + 60)[0]!;
-  expect(after.trip).toBe(1);
   expect(after.wait).toBeCloseTo(300 - (leave + 60 - arrive) / 60, 1);
 });
 

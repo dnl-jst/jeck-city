@@ -20,11 +20,13 @@ test('worldHash: first 12 hex digits of SHA-256, without Web Crypto (plain-http 
 });
 
 test.skipIf(!haveRealAssets)(
-  haveRealAssets ? 'loadWorldAssets reads the three world files' : 'loadWorldAssets [SKIPPED: apps/client/public/world not found — run the pipeline]',
+  haveRealAssets ? 'loadWorldAssets reads the world files' : 'loadWorldAssets [SKIPPED: apps/client/public/world not found — run the pipeline]',
   async () => {
     const read: string[] = [];
     const a = await loadWorldAssets(async (f) => (read.push(f), readWorldFile(f)));
-    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', 'terrain.bin']);
+    // (plus the Stadtbahn's own collision file, in a world that has one)
+    const transit = a.manifest.transitCollision ? [a.manifest.transitCollision.file] : [];
+    expect(read.sort()).toEqual(['collision.bin', 'manifest.json', 'terrain.bin', ...transit].sort());
     expect(a.manifest.parked.length).toBeGreaterThan(0);
     expect(a.collision.indices.length).toBeGreaterThan(0);
     expect(a.terrain.cols * a.terrain.rows).toBe(a.terrain.heights.length);

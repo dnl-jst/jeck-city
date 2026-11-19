@@ -24,6 +24,8 @@ export type OsmFeatures = {
   tunnelTracks: { id: number; pts: Pt[] }[];
   /** Underground platforms (railway=platform areas in a tunnel or below level 0): name, level=* and outline. */
   tunnelPlatforms: { name: string; level: string; outline: Pt[] }[];
+  /** Every railway=platform way (lines and areas, on the ground and below): which side of a track a stop's platform is on. */
+  platforms: Pt[][];
   greens: Pt[][];
   trees: Pt[];
   lamps: Pt[];
@@ -145,7 +147,7 @@ function parseRoad(el: El, pts: Pt[], t: Tags, separate: SeparateSides = {}): Ro
 
 export function parseOsm(json: unknown): OsmFeatures {
   const elements = ((json as { elements?: El[] }).elements ?? []) as El[];
-  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+  const f: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], platforms: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 
   const stops: { pos: Pt; name: string; prio: number }[] = [];
   const parkingAreas: ParkingArea[] = [];
@@ -184,6 +186,7 @@ export function parseOsm(json: unknown): OsmFeatures {
       const pts = isBridge(t) && !isClosed(raw) ? densify(raw, BRIDGE_VERTEX_SPACING) : raw;
       const closed = isClosed(pts);
       if (t.railway === 'light_rail' && t.tunnel === 'yes' && raw.length >= 2) f.tunnelTracks.push({ id: el.id, pts: raw });
+      if (t.railway === 'platform' && raw.length >= 2) f.platforms.push(raw);
       if (t.railway === 'platform' && closed && t.name && (t.tunnel === 'yes' || Number(t.level ?? t.layer) < 0)) {
         f.tunnelPlatforms.push({ name: t.name, level: t.level ?? '', outline: raw.slice(0, -1) });
       }
