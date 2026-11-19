@@ -1,6 +1,6 @@
 import {
   type BufferGeometry, Color, Group, type Material, type Object3D,
-  DataTexture, DataUtils, FrontSide, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
+  DataTexture, DataUtils, EquirectangularReflectionMapping, FrontSide, HalfFloatType, SRGBColorSpace, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
   Vector3, type Scene,
 } from 'three';
 import {
@@ -49,6 +49,7 @@ export function isClearGlass(m: Material): boolean {
  * panes and the interior stay visible; single-sided; glossy), everything else as it is.
  */
 export function carMaterial(m: Material): Material {
+  if (m instanceof MeshStandardMaterial && m.name === 'mirror') return mirrorMaterial(m);
   if (!(m instanceof MeshStandardMaterial) || !isClearGlass(m)) return m;
   const c = m.clone();
   c.transparent = true;
@@ -58,6 +59,53 @@ export function carMaterial(m: Material): Material {
   c.metalness = 0;
   c.envMapIntensity = 1.5;
   return c;
+}
+
+/** How bright the mirrors' reflection is by day. */
+const MIRROR_DAY = 1.3;
+const mirrors = new Set<MeshStandardMaterial>();
+let mirrorEnv: DataTexture | null = null;
+let mirrorNight = 0;
+
+/**
+ * What the door mirrors reflect: a small panorama of sky, a band of facades at the horizon and the street below.
+ * Real reflections would mean rendering the city again for every mirror; this reads as a mirror from the outside.
+ */
+function mirrorEnvironment(): DataTexture {
+  if (mirrorEnv) return mirrorEnv;
+  const w = 64, h = 32, data = new Uint8Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    const up = (j + 0.5) / h * 2 - 1; // −1 straight down … +1 straight up (texture rows start at the bottom)
+    const c = up > 0.22 ? [120 + 60 * (1 - up), 160 + 50 * (1 - up), 235] // sky, paler towards the horizon
+      : up > 0.02 ? [176, 164, 146] // facades
+        : [78 + 40 * (1 + up), 80 + 40 * (1 + up), 86 + 40 * (1 + up)]; // street
+    for (let i = 0; i < w; i++) data.set([c[0]!, c[1]!, c[2]!, 255], (j * w + i) * 4);
+  }
+  mirrorEnv = new DataTexture(data, w, h, RGBAFormat);
+  mirrorEnv.mapping = EquirectangularReflectionMapping;
+  mirrorEnv.colorSpace = SRGBColorSpace;
+  mirrorEnv.minFilter = mirrorEnv.magFilter = LinearFilter;
+  mirrorEnv.needsUpdate = true;
+  return mirrorEnv;
+}
+
+/** Mirror glass: fully reflective, showing mirrorEnvironment(). The material is shared by all cars of its type. */
+function mirrorMaterial(m: MeshStandardMaterial): MeshStandardMaterial {
+  if (!mirrors.has(m)) {
+    m.envMap = mirrorEnvironment();
+    m.metalness = 1;
+    m.roughness = 0.04;
+    mirrors.add(m);
+    m.envMapIntensity = MIRROR_DAY * (1 - 0.88 * mirrorNight);
+  }
+  return m;
+}
+
+/** night 0..1: the mirrors' reflection darkens with the sky. */
+export function setMirrorNight(night: number): void {
+  if (night === mirrorNight && mirrors.size > 0) return;
+  mirrorNight = night;
+  for (const m of mirrors) m.envMapIntensity = MIRROR_DAY * (1 - 0.88 * night);
 }
 
 /** Clear glass throws no shadow and is drawn after the opaque rest of the cars. */

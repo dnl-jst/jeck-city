@@ -37,6 +37,7 @@ def car_materials2(paint=(0.55, 0.06, 0.05)):
     m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.32, rough=0.05)
     m['lens'] = clear('lens', (0.9, 0.9, 0.9), 0.25, rough=0.03)  # clear lamp covers
     m['lens_red'] = clear('lens_red', (0.75, 0.03, 0.02), 0.6, rough=0.05)  # tail lamp covers
+    m['mirror'] = material('mirror', (0.75, 0.78, 0.8), rough=0.04, metal=1.0)  # mirror glass; the game gives it a reflection
     m['pillar'] = material('pillar', (0.015, 0.015, 0.018), rough=0.12)  # gloss black window pillars
     m['interior'] = material('interior', (0.07, 0.07, 0.075), rough=0.8)
     m['interior_trim'] = material('interior_trim', (0.15, 0.15, 0.155), rough=0.6)
@@ -319,6 +320,38 @@ def pair(front, u_face, x, z, outline, d_side=0.35):
         if (front and s == 1) or (not front and s == -1):
             ol = list(reversed(ol))
         yield s, V((s * x, -u_face, z)), d, ol
+
+
+def mirror2(part, M, at, side, mat='paint'):
+    """Door mirror: an egg-shaped housing on a short foot, its back cut flat, with an oval mirror glass set into it
+    (material 'mirror'). at: where the foot meets the door; side: +1 left."""
+    at = V(at)
+    back = 0.014  # the housing is cut flat this far behind its middle; the glass sits just proud of the cut
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=20, v_segments=12, radius=1.0)
+    for v in bm.verts:
+        v.co = V((v.co.x * 0.1, min(v.co.y * 0.07, back), v.co.z * 0.065))
+    vmap = {v: part.bm.verts.new(at + V((side * (0.11 + v.co.x), v.co.y, v.co.z))) for v in bm.verts}
+    for f in bm.faces:
+        part._face([vmap[v] for v in f.verts], M[mat])
+    bm.free()
+    part.box(at + V((side * 0.035, 0.0, -0.035)), (0.07, 0.04, 0.025), M['trim'])
+    # the glass: an oval a little smaller than the cut, slightly domed like a real door mirror (a flat one would
+    # reflect a single colour of the game's small reflection panorama)
+    k = math.sqrt(1 - (back / 0.07) ** 2) * 0.88
+    n, rings = 24, (0.0, 0.5, 1.0)
+    grid = []
+    for t in rings:
+        y = back + 0.002 + 0.012 * (1 - t * t)
+        grid.append([part.bm.verts.new(at + V((side * 0.11 + 0.1 * k * t * math.cos(2 * math.pi * i / n), y, 0.065 * k * t * math.sin(2 * math.pi * i / n))))
+                     for i in range(n if t else 1)])
+    for i in range(n):
+        j = (i + 1) % n
+        for vs in ([grid[0][0], grid[1][i], grid[1][j]], [grid[1][i], grid[2][i], grid[2][j], grid[1][j]]):
+            f = part._face(vs, M['mirror'], True)
+            f.normal_update()
+            if f.normal.y < 0:  # faces backwards, towards whoever looks into it
+                f.normal_flip()
 
 
 def tagged(S, M, specs):
