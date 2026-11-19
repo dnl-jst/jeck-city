@@ -118,6 +118,8 @@ export type TransitModel = {
   count: number;
   /** The real time of tick 0 (ms since the epoch): timetables run on the clock in Köln. Both sides of a connection use the server's. */
   epochMs: number;
+  /** Makes the trips of a kind of day keep apart (once, on first use: see keepApart). */
+  apart: (kind: number) => void;
 };
 
 /** Quickest run over d metres from standstill to standstill (s). */
@@ -214,6 +216,135 @@ function profileOf(tr: TransitTrack, length: number, times?: readonly number[]):
   return { legs, dwells, at, duration: time, lead };
 }
 
+/** The rails are cut into blocks of this length (m); a block holds one train at a time, as between signals. */
+const BLOCK = 40;
+/** A train takes up its block and those within this far of its middle (m), and a block is free again this long after it left (s). */
+const BLOCK_REACH = TRAIN_LENGTH / 2 + 12, BLOCK_GAP = 6;
+/** A trip is held back by at most this long (s) to keep that distance. */
+const MAX_HELD = 600;
+
+/** The time after its start at which a run first is `s` metres along its track. */
+function timeAt(p: Profile, s: number): number {
+  for (const leg of p.legs) {
+    if (s > leg.s0 + leg.d) continue;
+    const ds = s - leg.s0;
+    if (ds <= 0 || leg.d <= 0) return leg.t0;
+    const sAcc = 0.5 * leg.a * leg.tAcc * leg.tAcc;
+    if (ds <= sAcc) return leg.t0 + Math.sqrt((2 * ds) / leg.a);
+    if (ds <= sAcc + leg.v * leg.tCruise) return leg.t0 + leg.tAcc + (ds - sAcc) / leg.v;
+    return leg.t0 + 2 * leg.tAcc + leg.tCruise - Math.sqrt((2 * Math.max(0, leg.d - ds)) / leg.a);
+  }
+  return p.duration;
+}
+
+/**
+ * Lines that share rails have their own timetables, each in whole minutes: now and then two trains would be in one
+ * place at once, one inside the other (at a platform, where tracks join or cross, where a line turns back on one
+ * track). So the rails are cut into blocks, and the trips of a day are gone through in the order they start: a trip
+ * that would be in a block while another train is starts as much later as it takes. It waits behind the train ahead
+ * (and does not make the time up again).
+ */
+function keepApart(tracks: Track[]): (kind: number) => void {
+  let blocksOf: number[][][] | null = null, ids = 0;
+  const done = new Set<number>();
+  const prepare = (): number[][][] => {
+  // the blocks: BLOCK metres of a track each; where tracks run on the same rails or into each other (closer than tracks side by side are), a block
+  // also takes up the blocks of the tracks before it that lie there
+  const CELL = 4, near = new Map<string, { x: number; y: number; z: number; id: number }[]>();
+  return tracks.map((tr, k) => {
+    const n = tr.cum.length, count = Math.max(1, Math.ceil(tr.length / BLOCK)), own = ids;
+    ids += count;
+    const sets: Set<number>[] = Array.from({ length: count }, (_, b) => new Set([own + b]));
+    const mine: { x: number; y: number; z: number; id: number }[] = [];
+    let i = 1;
+    for (let s = 0; s <= tr.length; s += 3) {
+      while (i < n - 1 && tr.cum[i]! < s) i++;
+      const u = tr.cum[i]! > tr.cum[i - 1]! ? (s - tr.cum[i - 1]!) / (tr.cum[i]! - tr.cum[i - 1]!) : 0, a = (i - 1) * 3, c = i * 3;
+      const x = tr.pts[a]! + (tr.pts[c]! - tr.pts[a]!) * u, y = tr.pts[a + 1]! + (tr.pts[c + 1]! - tr.pts[a + 1]!) * u, z = tr.pts[a + 2]! + (tr.pts[c + 2]! - tr.pts[a + 2]!) * u;
+      const b = Math.min(count - 1, Math.floor(s / BLOCK)), gx = Math.floor(x / CELL), gz = Math.floor(z / CELL);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          for (const o of near.get(`${gx + dx}_${gz + dz}`) ?? []) if (Math.abs(o.y - y) < 2 && Math.hypot(o.x - x, o.z - z) < 2.3) sets[b]!.add(o.id);
+        }
+      }
+      mine.push({ x, y, z, id: own + b });
+    }
+    for (const q of mine) {
+      const key = `${Math.floor(q.x / CELL)}_${Math.floor(q.z / CELL)}`;
+      let list = near.get(key);
+      if (!list) near.set(key, (list = []));
+      list.push(q);
+    }
+    void k;
+    return sets.map((set) => [...set]);
+  });
+  };
+  // when a run is in which block, after its start (per profile, made on first use)
+  const visits = new Map<Profile, { id: number; a: number; b: number }[]>();
+  const visitsOf = (k: number, p: Profile): { id: number; a: number; b: number }[] => {
+    let v = visits.get(p);
+    if (!v) {
+      v = [];
+      const first = p.legs[0], last = p.legs[p.legs.length - 1];
+      const s0 = first ? first.s0 : 0, s1 = last ? last.s0 + last.d : 0, blocks = (blocksOf ??= prepare())[k]!;
+      for (let b = Math.max(0, Math.floor((s0 - BLOCK_REACH) / BLOCK)); b < blocks.length && b * BLOCK <= s1 + BLOCK_REACH; b++) {
+        const from = timeAt(p, b * BLOCK - BLOCK_REACH), to = timeAt(p, (b + 1) * BLOCK + BLOCK_REACH) + BLOCK_GAP;
+        for (const id of blocks[b]!) v.push({ id, a: from, b: to });
+      }
+      visits.set(p, v);
+    }
+    return v;
+  };
+  return (d: number): void => {
+    if (done.has(d)) return;
+    done.add(d);
+    blocksOf ??= prepare();
+    const trips: { k: number; i: number; start: number }[] = [];
+    tracks.forEach((tr, k) => { const day = tr.days[d]; if (day) for (let i = 0; i < day.start.length; i++) trips.push({ k, i, start: day.start[i]! }); });
+    trips.sort((a, b) => a.start - b.start || a.k - b.k);
+    // per block the times it is taken, in order (they do not overlap)
+    const taken: { a: number; b: number; trip: number }[][] = Array.from({ length: ids }, () => []);
+    const place = (list: { a: number }[], a: number): number => {
+      let lo = 0, hi = list.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid]!.a < a) lo = mid + 1; else hi = mid; }
+      return lo;
+    };
+    trips.forEach((trip, n) => {
+      const tr = tracks[trip.k]!, v = visitsOf(trip.k, tr.profiles[tr.days[d]!.profile[trip.i]!]!);
+      let held = 0;
+      for (let pass = 0; pass < 40; pass++) {
+        let more = held;
+        for (const q of v) {
+          const a = trip.start + held + q.a, b = trip.start + held + q.b, list = taken[q.id]!;
+          // the one before and those after that overlap
+          const at = place(list, a);
+          if (at > 0 && list[at - 1]!.b > a) more = Math.max(more, held + list[at - 1]!.b - a);
+          for (let j = at; j < list.length && list[j]!.a < b; j++) more = Math.max(more, held + list[j]!.b - a);
+        }
+        if (more === held) break;
+        if (more > MAX_HELD) { held = 0; break; }
+        held = more;
+      }
+      tr.days[d]!.start[trip.i] = trip.start + held;
+      for (const q of v) {
+        const a = trip.start + held + q.a, list = taken[q.id]!, at = place(list, a);
+        // (a block listed twice for this trip: one entry, its whole time there)
+        if (at > 0 && list[at - 1]!.trip === n) list[at - 1]!.b = Math.max(list[at - 1]!.b, trip.start + held + q.b);
+        else list.splice(at, 0, { a, b: trip.start + held + q.b, trip: n });
+      }
+    });
+    // (held trips may have fallen behind later ones of their own track: in order again)
+    for (const tr of tracks) {
+      const day = tr.days[d];
+      if (!day) continue;
+      const order = Array.from(day.start.keys()).sort((x, y) => day.start[x]! - day.start[y]!);
+      const start = order.map((i) => day.start[i]!), profile = order.map((i) => day.profile[i]!);
+      day.start.set(start);
+      day.profile.set(profile);
+    }
+  };
+}
+
 export function transitModel(t: Transit): TransitModel {
   const tracks = t.tracks.map((tr, k): Track => {
     const n = tr.pts.length / 3, cum = new Float64Array(n);
@@ -229,23 +360,29 @@ export function transitModel(t: Transit): TransitModel {
     }
     const profiles = tt.patterns.map((times) => profileOf(tr, length, times));
     const longest = Math.max(...profiles.map((p) => p.duration));
-    let most = 1;
     const days = tt.days.map((list) => {
       const trips: [number, number][] = [];
       for (let i = 0; i + 1 < list.length; i += 2) trips.push([list[i + 1]! - profiles[list[i]!]!.lead, list[i]!]);
       trips.sort((a, b) => a[0] - b[0]);
-      // how many are out at once: a trip is over when a later one starts after its end
-      trips.forEach(([start, p], i) => {
-        let out = 1;
-        for (let j = i - 1; j >= 0 && start - trips[j]![0] < longest; j--) if (trips[j]![0] + profiles[trips[j]![1]]!.duration > start) out++;
-        most = Math.max(most, out);
-        void p;
-      });
       return { start: Float64Array.from(trips.map((x) => x[0])), profile: Int32Array.from(trips.map((x) => x[1])) };
     });
-    return { ...base, slots: most + 1, periodic: null, profiles, days, longest };
+    return { ...base, slots: 1, periodic: null, profiles, days, longest };
   });
-  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0), epochMs: Date.now() };
+  for (const tr of tracks) {
+    if (tr.periodic) continue;
+    // how many are out at once: a trip is over when a later one starts after its end
+    let most = 1;
+    for (const day of tr.days) {
+      for (let i = 0; i < day.start.length; i++) {
+        let out = 1;
+        // (as the timetable has them; held back, a trip is out up to MAX_HELD longer, see keepApart)
+        for (let j = i - 1; j >= 0 && day.start[i]! - day.start[j]! < tr.longest + MAX_HELD; j--) if (day.start[j]! + tr.profiles[day.profile[j]!]!.duration + MAX_HELD > day.start[i]!) out++;
+        most = Math.max(most, out);
+      }
+    }
+    tr.slots = most + 1;
+  }
+  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0), epochMs: Date.now(), apart: keepApart(tracks) };
 }
 
 /** The clock in Köln: milliseconds to add to UTC, cached by the hour (daylight saving changes on the hour). */
@@ -293,6 +430,7 @@ function eachRun(m: TransitModel, tr: Track, tick: number, run: (slot: number, t
   let taken = 0;
   // today's trips, and yesterday's that run past midnight
   for (const back of [0, 1]) {
+    m.apart(kindOfDay(day - back));
     const list = tr.days[kindOfDay(day - back)];
     if (!list) continue;
     const now = sec + back * 86400, start = list.start;
@@ -322,6 +460,7 @@ function standing(m: TransitModel, tr: Track, stop: number, tick: number, since:
   const { sec, day } = clockAt(m, tick);
   // yesterday's late trips, today's, tomorrow's
   for (const off of [-1, 0, 1]) {
+    m.apart(kindOfDay(day + off));
     const list = tr.days[kindOfDay(day + off)];
     if (!list) continue;
     const base = off * 86400 - sec, start = list.start;
