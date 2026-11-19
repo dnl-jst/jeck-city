@@ -506,7 +506,7 @@ export class Game {
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
       this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
-      if (!this.flying) this.follow.update(p, 0, dt);
+      if (!this.flying) this.follow.update(p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
@@ -525,7 +525,7 @@ export class Game {
         this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
           [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);
       }
-      if (!this.flying) this.follow.update(s, s.heading, dt);
+      if (!this.flying) this.follow.update(s, s.heading, dt, Math.abs(s.speed));
       // a scooter has no freewheel: never ticks
       audio?.ride({ speed: Math.abs(s.speed), pedalling: (this.ctl.forward > 0 && s.speed > 0.3) || BIKE_SPECS[this.rig?.type ?? 'dutch'].motor === true, grounded: s.grounded }, dt);
     } else if (this.currPose && this.carId !== null) {
@@ -542,10 +542,11 @@ export class Game {
       this.drawnPose = pose;
       this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
-      if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
+      const v = sim.cars.vehicle(this.carId)!.chassis.linvel();
+      if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
       if (audio) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
-        const h = headingOf(pose), v = sim.cars.vehicle(this.carId)!.chassis.linvel();
+        const h = headingOf(pose);
         const s = Math.sin(h), c = Math.cos(h);
         audio.drive({
           forward: v.x * s + v.z * c, lateral: v.x * c - v.z * s, vx: v.x, vz: v.z,
@@ -570,7 +571,10 @@ export class Game {
     this.flying = !this.flying;
     this.ctx.input.clearPresses();
     this.closeWheel();
-    if (this.flying) this.fly.setHeading(this.follow.yaw, this.follow.pitch);
+    if (this.flying) {
+      this.fly.setHeading(this.follow.yaw, this.follow.pitch);
+      this.follow.resetFov();
+    }
     else this.follow.snap();
   }
 
