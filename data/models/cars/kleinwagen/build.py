@@ -13,11 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 from carbody import V, build_lod_shell, build_shell, car_materials2, mirror2, pair, recess, run2  # noqa: E402
 from carinterior import blob, build_interior, seat_manikins  # noqa: E402
-<<<<<<< HEAD
-from carparts import empty, plate_node, exhaust, lamp_pair, mirror, poly_round, rrect, wheel, wipers  # noqa: E402
-=======
-from carparts import empty, exhaust, lamp_pair, poly_round, rrect, wheel, wipers  # noqa: E402
->>>>>>> cars-rework
+from carparts import empty, exhaust, lamp_pair, plate_node, poly_round, rrect, wheel, wipers  # noqa: E402
 
 NAME = 'kleinwagen'
 F, B = 2.075, -1.975  # u of the front and rear faces
