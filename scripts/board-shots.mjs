@@ -45,7 +45,7 @@ try {
     await page.evaluate(({ x, z, up, yaw, pitch }) => window.__nnFlyTo(x, (window.__nnSurfaceY(x, z) ?? 0) + up, z, yaw, pitch), { x, z, up, yaw: Math.atan2(car.x - x, car.z - z) * 180 / Math.PI, pitch });
   };
   await view(2.6, 3.0, 1.5, -10);
-  for (const [name, wait] of [['1-walk', 500], ['2-walk', 900], ['3-walk', 900], ['4-door', 900], ['5-in', 700], ['6-seated', 1500]]) {
+  for (const [name, wait] of [['1-walk', 500], ['2-walk', 900], ...Array.from({ length: 16 }, (_, i) => [`4-in-${String(i).padStart(2, '0')}`, 90]), ['6-seated', 1500]]) {
     await page.waitForTimeout(wait);
     await shot(name);
   }
@@ -71,7 +71,7 @@ try {
     const s = await page.evaluate(() => window.__nnState());
     await page.evaluate(({ x, z }) => window.__nnFlyTo(x + 3, (window.__nnSurfaceY(x + 3, z + 3) ?? 0) + 1.6, z + 3, 225, -10), s);
   }
-  for (const [name, wait] of [['8-out', 450], ['9-out', 400], ['10-out', 700]]) {
+  for (const [name, wait] of [['8a-out', 400], ['8b-out', 250], ['8c-out', 250], ['9-out', 300], ['10-out', 700]]) {
     await page.waitForTimeout(wait);
     await shot(name);
   }

@@ -5,7 +5,8 @@ import {
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
   plateText, boardingPath, CAR_SEATS, CAR_SPECS, DRIVER_SEAT, fromCarPoint, standPoint, toCarPoint, VEHICLE_REST_Y, type CarPoint,
 } from '@nn/shared';
-import { enterStage, footTargets, leaveStage, SEAT_RECLINE, type BoardStage } from './boarding';
+import { boardPose, enterStage, footTargets, leaveStage, SEAT_RECLINE, type BoardStage } from './boarding';
+import { thighRest } from './player';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
 import { DRIVE_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
@@ -484,10 +485,17 @@ export class Game {
     if (!root) return;
     if (fig.group.parent !== root) root.add(fig.group);
     const hip = this.driven.seat(DRIVER_SEAT) ?? new Vector3(seat.x, seat.h, seat.u);
-    // between the door and the seat the whole pose slides: out to the stand point and up to standing height
-    const k = st ? 1 - st.slide : 0, stand = standPoint(layout, DRIVER_SEAT);
-    const shift = new Vector3((stand.x - hip.x) * k, 0.3 * k, (stand.u - hip.z) * k);
-    fig.sit(hip, footTargets(seat, layout.floor), this.driven.grips(), SEAT_RECLINE, shift);
+    const feet = footTargets(seat, layout.floor), grips = this.driven.grips();
+    if (!st || st.slide >= 1) {
+      fig.sit(hip, feet, grips, SEAT_RECLINE);
+      return;
+    }
+    // between the door and the seat: stepping in, sitting down, the trailing leg (boardPose); the hands leave the
+    // body's sides for the wheel as the back settles
+    const b = boardPose(st.slide, seat, layout.floor, standPoint(layout, DRIVER_SEAT), fig.hipHeight, SEAT_RECLINE);
+    const rest = grips ?? thighRest(hip);
+    const hands = b.hands.map((h, i) => h.lerp(rest[i]!, b.settle)) as [Vector3, Vector3];
+    fig.pose(b.hip, b.yaw, b.pitch, b.feet, hands, 0, 0.2 + 0.8 * b.settle * (grips ? 1 : 0));
   }
 
   private mountedBike(id: number): void {

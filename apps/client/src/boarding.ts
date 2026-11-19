@@ -53,3 +53,61 @@ export function footTargets(seat: { x: number; u: number; h: number }, floor: nu
   const ahead = Math.max(0.45, Math.min(0.75, 0.82 - 0.6 * (seat.h - floor)));
   return [1, -1].map((s) => new Vector3(seat.x + s * 0.1, floor + 0.08, seat.u + ahead)) as [Vector3, Vector3];
 }
+
+/** A whole-body pose in the car model's frame: hips, facing (0 = ahead, about the vertical), forward lean, ankles. */
+export type BodyPose = {
+  hip: Vector3; yaw: number; pitch: number; feet: [Vector3, Vector3];
+  /** Where the hands hang beside the body (left, right), and how far (0..1) they have settled on wheel or thighs. */
+  hands: [Vector3, Vector3]; settle: number;
+};
+
+/** The stations of getting in, as shares of the way: turned and stepping in, sitting down, the trailing leg in. */
+const STEP_IN = 0.35, SIT_DOWN = 0.7;
+
+/**
+ * Getting into a seat, k = 0 (standing at the open door, turned to the car) … 1 (sitting): the body turns ahead and
+ * the leg next to the car steps into the footwell; the hips come down onto the seat, the body ducked under the roof
+ * edge; the trailing leg lifts over the sill; the back settles. Getting out is the same run backwards.
+ * seat: hip point (car frame), stand: where the figure stands at the door, hipStand: its hip height standing.
+ */
+export function boardPose(k: number, seat: { x: number; u: number; h: number }, floor: number, stand: { x: number; u: number }, hipStand: number, recline: number): BodyPose {
+  const s = Math.sign(stand.x - seat.x) || 1; // +1: the door is on the left
+  const t = Math.max(0, Math.min(1, k));
+  const [i, f] = t < STEP_IN ? [0, t / STEP_IN] : t < SIT_DOWN ? [1, (t - STEP_IN) / (SIT_DOWN - STEP_IN)] : [2, (t - SIT_DOWN) / (1 - SIT_DOWN)];
+  const e = smooth(f);
+  const mix = (a: number[], b = a) => a[i]! + (b[i + 1]! - a[i]!) * e;
+  const hips = [
+    new Vector3(stand.x, hipStand, stand.u), new Vector3(seat.x + s * 0.42, seat.h + (hipStand - seat.h) * 0.55, seat.u),
+    new Vector3(seat.x + s * 0.05, seat.h + 0.02, seat.u), new Vector3(seat.x, seat.h, seat.u),
+  ];
+  const hip = hips[i]!.clone().lerp(hips[i + 1]!, e);
+  const yaws = [-s * 1.45, -s * 0.6, -s * 0.12, 0], pitches = [0.05, 0.5, 0.4, -recline];
+  const yaw = mix(yaws, yaws), pitch = mix(pitches, pitches);
+  // ankles: seated on the floor ahead; standing on the ground at the door, a little apart
+  const sitting = footTargets(seat, floor);
+  const inner = s > 0 ? 1 : 0; // turned ahead, the foot next to the car
+  const feet = [0, 1].map((n) => {
+    const side = n === 0 ? 1 : -1;
+    const ground = new Vector3(stand.x, 0.08, stand.u + side * s * 0.1);
+    if (n === inner) {
+      // steps in first, lifted over the sill
+      if (i > 0) return sitting[n]!.clone();
+      const p = ground.lerp(sitting[n]!, e);
+      p.y += 0.28 * Math.sin(Math.PI * f);
+      return p;
+    }
+    // the trailing foot turns on the ground beside the seat, then follows over the sill
+    const pivot = new Vector3(seat.x + s * 0.78, 0.08, seat.u + 0.22);
+    if (i === 0) return ground.lerp(pivot, e);
+    if (i === 1) return pivot;
+    const p = pivot.lerp(sitting[n]!, e);
+    p.y += 0.3 * Math.sin(Math.PI * f);
+    return p;
+  }) as [Vector3, Vector3];
+  const c = Math.cos(yaw), sn = Math.sin(yaw);
+  const hands = [1, -1].map((side) => {
+    const x = side * 0.24, z = 0.1; // beside the hips, a little ahead; turned with the body
+    return new Vector3(hip.x + x * c + z * sn, hip.y - 0.1, hip.z - x * sn + z * c);
+  }) as [Vector3, Vector3];
+  return { hip, yaw, pitch, feet, hands, settle: i === 2 ? e : 0 };
+}

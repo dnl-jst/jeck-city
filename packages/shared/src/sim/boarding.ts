@@ -10,7 +10,7 @@ import type { CarSpec } from '../physics/cartypes';
 export type CarPoint = { x: number; u: number };
 
 /** How fast the figure walks to its door (m/s), and how long opening the door and sitting down take (s). */
-export const BOARD_WALK_SPEED = 2.2, DOOR_OPEN_S = 0.3, SIT_S = 0.5;
+export const BOARD_WALK_SPEED = 2.2, DOOR_OPEN_S = 0.3, SIT_S = 1.0;
 /** Getting out: door open, out of the seat, door shut (s). */
 export const LEAVE_S = DOOR_OPEN_S + SIT_S + 0.3;
 /** The figure stands this far outside the door's hinge line. */
