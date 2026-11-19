@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import type { WorldAssets } from './assets';
-import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
+import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from './fixture.test-util';
 import { headingOf, type CarPose } from './rules';
 import { WorldSim, type SimEvent } from './world-sim';
 
@@ -74,7 +74,7 @@ for (const [name, assets, skip] of worlds) {
       run(sim, 30);
       for (const id of [0, 1]) expect(sim.player(id).char.grounded).toBe(true);
       expect(dist(sim.player(0).pos, sim.player(1).pos)).toBeGreaterThanOrEqual(1.4);
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('enter and exit', async () => {
       const { sim, car } = await nextToCar();
@@ -98,7 +98,7 @@ for (const [name, assets, skip] of worlds) {
       const p = sim.player(1);
       expect(p.char.grounded).toBe(true);
       expect(dist(p.pos, sim.cars.poses[car]!)).toBeLessThan(3.2);
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('throttle is dead until running', async () => {
       const { sim, car } = await nextToCar();
@@ -107,7 +107,7 @@ for (const [name, assets, skip] of worlds) {
       run(sim, 49, () => new Map([[1, GAS]]));
       expect(sim.player(1).engine).toBe('starting');
       expect(dist(sim.cars.poses[car]!, start)).toBeLessThan(0.05);
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('same-tick enter: lower queue order wins', async () => {
       const a = await assets();
@@ -123,7 +123,7 @@ for (const [name, assets, skip] of worlds) {
       expect(sim.player(2).mode).toBe('drive');
       expect(sim.player(1).mode).toBe('walk');
       expect(sim.cars.driver[car]).toBe(2);
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('driver leaves → car free, engine off', async () => {
       const { sim, car } = await nextToCar();
@@ -139,7 +139,7 @@ for (const [name, assets, skip] of worlds) {
       sim.addPlayer(3, leftOf(sim.cars.poses[car]!, 2.5));
       run(sim, 10);
       expect(sim.step(new Map([[3, USE]]))).toContainEqual({ t: 'enter', id: 3, car });
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('exit refused at speed', async () => {
       const { sim, car } = await nextToCar();
@@ -150,7 +150,7 @@ for (const [name, assets, skip] of worlds) {
       const ev = sim.step(new Map([[1, { ...GAS, use: true }]]));
       expect(ev).toContainEqual({ t: 'exitDenied', id: 1, reason: 'speed' });
       expect(sim.player(1).mode).toBe('drive');
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('braking: brake held, or throttle against the direction of travel; off once the driver is out', async () => {
       const { sim, car } = await nextToCar();
@@ -170,7 +170,7 @@ for (const [name, assets, skip] of worlds) {
       sim.step(new Map([[1, USE]]));
       expect(sim.player(1).mode).toBe('walk');
       expect(sim.braking(car)).toBe(false);
-    }, 30_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('deterministic replay', async () => {
       const a = await assets();
@@ -196,6 +196,6 @@ for (const [name, assets, skip] of worlds) {
         expect(Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z)).toBeLessThan(1e-6);
       }
       expect(dist(s1.cars.poses[car]!, a.manifest.parked[car]!)).toBeGreaterThan(5); // it really drove
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
   });
 }

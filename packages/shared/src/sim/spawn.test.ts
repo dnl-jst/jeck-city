@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { heightAt } from '../assets/terrain';
 import { createPhysicsWorld } from '../physics/world';
 import { SPAWN_MAX_DIST, SPAWN_STEP } from '../net/constants';
-import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
+import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from './fixture.test-util';
 import { findSpawn, spawnCandidates, standY } from './spawn';
 
 test('candidates: the spawn, then alternately ±k·1.5 m across the spawn heading (side by side), up to 60 m', () => {
@@ -57,5 +57,5 @@ test.skipIf(!haveRealAssets)(
       taken.push(p);
     }
   },
-  30_000,
+  WHOLE_CITY_TIMEOUT,
 );

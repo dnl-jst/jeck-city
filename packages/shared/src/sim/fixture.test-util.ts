@@ -57,6 +57,12 @@ export function fixtureAssets(): WorldAssets {
 const WORLD_DIR = fileURLToPath(new URL('../../../../apps/client/public/world/', import.meta.url));
 /** The pipeline's world files exist (apps/client/public/world, not versioned). */
 export const haveRealAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(WORLD_DIR + f));
+/**
+ * Timeout (ms) for a test that builds whole-city physics worlds: one takes ~9 s locally since Deutz (5 M collision
+ * triangles), about three times that on a CI runner, and each further world in a process is slower (wasm memory
+ * only grows).
+ */
+export const WHOLE_CITY_TIMEOUT = 300_000;
 
 /** Raw bytes of a file in apps/client/public/world. */
 export function readWorldFile(file: string): ArrayBuffer {

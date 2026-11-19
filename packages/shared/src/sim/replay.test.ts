@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { decodeSnapshot, encodeSnapshot, NEUTRAL_INPUT, type PlayerInput, type Snapshot } from '../net/codec';
 import { Interest } from '../net/interest';
 import type { WorldAssets } from './assets';
-import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
+import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from './fixture.test-util';
 import { ownStateOf, predictionMatches } from './replay';
 import { headingOf, type CarPose } from './rules';
 import { buildSnapshot } from './snapshot';
@@ -79,7 +79,7 @@ describe('WorldSim.replay', () => {
       sim.step(new Map([[1, N]]));
     }
     expect(asleep()).toEqual(before);
-  }, 30_000);
+  }, WHOLE_CITY_TIMEOUT);
 
   test('replay from a saved state retraces the stepped path', async () => {
     const sim = await WorldSim.create(fixtureAssets());
@@ -197,7 +197,7 @@ for (const [name, assets, skip] of worlds) {
     test('prediction matches server at 0 ms latency: walking', async () => {
       const err = await run(600, () => ({ ...N, forward: 1, run: true }), null);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('prediction matches server at 0 ms latency: driving', async () => {
       const a = await assets();
@@ -209,7 +209,7 @@ for (const [name, assets, skip] of worlds) {
         return { ...N, forward: t > 100 ? 1 : 0, yaw: p.car ? headingOf(p.car) : 0 };
       }, car);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('prediction matches server at 0 ms latency: riding', async () => {
       const a = await assets();
@@ -224,7 +224,7 @@ for (const [name, assets, skip] of worlds) {
       expect(rode).toBe(true);
       expect(a.manifest.bikes.length).toBeGreaterThan(0);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 120_000); // the last of several whole-city worlds in this process (wasm memory only grows): slow
+    }, WHOLE_CITY_TIMEOUT);
   });
 }
 
