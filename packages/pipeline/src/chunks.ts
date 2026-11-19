@@ -1,4 +1,5 @@
 import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
+import { concatMeshes } from './bridges.js';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
@@ -7,7 +8,7 @@ import { groundMesh, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
-export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
+export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking', 'water', 'bridge', 'steel'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
 export type StreetMeshes = Record<StreetName, Mesh>;
 /**
@@ -120,7 +121,7 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
  * With `terrain`, every chunk square that intersects `area` (the whole grid without `area`) and overlaps the
  * grid gets its `ground` mesh, also when it holds no buildings or streets.
  */
-export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid): ChunkGeometry[] {
+export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): ChunkGeometry[] {
   const chunks = new Map<string, ChunkGeometry>();
   const chunk = (key: string): ChunkGeometry => {
     let c = chunks.get(key);
@@ -141,6 +142,15 @@ export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, ov
   }
   for (const [key, batch] of batches) chunk(key).buildings = batch.build();
   for (const name of STREET_MESHES) for (const [key, m] of splitMesh(streets[name], area)) chunk(key).streets[name] = m;
+  // further triangles per mesh name (the bridge decks), appended chunk by chunk: no copy of the big draped meshes
+  for (const name of STREET_MESHES) {
+    const more = extra[name];
+    if (!more) continue;
+    for (const [key, m] of splitMesh(more, area)) {
+      const c = chunk(key), have = c.streets[name];
+      c.streets[name] = have ? concatMeshes([have, m]) : m;
+    }
+  }
   if (terrain) {
     const r = area ?? { minX: terrain.x0, minZ: terrain.z0, maxX: terrain.x0 + terrain.cols - 1, maxZ: terrain.z0 + terrain.rows - 1 };
     for (let iz = Math.floor(r.minZ / CHUNK_SIZE); iz < Math.ceil(r.maxZ / CHUNK_SIZE); iz++) {

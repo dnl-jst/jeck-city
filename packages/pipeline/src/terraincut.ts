@@ -78,3 +78,44 @@ export function applyTerrainCuts(t: TerrainGrid, tris: Float32Array): number {
   }
   return changed;
 }
+
+/** Fill skirts: outside a fill surface the terrain falls away at this slope (1:2) … */
+export const FILL_SLOPE = 0.5;
+/** … for at most this far (m). */
+export const FILL_REACH = 12;
+
+/**
+ * The counterpart of applyTerrainCuts: raises the terrain up to fill surfaces (triangles in world space, 9 floats
+ * each, e.g. the ramp behind a bridge abutment), so that a model or deck that sits higher than the DGM (a quay edge
+ * smoothed into a slope, a dip in front of a wall) meets the ground. Inside a fill the terrain takes the surface
+ * height; up to FILL_REACH outside it a skirt slopes down from the nearest edge at FILL_SLOPE. Heights are only ever
+ * raised; grid points flagged in `keep` (e.g. the water) stay as they are. Returns the number of grid points changed.
+ */
+export function applyTerrainFills(t: TerrainGrid, tris: Float32Array, keep?: Uint8Array): number {
+  const target = new Float32Array(t.heights.length).fill(-Infinity);
+  for (let i = 0; i + 8 < tris.length; i += 9) {
+    const a = { x: tris[i]!, z: tris[i + 2]! }, b = { x: tris[i + 3]!, z: tris[i + 5]! }, c = { x: tris[i + 6]!, z: tris[i + 8]! };
+    const ya = tris[i + 1]!, yb = tris[i + 4]!, yc = tris[i + 7]!;
+    const c0 = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x) - FILL_REACH - t.x0));
+    const c1 = Math.min(t.cols - 1, Math.ceil(Math.max(a.x, b.x, c.x) + FILL_REACH - t.x0));
+    const r0 = Math.max(0, Math.floor(Math.min(a.z, b.z, c.z) - FILL_REACH - t.z0));
+    const r1 = Math.min(t.rows - 1, Math.ceil(Math.max(a.z, b.z, c.z) + FILL_REACH - t.z0));
+    for (let r = r0; r <= r1; r++) {
+      for (let col = c0; col <= c1; col++) {
+        const { d, w } = closest({ x: t.x0 + col, z: t.z0 + r }, a, b, c);
+        if (d > FILL_REACH) continue;
+        const k = r * t.cols + col;
+        // the highest fill wins
+        target[k] = Math.max(target[k]!, w[0] * ya + w[1] * yb + w[2] * yc - d * FILL_SLOPE);
+      }
+    }
+  }
+  let changed = 0;
+  for (let k = 0; k < t.heights.length; k++) {
+    if (target[k]! > t.heights[k]! && !keep?.[k]) {
+      t.heights[k] = target[k]!;
+      changed++;
+    }
+  }
+  return changed;
+}

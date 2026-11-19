@@ -1,4 +1,5 @@
 import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
+import { WATER_TIME } from './materials/street';
 import {
   BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
@@ -493,6 +494,7 @@ export class Game {
     const { audio } = this.ctx;
     const a = this.session.alpha;
     const off = this.session.renderOffset();
+    WATER_TIME.value = (WATER_TIME.value + dt) % 3600;
     this.ragdolls.step(dt);
     if (this.mode === 'walk') {
       // hit by a car: limp from the walking pose, thrown with the car's push

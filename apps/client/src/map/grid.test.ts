@@ -3,7 +3,7 @@ import type { MapData } from '@nn/shared';
 import { MapGrid } from './grid';
 
 const data = (over: Partial<MapData>): MapData => ({
-  version: 1, bounds: { minX: 0, minZ: 0, maxX: 1000, maxZ: 1000 }, boundary: [], roads: [], buildings: [], greens: [],
+  version: 1, bounds: { minX: 0, minZ: 0, maxX: 1000, maxZ: 1000 }, boundary: [], roads: [], buildings: [], greens: [], water: [],
   squares: [], tram: [], tramStops: [], ...over,
 });
 

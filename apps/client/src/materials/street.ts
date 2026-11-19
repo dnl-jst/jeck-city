@@ -10,7 +10,7 @@ import { Color, MeshStandardMaterial } from 'three';
  * where lamps or headlights reach. Parking strips: lighter asphalt with a band of setts along the kerb (uv.y).
  */
 
-type Kind = 'road' | 'sidewalk' | 'curb' | 'tram' | 'trackbed' | 'green' | 'squares' | 'ground' | 'parking' | 'markings';
+type Kind = 'road' | 'sidewalk' | 'curb' | 'tram' | 'trackbed' | 'green' | 'squares' | 'ground' | 'parking' | 'markings' | 'water' | 'bridge' | 'steel';
 
 const SPEC: Record<Kind, { id: number; color: number; roughness: number; metalness: number; offset: number }> = {
   // offset: polygonOffset factor; positive pushes back (the layers lie ≤ 5 mm apart)
@@ -27,7 +27,16 @@ const SPEC: Record<Kind, { id: number; color: number; roughness: number; metalne
   tram: { id: 3, color: 0xd4d8dd, roughness: 0.25, metalness: 0.15, offset: 0 },
   sidewalk: { id: 1, color: 0x9d9b95, roughness: 0.9, metalness: 0, offset: 0 },
   curb: { id: 2, color: 0xb9b7b0, roughness: 0.85, metalness: 0, offset: 0 },
+  // the Rhine: a glossy surface with moving ripples (normals from animated noise) that mirrors the sky at grazing angles
+  water: { id: 11, color: 0x23332f, roughness: 0.12, metalness: 0, offset: 0 },
+  // bridge slabs, parapets and piers: concrete (uv: metres along, metres up)
+  bridge: { id: 10, color: 0xa29e95, roughness: 0.9, metalness: 0, offset: 0 },
+  // the truss arches of the railway bridges (Hohenzollernbrücke, Südbrücke): painted steel, grey-green
+  steel: { id: 12, color: 0x6c7a72, roughness: 0.55, metalness: 0.35, offset: 0 },
 };
+
+/** Seconds for the water ripples; the game advances it every frame (shared by all water meshes). */
+export const WATER_TIME = { value: 0 };
 
 /**
  * Ground slope (degrees) where grass starts to replace the paving, and where it is all grass: the shader's grass
@@ -38,7 +47,7 @@ export const GRASS_SLOPE_FULL = 25;
 
 /** Draw order of street meshes, back layers first. */
 export const STREET_RENDER_ORDER: Record<string, number> = {
-  ground: -1, green: 0, squares: 1, road: 2, parking: 2.3, markings: 2.6, trackbed: 3, tram: 4, sidewalk: 5, curb: 5,
+  ground: -1, water: -0.5, bridge: 0, steel: 0, green: 0, squares: 1, road: 2, parking: 2.3, markings: 2.6, trackbed: 3, tram: 4, sidewalk: 5, curb: 5,
 };
 
 const DECL = /* glsl */ `
@@ -118,6 +127,17 @@ const FRAG = /* glsl */ `
   float far = smoothstep(0.02, 0.08, fwa);
   c = mix(c, mix(bed, steel, 0.25 * step(abs(a), 0.25)), far);
   diffuseColor.rgb = c;
+#elif NN_STREET == 10
+  // board-marked concrete: lifts every 0.6 m (uv.y), panels every 4 m (uv.x), weathering streaks
+  float lifts = nnJoints(vec2(uv.x, uv.y), vec2(4.0, 0.6), 0.01);
+  k = (0.8 + 0.14 * nnNoise(uv * vec2(0.3, 1.5)) + 0.06 * nnNoise(xz * 2.0)) * (1.0 - 0.18 * lifts);
+  k *= 1.0 - 0.12 * smoothstep(0.4, 0.9, nnNoise(vec2(uv.x * 1.7, uv.y * 0.15)));
+#elif NN_STREET == 11
+  k = 0.9 + 0.1 * nnNoise(xz * 0.05);
+#elif NN_STREET == 12
+  // weathered paint: rust-tinted streaks along the members
+  k = 0.85 + 0.15 * nnNoise(vec2(uv.x * 0.8, uv.y * 3.0));
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.32, 0.24, 0.18), 0.25 * smoothstep(0.6, 0.95, nnNoise(xz * 0.7 + uv.x * 0.3)));
 #elif NN_STREET == 6
   k = (0.92 + 0.08 * nnHash(floor(xz / 0.5))) * (0.85 + 0.2 * nnNoise(xz * 0.2));
   k *= 1.0 - 0.25 * nnJoints(xz, vec2(0.5, 0.5), 0.008);
@@ -130,6 +150,38 @@ const FRAG = /* glsl */ `
 #endif
   diffuseColor.rgb *= k;
 }
+`;
+
+const WATER_NORMAL = /* glsl */ `
+#if NN_STREET == 11
+{
+  // ripples: gradient of drifting noise layers (the Rhine flows north, −z), tilted into the view-space normal
+  float t = nnTime;
+  vec2 q = vNnXz;
+  vec2 g = vec2(0.0);
+  const float e = 0.12;
+  for (int i = 0; i < 3; i++) {
+    float f = i == 0 ? 0.18 : (i == 1 ? 0.6 : 1.9);
+    float a = i == 0 ? 1.0 : (i == 1 ? 0.45 : 0.18);
+    vec2 drift = i == 0 ? vec2(0.02, -0.35) : (i == 1 ? vec2(-0.25, -0.5) : vec2(0.4, -0.2));
+    vec2 p = q * f + drift * t * f * 3.0 + float(i) * 17.0;
+    float n0 = nnNoise(p);
+    g += a * vec2(nnNoise(p + vec2(e, 0.0)) - n0, nnNoise(p + vec2(0.0, e)) - n0) / e;
+  }
+  vec3 tilt = (viewMatrix * vec4(-g.x * 0.18, 0.0, -g.y * 0.18, 0.0)).xyz;
+  normal = normalize(normal + tilt);
+}
+#endif
+`;
+const WATER_SKY = /* glsl */ `
+#if NN_STREET == 11 && defined(USE_FOG)
+{
+  // the sky at grazing angles (Schlick fresnel, water F0 ≈ 0.02), approximated by the fog colour
+  float cosV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+  float fres = 0.02 + 0.98 * pow(1.0 - cosV, 5.0);
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, clamp(fres, 0.0, 0.85));
+}
+#endif
 `;
 
 const glslFloat = (x: number): string => x.toFixed(6);
@@ -158,9 +210,12 @@ export function createStreetMaterials(): Record<string, MeshStandardMaterial> {
         .replace('#include <common>', `#include <common>\nvarying vec2 vNnUv;\nvarying vec2 vNnXz;\nvarying float vNnMark;\n#if NN_STREET == 9\nattribute float _mark;\n#endif\n${NORMAL_DECL}`)
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvNnUv = uv;\nvNnXz = (modelMatrix * vec4(position, 1.0)).xz;\n#if NN_STREET == 9\nvNnMark = _mark;\n#else\nvNnMark = 0.0;\n#endif\n'
           + '#if NN_STREET == 6\nvNnWorldNormal = mat3(modelMatrix) * objectNormal;\n#endif');
+      shader.uniforms.nnTime = WATER_TIME;
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${DECL}${NORMAL_DECL}`)
-        .replace('#include <color_fragment>', `#include <color_fragment>\n${FRAG}`);
+        .replace('#include <common>', `#include <common>\nuniform float nnTime;\n${DECL}${NORMAL_DECL}`)
+        .replace('#include <color_fragment>', `#include <color_fragment>\n${FRAG}`)
+        .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${WATER_NORMAL}`)
+        .replace('#include <fog_fragment>', `${WATER_SKY}\n#include <fog_fragment>`);
     };
     mat.customProgramCacheKey = () => `nn-street-${s.id}`;
     out[name] = mat;

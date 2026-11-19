@@ -13,7 +13,9 @@ const verts = (m: Mesh) => Array.from({ length: m.positions.length / 3 }, (_, i)
 const crossing = wgs84ToLocal(50.9631, 6.952);
 
 test('every mesh is consistent: indices in range, uv per vertex', () => {
-  for (const [name, m] of Object.entries(g)) {
+  const { bridge, ...meshes } = g;
+  expect(Object.values(bridge).every((m) => m.indices.length === 0)).toBe(true); // no bridge roads given
+  for (const [name, m] of Object.entries(meshes)) {
     expect(m.positions.length % 3).toBe(0);
     expect(m.uv.length / 2).toBe(m.positions.length / 3);
     expect(m.indices.length % 3).toBe(0);
@@ -194,7 +196,7 @@ test('an overridden building still bounds the sidewalk: an override drops its me
   const overrides = { church: 'data/models/church.glb' };
   const streets = buildStreetGeometry({ ...f, roads: [r], greens: [], squares: [], tramTracks: [] }, allSidewalkWidths([r], [church]));
   const trackbed = { positions: new Float32Array(), uv: new Float32Array(), indices: new Uint32Array() };
-  const chunk = buildChunks([church], { ...streets, trackbed }, overrides).find((c) => c.streets.sidewalk)!;
+  const chunk = buildChunks([church], { ...streets, trackbed, water: trackbed, bridge: trackbed, steel: trackbed }, overrides).find((c) => c.streets.sidewalk)!;
   expect(chunk.buildings).toBeUndefined(); // the model replaces the LoD2 mesh …
   const sw = chunk.streets.sidewalk!;
   for (let i = 0; i < sw.positions.length; i += 3) expect(sw.positions[i + 2]!).toBeLessThanOrEqual(16 + 1e-4); // … the sidewalk still ends at its facade

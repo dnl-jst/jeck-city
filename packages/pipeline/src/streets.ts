@@ -282,14 +282,26 @@ function roadSides(pr: Prepared, b: { road: MeshBuilder; sidewalk: MeshBuilder; 
  * another carriageway; the inner sides of dual carriageways get a green median instead. Parking strips (cross-section)
  * are a surface from the cycle lane (or lanes) to the kerb wherever the kerb runs, tapering in ramps (uv.y = metres from the kerb); `markings` see markings.ts.
  */
-export function buildStreetGeometry(f: OsmFeatures, widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, [])): { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh; markings: Mesh; parking: Mesh } {
-  const road = new MeshBuilder();
-  const sidewalk = new MeshBuilder();
-  const curb = new MeshBuilder();
-  const tram = new MeshBuilder();
-  const green = new MeshBuilder();
-  const squares = new MeshBuilder();
-  const parking = new MeshBuilder();
+export type StreetGeometry = { road: Mesh; sidewalk: Mesh; curb: Mesh; tram: Mesh; green: Mesh; squares: Mesh; markings: Mesh; parking: Mesh };
+type Builders = { road: MeshBuilder; sidewalk: MeshBuilder; curb: MeshBuilder; tram: MeshBuilder; green: MeshBuilder; squares: MeshBuilder; parking: MeshBuilder };
+const builders = (): Builders => ({
+  road: new MeshBuilder(), sidewalk: new MeshBuilder(), curb: new MeshBuilder(), tram: new MeshBuilder(), green: new MeshBuilder(),
+  squares: new MeshBuilder(), parking: new MeshBuilder(),
+});
+const buildAll = (b: Builders, markings: Mesh): StreetGeometry => ({
+  road: b.road.build(), sidewalk: b.sidewalk.build(), curb: b.curb.build(), tram: b.tram.build(), green: b.green.build(), squares: b.squares.build(),
+  markings, parking: b.parking.build(),
+});
+
+/**
+ * `bridge`: roads and tram tracks (arrays of f.tramTracks) on bridge decks: their geometry (y = offset above the
+ * deck, as for the terrain) goes into the returned `bridge` meshes instead of the others; junctions, kerbs and medians
+ * are still worked out over all roads.
+ */
+export function buildStreetGeometry(f: OsmFeatures, widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, []), bridge: { roads: Set<Road>; tracks: Set<Pt[]> } = { roads: new Set(), tracks: new Set() }): StreetGeometry & { bridge: StreetGeometry } {
+  const main = builders();
+  const deck = builders();
+  const { road, sidewalk, curb, tram, green, squares, parking } = main;
 
   const net = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = junctions(net.map((r) => dedupe(r.points)));
@@ -318,22 +330,29 @@ export function buildStreetGeometry(f: OsmFeatures, widths: Map<Road, SidewalkWi
     });
   }
   const squareRings = f.squares.map((s) => s.outline);
-  for (const p of prepared) roadSides(p, { road, sidewalk, curb, green, parking, squares }, junc, arms, squareRings);
+  for (const p of prepared) roadSides(p, bridge.roads.has(p.r) ? deck : main, junc, arms, squareRings);
 
-  for (const track of f.tramTracks) {
-    const pts = dedupe(track);
-    if (pts.length < 2) continue;
-    for (const side of [-1, 1]) {
-      const c = side * GAUGE / 2;
-      addRibbon(tram, pts, offsetLine(pts, c - RAIL_W / 2), offsetLine(pts, c + RAIL_W / 2), RAIL_Y, RAIL_Y, 0, RAIL_W);
-    }
-  }
+  for (const track of f.tramTracks) addRails(bridge.tracks.has(track) ? deck.tram : tram, track);
   for (const g of f.greens) green.polygon(g, GREEN_Y);
   for (const s of f.squares) squares.polygon(s.outline, SQUARE_Y);
 
-  const markings = buildMarkings(f.roads, roadY).mesh;
-  return {
-    road: road.build(), sidewalk: sidewalk.build(), curb: curb.build(), tram: tram.build(), green: green.build(), squares: squares.build(),
-    markings, parking: parking.build(),
-  };
+  const markings = buildMarkings(bridge.roads.size ? f.roads.filter((r) => !bridge.roads.has(r)) : f.roads, roadY).mesh;
+  const deckMarkings = buildMarkings([...bridge.roads], roadY).mesh;
+  return { ...buildAll(main, markings), bridge: buildAll(deck, deckMarkings) };
+}
+
+function addRails(b: MeshBuilder, track: Pt[]): void {
+  const pts = dedupe(track);
+  if (pts.length < 2) return;
+  for (const side of [-1, 1]) {
+    const c = side * GAUGE / 2;
+    addRibbon(b, pts, offsetLine(pts, c - RAIL_W / 2), offsetLine(pts, c + RAIL_W / 2), RAIL_Y, RAIL_Y, 0, RAIL_W);
+  }
+}
+
+/** Rails (two per track, as for the trams) of `tracks`, y = RAIL_Y. */
+export function railMesh(tracks: Pt[][]): Mesh {
+  const b = new MeshBuilder();
+  for (const t of tracks) addRails(b, t);
+  return b.build();
 }
