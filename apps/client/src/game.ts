@@ -633,7 +633,8 @@ export class Game {
       if (st?.done) this.boarding = null;
       // the lamps: the own ignition when driving; riding along, what the server says about the car
       const level = this.carId !== null ? sim.ignition(car).lightLevel() : this.session.roster?.().cars.get(car)?.level ?? 0;
-      this.driven.setLights(night, sim.braking(car), lampPower(level, Math.random));
+      // (the brake lights of somebody else's car come with the stream, as for every other car)
+      this.driven.setLights(night, streamed ? streamed.brakeLight : sim.braking(car), lampPower(level, Math.random));
       const v = streamed ? { x: streamed.vx, y: streamed.vy, z: streamed.vz } : vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
       // riding along: the car's radio, as the driver hears it
