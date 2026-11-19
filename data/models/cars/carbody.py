@@ -82,44 +82,33 @@ def slot(me, mat):
     return names.index(mat.name)
 
 
-def shrink_boundary(bm, d):
-    """Moves the open boundary of bm inwards by d along the surface."""
-    acc = {}
-    for e in bm.edges:
-        if len(e.link_faces) != 1:
-            continue
-        f = e.link_faces[0]
-        a, b = e.verts
-        inward = f.normal.cross(b.co - a.co)
-        if inward.length < 1e-9:
-            continue
-        inward.normalize()
-        if inward.dot(f.calc_center_median() - (a.co + b.co) / 2) < 0:
-            inward = -inward
-        for v in (a, b):
-            acc[v] = acc.get(v, V((0, 0, 0))) + inward
-    for v, n in acc.items():
-        if n.length > 1e-9:
-            v.co += n.normalized() * d
-
-
 def boundary_frames(bm):
-    """For every vertex on the open boundary of bm: (inward direction along the surface, edges it bounds)."""
+    """For every vertex on the open boundary of bm: its inward direction along the surface. Uses the smooth vertex
+    normals and the neighbouring faces' centre, not the single face at the edge: the Boolean leaves slivers along the
+    wheel arches whose own normals point anywhere."""
     acc = {}
     for e in bm.edges:
         if len(e.link_faces) != 1:
             continue
-        f = e.link_faces[0]
         a, b = e.verts
-        inward = f.normal.cross(b.co - a.co)
+        n = a.normal + b.normal
+        inward = n.cross(b.co - a.co)
         if inward.length < 1e-9:
             continue
         inward.normalize()
-        if inward.dot(f.calc_center_median() - (a.co + b.co) / 2) < 0:
+        faces = {f for v in (a, b) for f in v.link_faces}
+        centre = sum((f.calc_center_median() * f.calc_area() for f in faces), V((0, 0, 0))) / max(sum(f.calc_area() for f in faces), 1e-12)
+        if inward.dot(centre - (a.co + b.co) / 2) < 0:
             inward = -inward
         for v in (a, b):
             acc[v] = acc.get(v, V((0, 0, 0))) + inward
     return {v: n.normalized() for v, n in acc.items() if n.length > 1e-9}
+
+
+def shrink_boundary(bm, d):
+    """Moves the open boundary of bm inwards by d along the surface."""
+    for v, inward in boundary_frames(bm).items():
+        v.co += inward * d
 
 
 def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
@@ -130,7 +119,7 @@ def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
     bm.from_mesh(me)
     bm.normal_update()
     frames = boundary_frames(bm)
-    reach = S['r'] + S.get('arch_gap', 0.035) + 0.03
+    reach = S['r'] + S.get('arch_gap', 0.035) + 0.06
     made = {}
 
     def pt(v, k):
@@ -142,14 +131,13 @@ def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
         a, b = e.verts
         if len(e.link_faces) != 1 or a not in frames or b not in frames:
             continue
-        m = (a.co + b.co) / 2
-        if any(math.hypot(m.y + ua, m.z - S['r']) < reach for ua in (S['wb'] / 2, -S['wb'] / 2)):
-            continue
+        if any(math.hypot(v.co.y + ua, v.co.z - S['r']) < reach for v in (a, b) for ua in (S['wb'] / 2, -S['wb'] / 2)):
+            continue  # either end at a wheel arch: the band would stick out into the housing
         seals.faces.new([pt(a, -1), pt(b, -1), pt(b, 1), pt(a, 1)])
     bm.free()
 
 
-def piece(me, name, coll, M, gap=0.0, cutters=()):
+def piece(me, name, coll, M, gap=0.0, cutters=(), keep_out=(), side=0):
     """One part of the car from its skin faces: panes set back, the rest given a wall (inside 'interior_trim', edges
     'rubber'), `cutters` subtracted from the wall (their faces line the recesses). Returns the object (at the origin)."""
     for tag in [m.name for m in me.materials if '@' in m.name]:  # door tags back to the real materials
@@ -171,7 +159,7 @@ def piece(me, name, coll, M, gap=0.0, cutters=()):
     bpy.data.meshes.remove(me)
     ob = bpy.data.objects.new(name, wall)
     coll.objects.link(ob)
-    n = len(wall.polygons)
+    n, nv = len(wall.polygons), len(wall.vertices)
     so = ob.modifiers.new('wall', 'SOLIDIFY')
     so.thickness = WALL
     so.offset = -1
@@ -190,6 +178,22 @@ def piece(me, name, coll, M, gap=0.0, cutters=()):
         f.smooth = False
         for e in f.edges:
             e.smooth = False
+    # the wall's inner side must not reach into a wheel housing (keep_out: (y, z, radius) of each arch)
+    bm.verts.ensure_lookup_table()
+    if side and len(bm.verts) >= 2 * nv:
+        # a side panel (side = ±1: left / right): its inner side lies towards the car's middle. The slivers the
+        # Boolean leaves along the wheel arches have normals pointing inwards, which puts their inner vertices
+        # outside the skin: mirror those back
+        for i in range(nv):
+            outer, inner = bm.verts[i], bm.verts[nv + i]
+            off = inner.co - outer.co
+            if off.x * side > 0:
+                inner.co = outer.co - off
+    for v in bm.verts[nv:]:  # solidify appends the inner side's vertices after the skin's
+        for cy, cz, rad in keep_out:
+            d = V((0, v.co.y - cy, v.co.z - cz))
+            if 1e-6 < d.length < rad:
+                v.co += d.normalized() * (rad - d.length)
     bm.to_mesh(wall)
     bm.free()
     if cutters:
@@ -351,13 +355,14 @@ def build_shell(S, M, coll, doors, cuts=None):
         carparts.face_material = plain
     skin.name = 'skin'
     src = skin.data
+    arches = [(-ua, S['r'] + S.get('arch_lift', 0.012), S['r'] + S.get('arch_gap', 0.035) + 0.02) for ua in (S['wb'] / 2, -S['wb'] / 2)]
     out = {}
     seals = bmesh.new()
     for name, d in doors.items():
         g = groups.index(d['u'])
         me = subset(src, name, lambda f, m, g=g, s=d['side']: m.endswith(f'@{g}') and f.calc_center_median().x * s > 0)
         add_seal(seals, me, S)
-        ob = piece(me, name, coll, M, gap=GAP)
+        ob = piece(me, name, coll, M, gap=GAP, keep_out=arches, side=d['side'])
         set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
         out[name] = ob
     body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M, cutters=cuts(skin) if cuts else ())

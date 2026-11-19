@@ -68,7 +68,7 @@ LAYOUT = dict(
     wheel=dict(x=0.37, u=0.47, z=0.88, rake=0.42, r=0.185),
     floor=0.22, half_w=0.845, firewall=1.02, dash=dict(u0=0.58, top=0.95),
     shelf=dict(u0=-1.16, u1=-1.76, z=0.965), mirror=(0.36, 1.33),
-    panels={'door_fl': (-0.07, 0.8), 'door_fr': (-0.07, 0.8), 'door_rl': (-0.98, -0.15), 'door_rr': (-0.98, -0.15)},
+    panels={'door_fl': (-0.07, 0.8), 'door_fr': (-0.07, 0.8), 'door_rl': (-0.86, -0.15), 'door_rr': (-0.86, -0.15)},
 )
 
 
