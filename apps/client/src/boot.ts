@@ -8,7 +8,6 @@ import {
 import { NoWebGLError } from './errors';
 import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
-import { LoadingArt } from './loading-art';
 import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
 import { fetchOk, WorldLoader } from './loader';
@@ -93,8 +92,6 @@ const OFFLINE_ME = 0;
 const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-// the comic pictures behind the loading box (appended first, so the box stays on top)
-const loadingArt = new LoadingArt(document.body);
 const hud = new Hud(document.body);
 // every download while the game boots is counted; if loading takes a while the loading screen shows the details
 const downloads = new DownloadMeter();
@@ -496,7 +493,6 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   stopDownloadMeter();
   hud.hideLoading();
-  loadingArt.hide();
   fadeOutIntroMusic();
   hud.setHint(LOOK_HINT);
   window.__nnReady = true;
