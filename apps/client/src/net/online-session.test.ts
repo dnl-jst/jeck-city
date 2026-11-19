@@ -357,7 +357,8 @@ describe('OnlineSession', () => {
     const a = fixtureAssets();
     const car = 0;
     const { net, session, client, server } = await setup(a, leftOf({ ...fixtureCarPose(a, car) }, 2.5), 75);
-    server.addPlayer(OTHER, leftOf(fixtureCarPose(a, car), 2.2, 0.4)); // at the driver's door too
+    const beside = leftOf(fixtureCarPose(a, car), 2.2);
+    server.addPlayer(OTHER, { x: beside.x + 0.3, z: beside.z + 0.3 }); // at the driver's door too
     const rnd = prng(4);
     play(net, session, 1000, () => N, rnd);
     expect(client.cars.driver[car]).toBe(null);

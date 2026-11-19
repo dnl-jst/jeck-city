@@ -607,7 +607,7 @@ export class WorldSim {
       let taken: XZ | null = null, takenD = ENTER_MAX_DIST;
       for (const c of candidates) {
         const d = Math.hypot(c.x - pos.x, c.z - pos.z);
-        if (c.occupied && d <= takenD) [taken, takenD] = [c, d];
+        if (c.full && d <= takenD) [taken, takenD] = [c, d];
       }
       const ridden = this.bikes.nearestRidden(pos);
       const which = pickVehicle(pos, pl.facing, taken, ridden === null ? null : this.bikes.poses[ridden]!);

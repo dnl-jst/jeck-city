@@ -51,7 +51,7 @@ declare global {
      * height of the first static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive' | 'ride'; bikeType: string | null; flying: boolean; /** Fell off a bike: lying or getting up. */ fallen: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      mode: 'walk' | 'drive' | 'ride' | 'sit'; bikeType: string | null; flying: boolean; /** Fell off a bike: lying or getting up. */ fallen: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
       /** Online: how far (m) server corrections moved the rendered own pose in the last frame (0 offline). */
       correction: number;
@@ -273,7 +273,7 @@ renderer.setAnimationLoop((t: number) => {
       hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
     }
     touch.update({
-      playing: true, mode: game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
+      playing: true, mode: game.mode === 'sit' ? 'walk' : game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
       mapOpen: game.map.open, muted: gameAudio.isMuted, flying: game.flying,
     });
     touch.tick(dt);

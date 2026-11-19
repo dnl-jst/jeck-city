@@ -79,11 +79,11 @@ test('ignition: stop while starting, restart from the beginning', () => {
 
 // moved from the client's car.test.ts
 test('nearest free car within 3 m', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, occupied: true }, { id: 2, x: 2.5, z: 0, occupied: false }])).toBe(2);
+  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, full: true }, { id: 2, x: 2.5, z: 0, full: false }])).toBe(2);
 });
-test('no car in range', () => expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 5, z: 0, occupied: false }])).toBeNull());
+test('no car in range', () => expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 5, z: 0, full: false }])).toBeNull());
 test('picks the nearest of several free cars', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2.9, z: 0, occupied: false }, { id: 7, x: 0, z: -1.5, occupied: false }])).toBe(7);
+  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2.9, z: 0, full: false }, { id: 7, x: 0, z: -1.5, full: false }])).toBe(7);
 });
 
 // car facing south (+z): its left is east (+x), its right is west (−x), behind is north (−z)

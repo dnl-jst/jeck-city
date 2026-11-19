@@ -173,9 +173,9 @@ export class CarPool {
   }
 
   /** Cars for nearestEnterableCar. */
-  candidates(): { id: number; x: number; z: number; occupied: boolean }[] {
-    // (occupied: no seat left)
-    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, occupied: this.taken(id).every((t) => t) }));
+  candidates(): { id: number; x: number; z: number; full: boolean }[] {
+    // (full: no seat left)
+    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, full: this.taken(id).every((t) => t) }));
   }
 
   /** Player `id` takes car i: returns its (occupied, awake) Vehicle. */

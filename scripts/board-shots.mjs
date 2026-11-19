@@ -1,6 +1,7 @@
 // Usage: node scripts/board-shots.mjs <baseUrl> <outDir> [--type=<index into CAR_TYPES, default 0>] [--time=HH:MM]
-// Stills (from a free camera at the car's front left; ?debug=1) of getting into a car from its passenger side (the figure walks round to the driver's door), of driving with
-// the figure at the wheel, and of getting out. Offline, headless Chromium on the host GPU (NN_SOFTWARE_GL=1: SwiftShader).
+// Stills (from a free camera at the car's front left; ?debug=1) of getting into a car from its passenger side: the
+// figure takes the seat behind the door it stands at. As a passenger it just sits and gets out again; when the
+// script is started with --driver it stands at the driver's door, drives a bit with the figure at the wheel, and gets out. Offline, headless Chromium on the host GPU (NN_SOFTWARE_GL=1: SwiftShader).
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -21,7 +22,8 @@ const free = (c) => parked.every((o) => o === c || Math.hypot(o.x - c.x, o.z - c
 const car = parked.find((c) => c.type === type && bright(c) && free(c)) ?? parked.find((c) => c.type === type && free(c));
 if (!car) throw new Error(`no free-standing parked car of type ${type}`);
 const left = { x: Math.cos(car.heading), z: -Math.sin(car.heading) };
-const start = { x: car.x - left.x * 2.2, z: car.z - left.z * 2.2 }; // on the passenger side
+const side = args.includes('--driver') ? 1 : -1; // which side the figure starts on: the driver's, or the passenger's
+const start = { x: car.x + side * left.x * 2.2, z: car.z + side * left.z * 2.2 };
 
 const browser = await chromium.launch({ args: browserArgs });
 try {
@@ -50,21 +52,30 @@ try {
     await shot(name);
   }
   console.log(JSON.stringify(await page.evaluate(() => { const s = window.__nnState(); return { mode: s.mode, engine: s.engine }; })));
-  await page.waitForFunction(() => window.__nnState().engine === 'running', null, { timeout: 20_000 });
-  await view(3.2, 0.9, 1.25, -6); // through the windscreen
-  await page.waitForTimeout(300);
-  await shot('6b-front');
-  await page.keyboard.press('KeyF'); // back to the follow camera, to drive
-  await page.waitForTimeout(200);
-  await page.keyboard.down('KeyW');
-  await page.keyboard.down('KeyA');
-  await page.waitForTimeout(1300);
-  await shot('7-steering');
-  await page.keyboard.up('KeyA');
-  await page.keyboard.up('KeyW');
-  await page.keyboard.down('KeyS');
-  await page.waitForFunction(() => Math.abs(window.__nnState().speed) < 0.3, null, { timeout: 20_000 });
-  await page.keyboard.up('KeyS');
+  const riding = (await page.evaluate(() => window.__nnState().mode)) === 'sit'; // got a passenger seat: nothing to drive
+  if (!riding) {
+    await page.waitForFunction(() => window.__nnState().engine === 'running', null, { timeout: 20_000 });
+    await view(3.2, 0.9, 1.25, -6); // through the windscreen
+    await page.waitForTimeout(300);
+    await shot('6b-front');
+    await page.keyboard.press('KeyF'); // back to the follow camera, to drive
+    await page.waitForTimeout(200);
+    await page.keyboard.down('KeyW');
+    await page.keyboard.down('KeyA');
+    await page.waitForTimeout(1300);
+    await shot('7-steering');
+    await page.keyboard.up('KeyA');
+    await page.keyboard.up('KeyW');
+    await page.keyboard.down('KeyS');
+    await page.waitForFunction(() => Math.abs(window.__nnState().speed) < 0.3, null, { timeout: 20_000 });
+    await page.keyboard.up('KeyS');
+  } else {
+    await view(3.2, -0.9, 1.25, -6); // through the windscreen, from the passenger's side
+    await page.waitForTimeout(300);
+    await shot('6b-front');
+    await page.keyboard.press('KeyF'); // back to the follow camera: keys act again
+    await page.waitForTimeout(200);
+  }
   await page.keyboard.press('KeyE');
   await page.waitForTimeout(60);
   {

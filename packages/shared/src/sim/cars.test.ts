@@ -39,7 +39,8 @@ test('enter/exit: driver, radio cleared, driven car kept with no focus; pose rem
   const { pw, cars } = await pool();
   const v = cars.enter(0, 7);
   expect(cars.driver[0]).toBe(7);
-  expect(cars.candidates()[0]!.occupied).toBe(true);
+  expect(cars.candidates()[0]!.full).toBe(false); // only the driver's seat is taken
+  expect(cars.occupied(0)).toBe(true);
   cars.radio[0] = 'radiokoeln';
   cars.updateProximity([]);
   expect(cars.vehicle(0)).toBe(v); // never released under its driver

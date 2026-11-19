@@ -30,12 +30,12 @@ export function parkedPose(x: number, z: number, heading: number, t: TerrainGrid
   };
 }
 
-/** Free car (not occupied) nearest to the player within maxDist, by id; null if none. */
-export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z: number; occupied: boolean }[], maxDist = ENTER_MAX_DIST): number | null {
+/** The car with a free seat nearest to the player within maxDist, by id; null if none. */
+export function nearestEnterableCar(player: XZ, cars: { id: number; x: number; z: number; full: boolean }[], maxDist = ENTER_MAX_DIST): number | null {
   let best: number | null = null;
   let bestD = maxDist;
   for (const c of cars) {
-    if (c.occupied) continue;
+    if (c.full) continue;
     const d = Math.hypot(c.x - player.x, c.z - player.z);
     if (d <= bestD) [best, bestD] = [c.id, d];
   }
