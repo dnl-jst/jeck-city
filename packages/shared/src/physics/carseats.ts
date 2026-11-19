@@ -20,8 +20,8 @@ export const CAR_SEATS: Partial<Record<CarType, SeatLayout>> = {
       { x: -0.36, u: -0.78, h: 0.53, door: 'door_rr' },
     ],
     doors: {
-      door_fl: { hingeX: 0.86, hingeU: 1.05, rearU: -0.11, openAngle: 1.13 },
-      door_fr: { hingeX: -0.86, hingeU: 1.05, rearU: -0.11, openAngle: 1.13 },
+      door_fl: { hingeX: 0.86, hingeU: 0.9, rearU: -0.11, openAngle: 1.13 },
+      door_fr: { hingeX: -0.86, hingeU: 0.9, rearU: -0.11, openAngle: 1.13 },
       door_rl: { hingeX: 0.87, hingeU: -0.11, rearU: -1.33, openAngle: 1.13 },
       door_rr: { hingeX: -0.87, hingeU: -0.11, rearU: -1.33, openAngle: 1.13 },
     },
