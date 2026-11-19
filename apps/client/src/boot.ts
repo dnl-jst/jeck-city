@@ -468,7 +468,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     const f = game!.focus();
     return {
       mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, fallen: game!.figure.busy, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
-      radio: gameAudio.station,
+      radio: gameAudio.station, fov: camera.fov,
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,
       online: !!conn, players: onlineSession?.stats().players ?? 1,

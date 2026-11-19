@@ -12,10 +12,61 @@ export const CAMERA_DRIVE = { back: 7, up: 2.5, pivot: 1.7 };
 export const CAMERA_RIDE = { back: 4.2, up: 1.9, pivot: 1.3 };
 const MOUSE = 0.0025;
 const PITCH_MIN = -1.1, PITCH_MAX = 0.55;
+/** Speed (m/s) where the speed effects start (15 km/h) and where the field of view is fully widened (30 km/h). */
+const SPEED_FX_START = 15 / 3.6, SPEED_FOV_FULL = 30 / 3.6;
+/** Speed (m/s) where the shake reaches full strength (40 km/h). */
+const SPEED_SHAKE_FULL = 40 / 3.6;
+/** Extra field of view at full speed (degrees): 60° → 69°. */
+export const FOV_SPEED_EXTRA = 9;
+/** Extra camera distance at full speed (m). */
+const BACK_SPEED_EXTRA = 0.5;
+/** Time constant (s) the field of view / distance follow the speed with. */
+const SPEED_FX_TAU = 0.3;
+/** Shake at full strength: offset (m) and roll (rad). Bike and scooter shake more than the car, walking not at all. */
+const SHAKE = { bike: { m: 0.03, roll: 0.004 }, car: { m: 0.018, roll: 0.0025 } };
 /** Closest the camera may get to the pivot when a wall is in the way (m). */
 const MIN_DIST = 0.9;
 /** The camera only collides with the static city (not cars, not the player). */
 const STATIC_ONLY = staticWorldFilter();
+
+const smooth01 = (x: number) => {
+  const t = Math.min(1, Math.max(0, x));
+  return t * t * (3 - 2 * t);
+};
+
+/** 0 below 15 km/h, eased up to 1 at 30 km/h: how far the speed-dependent widening (FOV, distance) has gone. */
+export function speedWiden(speed: number): number {
+  return smooth01((Math.abs(speed) - SPEED_FX_START) / (SPEED_FOV_FULL - SPEED_FX_START));
+}
+
+/** Vertical field of view (degrees) for a speed (m/s): 60° up to 15 km/h, eased to 69° at 30 km/h and above. */
+export function speedFov(speed: number): number {
+  return CAMERA_FOV + FOV_SPEED_EXTRA * speedWiden(speed);
+}
+
+export type ShakeKind = 'walk' | 'bike' | 'car';
+
+/** Shake strength 0..1 for a speed (m/s): nothing on foot or below 15 km/h, rising to 1 at 40 km/h. */
+export function shakeAmount(speed: number, kind: ShakeKind): number {
+  if (kind === 'walk') return 0;
+  return smooth01((Math.abs(speed) - SPEED_FX_START) / (SPEED_SHAKE_FULL - SPEED_FX_START));
+}
+
+/**
+ * Screen-space camera shake at time t (s) for a strength 0..1: sideways / vertical offset (m, camera-local)
+ * and roll (rad). Overlaid sines at unrelated frequencies, so it is smooth and never repeats visibly.
+ */
+export function shakeOffset(t: number, amount: number, kind: ShakeKind): { x: number; y: number; roll: number } {
+  if (amount <= 0 || kind === 'walk') return { x: 0, y: 0, roll: 0 };
+  const a = SHAKE[kind];
+  const n = (f1: number, f2: number, f3: number, p: number) =>
+    (Math.sin(t * f1 + p) * 0.5 + Math.sin(t * f2 + p * 1.7) * 0.3 + Math.sin(t * f3 + p * 2.3) * 0.2);
+  return {
+    x: a.m * amount * n(7.1, 13.3, 23.9, 0.4),
+    y: a.m * amount * n(9.7, 17.9, 29.3, 1.9),
+    roll: a.roll * amount * n(5.3, 11.1, 19.7, 3.1),
+  };
+}
 
 /**
  * Third-person follow camera. yaw uses the heading convention (looks along (sin yaw, cos yaw));
@@ -36,6 +87,10 @@ export class FollowCamera {
   /** While driving: a car (target = chassis centre) or a bike (target = ground under the wheels). */
   private vehicle: 'car' | 'bike' = 'car';
   private readonly look = new Vector3();
+  /** Smoothed speed widening (0..1) and shake strength, and the shake clock. */
+  private widen = 0;
+  private shake = 0;
+  private shakeT = 0;
 
   constructor(private readonly cam: PerspectiveCamera, private readonly pw: PhysicsWorld) {}
 
@@ -64,10 +119,33 @@ export class FollowCamera {
     this.placed = false;
   }
 
-  /** target = feet (walking), chassis centre (car) or ground under the wheels (bike), with the vehicle heading. */
-  update(target: { x: number; y: number; z: number }, carHeading: number, dt: number): void {
+  /** Back to the resting field of view (leaving for the free-fly camera). */
+  resetFov(): void {
+    this.widen = 0;
+    this.shake = 0;
+    this.setFov(CAMERA_FOV);
+  }
+
+  private setFov(fov: number): void {
+    if (Math.abs(this.cam.fov - fov) < 1e-4) return;
+    this.cam.fov = fov;
+    this.cam.updateProjectionMatrix();
+  }
+
+  /**
+   * target = feet (walking), chassis centre (car) or ground under the wheels (bike), with the vehicle heading.
+   * speed (m/s) widens the view, pulls the camera back a little and (on wheels) shakes it slightly.
+   */
+  update(target: { x: number; y: number; z: number }, carHeading: number, dt: number, speed = 0): void {
     const bike = this.driving && this.vehicle === 'bike';
-    const o = bike ? CAMERA_RIDE : this.driving ? CAMERA_DRIVE : CAMERA_WALK;
+    const base = bike ? CAMERA_RIDE : this.driving ? CAMERA_DRIVE : CAMERA_WALK;
+    const kind: ShakeKind = bike ? 'bike' : this.driving ? 'car' : 'walk';
+    const kfx = 1 - Math.exp(-dt / SPEED_FX_TAU);
+    this.widen += (speedWiden(speed) - this.widen) * kfx;
+    this.shake += (shakeAmount(speed, kind) - this.shake) * kfx;
+    this.shakeT += dt;
+    this.setFov(CAMERA_FOV + FOV_SPEED_EXTRA * this.widen);
+    const o = { ...base, back: base.back + BACK_SPEED_EXTRA * this.widen };
     const groundY = this.driving && !bike ? target.y - VEHICLE_REST_Y : target.y;
     if (this.driving) {
       this.carYaw += angleDelta(this.carYaw, carHeading) * Math.min(1, dt * 3);
@@ -99,6 +177,13 @@ export class FollowCamera {
     this.cam.position.set(this.pivot.x + bx * s, this.pivot.y + by * s, this.pivot.z + bz * s);
     this.look.set(this.cam.position.x + fx, this.cam.position.y + fy, this.cam.position.z + fz);
     this.cam.lookAt(this.look);
+    // shake: only the rendered view moves (after the wall check; pivot and target stay put)
+    if (this.shake > 1e-3) {
+      const sh = shakeOffset(this.shakeT, this.shake, kind);
+      this.cam.translateX(sh.x);
+      this.cam.translateY(sh.y);
+      this.cam.rotateZ(sh.roll);
+    }
   }
 
   /** How far the camera may sit from p along (dx, dy, dz) before hitting static geometry (≤ max). */
