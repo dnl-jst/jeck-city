@@ -1,6 +1,7 @@
 import type { WorldManifest } from '../assets/manifest';
 import type { TerrainGrid } from '../assets/terrain';
 import { carTypeOf, type CarType } from '../physics/cartypes';
+import { CAR_SEATS } from '../physics/carseats';
 import { Vehicle, VEHICLE_REST_Y } from '../physics/vehicle';
 import type { PhysicsWorld } from '../physics/world';
 import type { StationId } from '../net/constants';
@@ -28,6 +29,8 @@ export class CarPool {
   /** Model (and chassis size) of each car. */
   readonly types: CarType[];
   readonly driver: (PlayerId | null)[];
+  /** Who sits on each seat of each car besides the driver (index = seat; seat 0 is `driver`'s and stays null here). */
+  readonly riders: (PlayerId | null)[][];
   /** Radio station playing in each car; null while off or without a driver. */
   readonly radio: (StationId | null)[];
   /** Manifest pose of every car. */
@@ -42,11 +45,32 @@ export class CarPool {
     this.colors = parked.map((c) => c.color);
     this.types = parked.map((c) => carTypeOf(c.type));
     this.driver = parked.map(() => null);
+    this.riders = this.types.map((t) => CAR_SEATS[t].seats.map(() => null));
     this.radio = parked.map(() => null);
   }
 
   get count(): number {
     return this.poses.length;
+  }
+
+  /** Whether anybody sits in car i (driving or riding along). */
+  occupied(i: number): boolean {
+    return this.driver[i] !== null || this.riders[i]!.some((r) => r !== null);
+  }
+
+  /** Which seats of car i are taken (index = seat). */
+  taken(i: number): boolean[] {
+    return this.riders[i]!.map((r, s) => (s === 0 ? this.driver[i] !== null : r !== null));
+  }
+
+  /** Player `id` sits down on passenger seat `seat` (≥ 1) of car i: the car is left as it is. */
+  sit(i: number, seat: number, id: PlayerId): void {
+    this.riders[i]![seat] = id;
+  }
+
+  /** The passenger on `seat` of car i gets out. */
+  stand(i: number, seat: number): void {
+    this.riders[i]![seat] = null;
   }
 
   /** The physics car of car i, or null while it has none. */
@@ -62,7 +86,7 @@ export class CarPool {
       for (const f of foci) d = Math.min(d, Math.hypot(s.x - f.x, s.z - f.z));
       const v = this.vehicles.get(i);
       if (!v && d <= CAR_PHYSICS_NEAR) this.vehicles.set(i, this.spawn(i));
-      else if (v && d > CAR_PHYSICS_FAR && this.driver[i] === null && !this.followed.has(i)) {
+      else if (v && d > CAR_PHYSICS_FAR && !this.occupied(i) && !this.followed.has(i)) {
         this.poses[i] = v.pose();
         v.dispose();
         this.vehicles.delete(i);
@@ -150,7 +174,8 @@ export class CarPool {
 
   /** Cars for nearestEnterableCar. */
   candidates(): { id: number; x: number; z: number; occupied: boolean }[] {
-    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, occupied: this.driver[id] !== null }));
+    // (occupied: no seat left)
+    return this.poses.map((s, id) => ({ id, x: s.x, z: s.z, occupied: this.taken(id).every((t) => t) }));
   }
 
   /** Player `id` takes car i: returns its (occupied, awake) Vehicle. */
@@ -189,7 +214,7 @@ export class CarPool {
 
   /** Puts driverless car i back on its manifest spot (asleep, as when it was first created). No-op while driven or followed. */
   reset(i: number): void {
-    if (this.driver[i] !== null || this.followed.has(i)) return;
+    if (this.occupied(i) || this.followed.has(i)) return;
     this.poses[i] = { ...this.home[i]! };
     const v = this.vehicles.get(i);
     if (!v) return;

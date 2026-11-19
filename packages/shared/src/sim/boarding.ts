@@ -95,5 +95,19 @@ export function fromCarPoint(car: { x: number; z: number; heading: number }, p: 
   return { x: car.x + p.x * c + p.u * s, z: car.z - p.x * s + p.u * c };
 }
 
-/** The seat a player gets when entering a car on foot (until several can share a car: the driver's). */
+/** The driver's seat. */
 export const DRIVER_SEAT = 0;
+
+/**
+ * The seat someone standing at `from` (car frame) gets: of the free seats (taken[i] false) the one with the shortest
+ * walk to its door – the seat behind the door they stand at, if it is free. null when the car is full.
+ */
+export function pickSeat(spec: CarSpec, layout: SeatLayout, taken: readonly boolean[], from: CarPoint): number | null {
+  let best: number | null = null, bestLen = Infinity;
+  for (let i = 0; i < layout.seats.length; i++) {
+    if (taken[i]) continue;
+    const n = pathLength(boardingPath(spec, layout, i, from));
+    if (n < bestLen - 1e-9) [best, bestLen] = [i, n];
+  }
+  return best;
+}

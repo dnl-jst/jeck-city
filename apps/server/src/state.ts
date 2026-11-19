@@ -7,7 +7,8 @@ import { UNKNOWN_WEATHER } from '@nn/shared';
  */
 
 /**
- * A player, keyed by slot. mode: 0 walk, 1 drive, 2 down, 3 ride (as OwnMode). carId: the driven car, −1 otherwise.
+ * A player, keyed by slot. mode: 0 walk, 1 drive, 2 down, 3 ride, 4 riding along in a car (as OwnMode). carId: the car
+ * driven or ridden along in, −1 otherwise; seat: the seat in it (0 driving), −1 otherwise.
  * bikeId: the ridden bike, −1 otherwise. variant: the character model (index into CHARACTER_VARIANTS).
  * mapX/mapZ: coarse position (whole metres, only rewritten after MAP_POS_STEP m) for the maps, which show every player,
  * also those outside a client's snapshot interest.
@@ -17,6 +18,7 @@ export const PlayerState = schema({
   name: t.string(),
   mode: t.uint8(),
   carId: t.int16().default(-1),
+  seat: t.int8().default(-1),
   bikeId: t.int16().default(-1),
   variant: t.uint8(),
   mapX: t.int16(),

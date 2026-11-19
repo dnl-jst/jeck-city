@@ -52,17 +52,17 @@ export const EXIT_SIDE = 1.5;
 export const EXIT_BEHIND_CLEAR = 0.9;
 
 /**
- * Where the driver gets out: 1.5 m to the left of the car, `ahead` m ahead of its middle (beside the seat); if that
- * spot is blocked, to the right; else behind the car (half the body `length` + 0.9 m). null when all three are blocked.
- * Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
+ * Where someone gets out: 1.5 m beside the car on their seat's side (`side` +1 left, −1 right), `ahead` m ahead of
+ * its middle (beside the seat); if that spot is blocked, the other side; else behind the car (half the body `length`
+ * + 0.9 m). null when all three are blocked. Heading h: forward = (sin h, cos h), left = (cos h, −sin h).
  */
-export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean, length: number = TUNING.vehicle.length, ahead = 0): XZ | null {
+export function exitSpot(car: { x: number; z: number; heading: number }, isFree: (x: number, z: number) => boolean, length: number = TUNING.vehicle.length, ahead = 0, side = 1): XZ | null {
   const s = Math.sin(car.heading), c = Math.cos(car.heading);
   const behind = length / 2 + EXIT_BEHIND_CLEAR;
-  const ax = car.x + s * ahead, az = car.z + c * ahead;
+  const ax = car.x + s * ahead, az = car.z + c * ahead, k = side < 0 ? -1 : 1;
   const spots = [
-    { x: ax + c * EXIT_SIDE, z: az - s * EXIT_SIDE },
-    { x: ax - c * EXIT_SIDE, z: az + s * EXIT_SIDE },
+    { x: ax + k * c * EXIT_SIDE, z: az - k * s * EXIT_SIDE },
+    { x: ax - k * c * EXIT_SIDE, z: az + k * s * EXIT_SIDE },
     { x: car.x - s * behind, z: car.z - c * behind },
   ];
   return spots.find((p) => isFree(p.x, p.z)) ?? null;

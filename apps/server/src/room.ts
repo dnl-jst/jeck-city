@@ -30,7 +30,7 @@ const MAX_RAW_NAME = 100;
 /** Messages per second before Colyseus drops a client: inputs come at 60 Hz, radio and pings rarely. */
 const MAX_MESSAGES_PER_S = 5 * TICK_HZ;
 
-const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
+const MODE = { walk: 0, drive: 1, down: 2, ride: 3, sit: 4 } as const;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 
 type Auth = { name: string; ipHash: string; variant: number };
@@ -164,7 +164,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     this.seats.set(client.sessionId, seat);
     const start = this.sim.player(slot).pos;
     this.state.players.set(String(slot), new PlayerState({
-      slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
+      slot, name, mode: MODE.walk, carId: -1, seat: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
     }));
     this.watchMessageSize(client);
     client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
@@ -344,8 +344,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const e = state.players.get(String(seat.slot));
       if (!e) continue;
       if (e.mode !== MODE[p.mode]) e.mode = MODE[p.mode];
-      const carId = p.carId ?? -1;
+      // the car driven, or the one ridden along in (then with the seat)
+      const carId = p.carId ?? p.pass?.car ?? -1, place = p.carId !== null ? 0 : p.pass?.seat ?? -1;
       if (e.carId !== carId) e.carId = carId;
+      if (e.seat !== place) e.seat = place;
       const bikeId = p.bikeId ?? -1;
       if (e.bikeId !== bikeId) e.bikeId = bikeId;
       if (Math.abs(p.pos.x - e.mapX) >= MAP_POS_STEP || Math.abs(p.pos.z - e.mapZ) >= MAP_POS_STEP) {
@@ -358,7 +360,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     for (let i = 0; i < cars.count; i++) {
       const key = String(i);
       const driver = cars.driver[i] ?? null;
-      if (driver === null && !cars.isMoved(i)) {
+      if (!cars.occupied(i) && !cars.isMoved(i)) {
         if (state.cars.has(key)) state.cars.delete(key);
         continue;
       }

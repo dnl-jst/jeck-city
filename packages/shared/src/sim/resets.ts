@@ -22,7 +22,7 @@ export class ResetTimers {
     const awake = new Set(sim.cars.awake());
     for (let i = 0; i < sim.cars.count; i++) {
       this.car[i] ??= now;
-      if (sim.cars.driver[i] !== null || awake.has(i) || !sim.cars.isMoved(i)) { this.car[i] = now; continue; }
+      if (sim.cars.occupied(i) || awake.has(i) || !sim.cars.isMoved(i)) { this.car[i] = now; continue; }
       const p = sim.cars.poses[i]!;
       if (now - this.car[i]! >= AFTER_TICKS && clear(p.x, p.z)) {
         sim.cars.reset(i);

@@ -140,3 +140,10 @@ test('exit spot: beside the seat (ahead of the car\'s middle by the seat\'s posi
   expect(right.x).toBeCloseTo(-1.5);
   expect(right.z).toBeCloseTo(0.7);
 });
+
+test('exit spot: a seat on the right gets out to the right first', () => {
+  const car = { x: 0, z: 0, heading: 0 };
+  expect(exitSpot(car, () => true, 4, 0.7, -1)).toEqual({ x: -1.5, z: 0.7 });
+  const other = exitSpot(car, (x) => x > 0, 4, 0.7, -1)!; // right blocked: the left
+  expect(other.x).toBeCloseTo(1.5);
+});

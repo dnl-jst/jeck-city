@@ -147,13 +147,13 @@ class FakeNet {
     for (const id of s.players()) {
       const p = s.player(id);
       players.set(String(id), {
-        slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 3 }[p.mode], carId: p.carId ?? -1, bikeId: p.bikeId ?? -1, variant: 0,
+        slot: id, name: `p${id}`, mode: { walk: 0, drive: 1, down: 2, ride: 3, sit: 4 }[p.mode], carId: p.carId ?? p.pass?.car ?? -1, seat: p.carId !== null ? 0 : p.pass?.seat ?? -1, bikeId: p.bikeId ?? -1, variant: 0,
       });
     }
     // a car's pose is written when the entry appears and while the car is at rest (as the room's syncState)
     const cars = new Map<string, Pose & { driver: number; engine: number; lights: boolean; radio: string }>();
     for (let i = 0; i < s.cars.count; i++) {
-      if (s.cars.driver[i] === null && !s.cars.isMoved(i)) continue;
+      if (!s.cars.occupied(i) && !s.cars.isMoved(i)) continue;
       const v = s.cars.vehicle(i), prev = this.lastCars.get(String(i));
       const at = !prev || !v || v.chassis.isSleeping() ? pose(v ? v.pose() : s.cars.poses[i]!) : pose(prev);
       cars.set(String(i), { driver: s.cars.driver[i] ?? -1, engine: 0, lights: false, radio: '', ...at });
@@ -247,7 +247,7 @@ describe('OnlineSession', () => {
     const rnd = prng(2);
     play(net, session, 500, () => N, rnd);
     const ev = play(net, session, 100, () => ({ ...N, use: true }), rnd).flatMap((f) => f.events);
-    expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0 });
+    expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0, seat: 0 });
     play(net, session, 4000, () => N, rnd); // walks to the door, gets in, the engine starts
     // a left-hand circle of ~30 m radius at full speed, inside the lawn
     const frames = play(net, session, 20_000, () => {
@@ -271,7 +271,7 @@ describe('OnlineSession', () => {
 
     play(net, session, 500, () => N, rnd, undefined, slow);
     const ev = play(net, session, 1, () => ({ ...N, use: true }), rnd, undefined, slow).flatMap((f) => f.events); // one frame
-    expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0 });
+    expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0, seat: 0 });
     play(net, session, 1500, () => N, rnd, undefined, slow);
     const replay = vi.spyOn(client, 'replay');
     const frames = play(net, session, 20_000, () => {
@@ -353,11 +353,11 @@ describe('OnlineSession', () => {
     expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(2);
   }, 60_000);
 
-  test('denied enter is rolled back', async () => {
+  test('losing the driver\'s seat to somebody quicker: the prediction is corrected to the seat the server gave', async () => {
     const a = fixtureAssets();
     const car = 0;
     const { net, session, client, server } = await setup(a, leftOf({ ...fixtureCarPose(a, car) }, 2.5), 75);
-    server.addPlayer(OTHER, leftOf(fixtureCarPose(a, car), -2.5));
+    server.addPlayer(OTHER, leftOf(fixtureCarPose(a, car), 2.2, 0.4)); // at the driver's door too
     const rnd = prng(4);
     play(net, session, 1000, () => N, rnd);
     expect(client.cars.driver[car]).toBe(null);
@@ -367,20 +367,22 @@ describe('OnlineSession', () => {
     net.others = (tick) => new Map([[OTHER, tick === otherUse ? { ...N, use: true } : N]]);
     const first = session.frame(0.017, { ...N, use: true });
     net.advanceTo(net.t + 17);
-    expect([...first, ...play(net, session, 50, () => N, rnd).flatMap((f) => f.events)]).toContainEqual({ t: 'enter', id: ME, car });
+    expect([...first, ...play(net, session, 50, () => N, rnd).flatMap((f) => f.events)]).toContainEqual({ t: 'enter', id: ME, car, seat: 0 });
     expect(client.player(ME).mode).toBe('drive'); // predicted
 
     const ev = play(net, session, 1000, () => N, rnd).flatMap((f) => f.events);
     expect(server.player(OTHER).carId).toBe(car);
-    expect(server.player(ME).mode).toBe('walk');
-    expect(ev.filter((e) => e.t === 'enterDenied')).toEqual([{ t: 'enterDenied', id: ME }]);
-    expect(ev.filter((e) => e.t === 'exit')).toEqual([{ t: 'exit', id: ME, car }]);
-    expect(client.player(ME).mode).toBe('walk');
+    // the server seated us on another seat of the same car: out of the driver's seat, into that one
+    const mine = server.player(ME).pass!;
+    expect(mine.car).toBe(car);
+    expect(mine.seat).toBeGreaterThan(0);
+    expect(ev.filter((e) => e.t === 'enterDenied')).toEqual([]);
+    expect(ev.filter((e) => e.t === 'exit')).toEqual([{ t: 'exit', id: ME, car, seat: 0 }]);
+    expect(ev.filter((e) => e.t === 'enter')).toEqual([{ t: 'enter', id: ME, car, seat: mine.seat }]);
+    expect(client.player(ME)).toMatchObject({ mode: 'sit', pass: mine });
     // the car is OTHER's now: taken in the prediction world and following the server's pose
     expect(client.cars.driver[car]).toBe(OTHER);
     expect(client.cars.following().has(car)).toBe(true);
-    const c = client.player(ME).pos, s = server.player(ME).pos;
-    expect(Math.hypot(c.x - s.x, c.z - s.z)).toBeLessThan(0.2);
   }, 60_000);
 });
 

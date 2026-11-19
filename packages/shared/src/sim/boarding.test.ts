@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAR_SEATS } from '../physics/carseats';
 import { CAR_SPECS } from '../physics/cartypes';
-import { BOARD_WALK_SPEED, DOOR_OPEN_S, SIT_S, boardSeconds, boardingPath, fromCarPoint, pathLength, standPoint, toCarPoint } from './boarding';
+import { BOARD_WALK_SPEED, DOOR_OPEN_S, SIT_S, boardSeconds, boardingPath, fromCarPoint, pathLength, pickSeat, standPoint, toCarPoint } from './boarding';
 
 const sp = CAR_SPECS.kleinwagen, L = CAR_SEATS.kleinwagen;
 const inBody = (p: { x: number; u: number }) => Math.abs(p.x) < sp.width / 2 && Math.abs(p.u - sp.bodyZ) < sp.length / 2;
@@ -58,5 +58,27 @@ describe('boarding', () => {
     const ahead = toCarPoint(car, 10 + Math.sin(0.7), -4 + Math.cos(0.7));
     expect(ahead.u).toBeCloseTo(1, 6);
     expect(ahead.x).toBeCloseTo(0, 6);
+  });
+});
+
+describe('seat choice', () => {
+  const none = [false, false, false, false];
+  it('gives the seat behind the door one stands at', () => {
+    expect(pickSeat(sp, L, none, { x: 1.6, u: 0.1 })).toBe(0); // driver's door
+    expect(pickSeat(sp, L, none, { x: -1.6, u: 0.1 })).toBe(1); // front passenger
+    expect(pickSeat(sp, L, none, { x: 1.6, u: -0.8 })).toBe(2); // rear left
+    expect(pickSeat(sp, L, none, { x: -1.6, u: -0.8 })).toBe(3);
+  });
+
+  it('with that seat taken: the free seat with the shortest walk to its door', () => {
+    expect(pickSeat(sp, L, [true, false, false, false], { x: 1.6, u: 0.1 })).toBe(2); // same side, the rear door
+    // the whole left side taken: round the car by the shorter end – the rear from the driver's door, the front from the wing
+    expect(pickSeat(sp, L, [true, false, true, false], { x: 1.6, u: 0.1 })).toBe(3);
+    expect(pickSeat(sp, L, [true, false, true, false], { x: 1.6, u: 1.6 })).toBe(1);
+  });
+
+  it('a full car has no seat', () => {
+    expect(pickSeat(sp, L, [true, true, true, true], { x: 1.6, u: 0.1 })).toBeNull();
+    expect(pickSeat(CAR_SPECS.smart, CAR_SEATS.smart, [true, true], { x: 1.6, u: 0 })).toBeNull();
   });
 });
