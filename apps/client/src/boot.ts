@@ -71,6 +71,8 @@ declare global {
     __nnRemoteAudio?: () => { engines: number; horns: number; radio: StationId | null; levels: [number, number][] };
     /** Dev build only (and, online, only with a dev-mode server): mouse movement (px) as if under pointer lock, e.g. to point the radio wheel headless. */
     __nnWheelNudge?: (dx: number, dy: number) => void;
+    /** Where free-fly is allowed: puts the free-fly camera at (x, y, z) looking along yaw / pitch (degrees, as ?cam), e.g. for stills. */
+    __nnFlyTo?: (x: number, y: number, z: number, yawDeg: number, pitchDeg: number) => void;
   }
   interface ImportMeta { readonly env: { readonly DEV: boolean } }
 }
@@ -478,6 +480,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   // write hooks (they change state) only where dev tools are allowed; the read-only getters always exist
   if (import.meta.env.DEV && allowed.writeHooks) window.__nnWheelNudge = (dx, dy) => input.mouseMove(dx, dy);
   if (allowed.writeHooks) window.__nnConn = () => connection;
+  if (allowed.fly) {
+    window.__nnFlyTo = (x, y, z, yawDeg, pitchDeg) => {
+      camera.position.set(x, y, z);
+      game!.fly.setHeading(yawDeg * DEG, pitchDeg * DEG);
+      game!.flying = true;
+    };
+  }
   window.__nnRemote = () => {
     if (!onlineSession) return [];
     const roster = onlineSession.roster();

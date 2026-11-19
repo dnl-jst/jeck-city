@@ -22,7 +22,7 @@ from nnmodel import material  # noqa: E402
 V = Vector
 
 WALL = 0.03  # wall thickness of body and doors (m)
-GAP = 0.003  # a door's edge stands this far back from its opening (m)
+GAP = 0.005  # a door's edge stands this far back from its opening (m)
 GLASS_INSET = 0.008  # the panes sit this far inside the outer skin (m)
 TAG_BASES = ('paint', 'glass', 'pillar', 'trim')  # materials a door's skin may carry
 DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body)
@@ -34,14 +34,17 @@ def car_materials2(paint=(0.55, 0.06, 0.05)):
     """car_materials() with clear glass ('glass', exported as alphaMode BLEND) and the interior set."""
     m = car_materials(paint)
     m['glass_dark'] = material('glass_dark', (0.07, 0.09, 0.1), rough=0.05, metal=0.2)  # the distance model's opaque glass
-    m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.38, rough=0.05)
+    m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.32, rough=0.05)
     m['lens'] = clear('lens', (0.9, 0.9, 0.9), 0.25, rough=0.03)  # clear lamp covers
     m['lens_red'] = clear('lens_red', (0.75, 0.03, 0.02), 0.6, rough=0.05)  # tail lamp covers
     m['pillar'] = material('pillar', (0.015, 0.015, 0.018), rough=0.12)  # gloss black window pillars
     m['interior'] = material('interior', (0.07, 0.07, 0.075), rough=0.8)
     m['interior_trim'] = material('interior_trim', (0.15, 0.15, 0.155), rough=0.6)
-    m['seat'] = material('seat', (0.2, 0.2, 0.215), rough=0.9)
+    m['seat'] = material('seat', (0.3, 0.3, 0.32), rough=0.9)
     m['rubber'] = material('rubber', (0.02, 0.02, 0.02), rough=0.7)
+    # the game has no environment map: fully metallic rims would render black
+    m['rim'] = material('rim', (0.72, 0.73, 0.75), rough=0.35, metal=0.5)
+    m['rim_dark'] = material('rim_dark', (0.18, 0.18, 0.19), rough=0.5, metal=0.4)
     return m
 
 
