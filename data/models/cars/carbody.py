@@ -139,7 +139,7 @@ def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
     bm.free()
 
 
-def piece(me, name, coll, M, gap=0.0, cutters=(), keep_out=(), side=0):
+def piece(me, name, coll, M, gap=0.0, cutters=(), keep_out=(), side=0, relief=()):
     """One part of the car from its skin faces: panes set back, the rest given a wall (inside 'interior_trim', edges
     'rubber'), `cutters` subtracted from the wall (their faces line the recesses). Returns the object (at the origin)."""
     for tag in [m.name for m in me.materials if '@' in m.name]:  # door tags back to the real materials
@@ -149,11 +149,20 @@ def piece(me, name, coll, M, gap=0.0, cutters=(), keep_out=(), side=0):
             if p.material_index == t:
                 p.material_index = base
     i_trim, i_rubber = slot(me, M['interior_trim']), slot(me, M['rubber'])
-    if gap:
+    if gap or relief:
         bm = bmesh.new()
         bm.from_mesh(me)
+        if relief:  # (y, z, radius) of arcs the skin must stay outside of
+            for v in bm.verts:
+                for cy, cz, rad in relief:
+                    d = V((0, v.co.y - cy, v.co.z - cz))
+                    if 1e-6 < d.length < rad:
+                        v.co += d.normalized() * (rad - d.length)
+            bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0008)
+            bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=0.0008)
         bm.normal_update()
-        shrink_boundary(bm, gap)
+        if gap:
+            shrink_boundary(bm, gap)
         bm.to_mesh(me)
         bm.free()
     panes = subset(me, name + '_glass', lambda f, m: m == 'glass')
@@ -400,7 +409,10 @@ def build_shell(S, M, coll, doors, cuts=None):
         g = groups.index(d['u'])
         me = subset(src, name, lambda f, m, g=g, s=d['side']: m.endswith(f'@{g}') and f.calc_center_median().x * s > 0)
         add_seal(seals, me, S)
-        ob = piece(me, name, coll, M, gap=GAP, keep_out=arches, side=d['side'])
+        # where a door spans a wheel arch, its edge is pulled back onto a clean arc a little wider than the arch:
+        # the Boolean that cut the arch into the skin leaves slivers along its edge (the arch lip covers the difference)
+        relief = [(cy, cz, rad - 0.008) for cy, cz, rad in arches if d['u'][0] < -cy < d['u'][1]]  # doors over an axle
+        ob = piece(me, name, coll, M, gap=GAP, keep_out=arches, side=d['side'], relief=relief)
         set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
         out[name] = ob
     body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M, cutters=cuts(skin) if cuts else ())

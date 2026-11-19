@@ -65,5 +65,8 @@ describe.each(CAR_TYPES)('%s model plates', (type) => {
     expect(f![2]).toBeGreaterThan(1); // glTF z = forward
     expect(r![2]).toBeLessThan(-1);
     expect(Math.abs(f![0])).toBeLessThan(0.01);
+    // the van's rear plate sits on its left wing door, clear of the gap between the doors
+    if (type === 'transporter') expect(r![0]).toBeGreaterThan(0.3);
+    else expect(Math.abs(r![0])).toBeLessThan(0.01);
   });
 });
