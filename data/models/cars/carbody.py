@@ -409,9 +409,11 @@ def build_shell(S, M, coll, doors, cuts=None):
         g = groups.index(d['u'])
         me = subset(src, name, lambda f, m, g=g, s=d['side']: m.endswith(f'@{g}') and f.calc_center_median().x * s > 0)
         add_seal(seals, me, S)
-        # where a door spans a wheel arch, its edge is pulled back onto a clean arc a little wider than the arch:
+        # where a door spans a wheel arch (or asks for it with 'relief'), its edge is pulled back onto a clean arc a
+        # little wider than the arch:
         # the Boolean that cut the arch into the skin leaves slivers along its edge (the arch lip covers the difference)
-        relief = [(cy, cz, rad - 0.008) for cy, cz, rad in arches if d['u'][0] < -cy < d['u'][1]]  # doors over an axle
+        relief = [(cy, cz, rad - 0.008) for cy, cz, rad in arches
+                  if d['u'][0] < -cy < d['u'][1] or (d.get('relief') and d['u'][0] - rad < -cy < d['u'][1] + rad)]
         ob = piece(me, name, coll, M, gap=GAP, keep_out=arches, side=d['side'], relief=relief)
         set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
         out[name] = ob

@@ -43,12 +43,12 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
   // driver and the outer place of the double bench; the load space is not entered
   transporter: {
     seats: [
-      { x: 0.47, u: 1.27, h: 0.92, door: 'door_fl' },
-      { x: -0.5, u: 1.27, h: 0.92, door: 'door_fr' },
+      { x: 0.47, u: 0.75, h: 1, door: 'door_fl' },
+      { x: -0.5, u: 0.75, h: 1, door: 'door_fr' },
     ],
     doors: {
-      door_fl: { hingeX: 0.94, hingeU: 1.95, rearU: 1, openAngle: 1.13 },
-      door_fr: { hingeX: -0.94, hingeU: 1.95, rearU: 1, openAngle: 1.13 },
+      door_fl: { hingeX: 0.94, hingeU: 1.31, rearU: 0.03, openAngle: 1.13 },
+      door_fr: { hingeX: -0.94, hingeU: 1.31, rearU: 0.03, openAngle: 1.13 },
     },
   },
   smart: {
