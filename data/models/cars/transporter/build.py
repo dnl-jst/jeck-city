@@ -28,7 +28,8 @@ S = dict(
     bottom=[(B, 0.48), (-2.2, 0.33), (-1.6, 0.25), (1.6, 0.25), (2.25, 0.33), (F, 0.4)],
     width=[(B, 0.915), (-2.38, 0.95), (2.3, 0.952), (2.42, 0.92), (F, 0.85)],
     topw=[(B, 0.86), (-2.36, 0.875), (1.2, 0.875), (1.95, 0.9), (2.3, 0.88), (F, 0.8)],
-    widest=0.45, crown=0.03, rail=0.04,
+    widest=0.6, crown=0.03, rail=0.04,
+    door_segs=(3, 4, 5),  # the cab doors end above the wheel arches (the lower side stays on the body)
     screen=(1.95, 1.2),
     topglass=[(1.93, 1.22)],
     side=[(1.9, 1.05)],  # the cab door's pane, framed all round
@@ -38,7 +39,7 @@ S = dict(
 )
 S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and 1.0 <= u <= 1.95 else None
 
-# the cab doors sit over the front wheel arches, which cut their lower edge; as CAR_SEATS
+# the cab doors sit over the front wheels and end above their arches; as CAR_SEATS
 DOORS = {'door_fl': dict(u=(1.0, 1.95), side=1, hinge_x=0.94), 'door_fr': dict(u=(1.0, 1.95), side=-1, hinge_x=-0.94)}
 LAYOUT = dict(
     seats=[(0.47, 1.27, 0.92), (-0.5, 1.27, 0.92)], front=1,
@@ -46,7 +47,7 @@ LAYOUT = dict(
     floor=0.56, half_w=0.895, firewall=2.06, dash=dict(u0=1.64, top=1.15),
     shelf=None, mirror=None, tunnel=False, console=False,
     bench=dict(w=0.86, cx=-0.4), bulkhead=dict(u=0.6, top=1.92),
-    panels={'door_fl': (1.06, 1.86), 'door_fr': (1.06, 1.86)}, panel_z=0.84,
+    panels={'door_fl': (1.06, 1.86), 'door_fr': (1.06, 1.86)}, panel_z=0.96, panel_h=0.3,
 )
 
 HEAD = poly_round([(-0.17, -0.07), (0.2, -0.08), (0.22, 0.07), (-0.17, 0.065)], 0.02)
@@ -94,7 +95,7 @@ def build(coll, lod=False):
     for s in (1, -1):
         sd = V((-s, 0, 0))
         handle(sh, s, 1.13, 1.05, mat='trim')  # cab door
-        seams = [] if not lod else [(1.95, 0.75, 1.12), (1.0, 0.33, 1.9)]
+        seams = [] if not lod else [(1.95, 0.77, 1.12), (1.0, 0.77, 1.9)]
         if s == -1:  # sliding door: its front edge is the cab door's rear edge; rear edge, rail and handle
             seams.append((-0.05, 0.33, 1.9))
             sh.decal('dark', (s, 0.25, 1.42), sd, rrect(2.5, 0.012, 0.004), off=0.002)

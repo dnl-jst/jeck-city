@@ -43,6 +43,8 @@ S = dict(
 def trims(u, seg):
     if seg == 1 and -0.95 < u < 0.95:
         return 'trim'  # sills
+    if seg in (1, 2) and u <= -0.95:
+        return 'trim'  # the tail's lower corners belong to the black bumper
     if seg == 5 and CELL[0] < u <= 1.0:
         return 'pillar'  # the door's window frame
     return None  # the pillar behind the door is body colour

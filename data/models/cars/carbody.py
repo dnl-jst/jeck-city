@@ -26,7 +26,7 @@ GAP = 0.005  # a door's edge stands this far back from its opening (m)
 LAMP_DEPTH = 0.024  # lamp and grille recesses stay inside the wall, so they keep their back
 GLASS_INSET = 0.008  # the panes sit this far inside the outer skin (m)
 TAG_BASES = ('paint', 'glass', 'pillar', 'trim', 'tridion')  # materials a door's skin may carry
-DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body)
+DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body); S['door_segs'] overrides
 
 
 # ---------------------------------------------------------------- materials
@@ -251,15 +251,18 @@ class Shell:
         self.body, self.doors, self.specs, self.skin = body, doors, specs, skin
         self.parts = {}
 
-    def target(self, u, x):
+    def target(self, u, x, z=None):
+        """The door under the point (u, x, z), or 'body' (also below a door's lower edge, when z is given)."""
         for name, d in self.specs.items():
             if name in self.doors and d['u'][0] <= u <= d['u'][1] and x * d['side'] > 0.3:
-                return name
+                low = carparts.ring(self.S, u)[min(self.S.get('door_segs', DOOR_SEGS))][1]
+                if z is None or z >= low:
+                    return name
         return 'body'
 
     def part(self, kind, at=None):
         """The Part for `kind` ('decals' or 'details') on the target under `at` (Blender coordinates; None = body)."""
-        t = 'body' if at is None else self.target(-at[1], at[0])
+        t = 'body' if at is None else self.target(-at[1], at[0], at[2])
         key = (t, kind)
         if key not in self.parts:
             self.parts[key] = Part(kind if t == 'body' else f'{t}_{kind}')
@@ -369,7 +372,7 @@ def tagged(S, M, specs):
 
     def tag(S_, u, seg):
         name = plain(S_, u, seg)
-        if seg in DOOR_SEGS and name in TAG_BASES:
+        if seg in S.get('door_segs', DOOR_SEGS) and name in TAG_BASES:
             for i, (u0, u1) in enumerate(groups):
                 if u0 <= u <= u1:
                     return f'{name}@{i}'
@@ -444,7 +447,7 @@ def arch_lip(sh, s, ua, mat='paint'):
             last = None
             continue
         pt = V((loc.x - s * 0.006, -ua + R * dy, cz + R * dz))
-        t = sh.target(-pt.y, pt.x)
+        t = sh.target(-pt.y, pt.x, pt.z)
         if t != last:
             runs.append((pt, []))
             last = t
@@ -462,6 +465,18 @@ def handle(sh, s, u, z, mat='paint'):
     p = sh.part('details', at)
     c = loc + n * 0.016
     p.tube([c + V((0, -0.075, 0)), c + V((0, 0.075, 0))], 0.012, sh.M[mat], seg=8)
+
+
+def shark_fin(part, M, at, mat='paint', length=0.17, height=0.065, width=0.05):
+    """A roof antenna fin at `at` (its foot's middle): low at the front, rising to a rounded tip at the rear."""
+    from carinterior import blob
+
+    def shape(co):
+        t = min(1.0, max(0.0, co.y / length + 0.5))  # 0 front … 1 rear
+        h = min(1.0, max(0.0, co.z / height + 0.5))  # 0 foot … 1 top
+        rise = 0.18 + 0.82 * math.sin(min(1.0, t * 1.15) * math.pi / 2) ** 1.5
+        return V((co.x * (1 - 0.75 * h) * (0.55 + 0.45 * math.sin(t * math.pi)), co.y + 0.02 * h, (co.z + height / 2) * rise - height / 2))
+    blob(part, V(at) + V((0, 0, height / 2 - 0.004)), (width, length, height), M[mat], r=0.012, seg=3, shape=shape)
 
 
 def window_cut(skin, M, c, d, outline):

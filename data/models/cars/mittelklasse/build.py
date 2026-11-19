@@ -9,7 +9,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 from carbody import (V, arch_lip, build_lod_shell, build_shell, bulb, car_materials2, handle, lamp_cuts, lamp_units,  # noqa: E402
-                     mirror2, projector, recess, run2, wheels_and_lamps)
+                     mirror2, projector, recess, run2, shark_fin, wheels_and_lamps)
 from carinterior import blob, build_interior, review_shots  # noqa: E402
 from carparts import exhaust, lamp_pair, plate_node, poly_round, rrect, wipers  # noqa: E402
 
@@ -131,7 +131,8 @@ def build(coll, lod=False):
             for ua in (S['wb'] / 2, -S['wb'] / 2):
                 arch_lip(sh, s, ua)
     wipers(p, M, skin, S)
-    p.box(V((0, 0.9, 1.45)), (0.06, 0.16, 0.05), M['trim'])  # roof antenna fin
+    loc, _ = sh.surface((0, 1.0, 3.0), (0, 0, -1))
+    shark_fin(p, M, loc)  # roof antenna
     if not lod:
         build_interior(sh, LAYOUT)
     plate_node(coll, 'plate_f', skin, (0, -F, 0.46), (0, 1, 0), sh.body, off=0.015)

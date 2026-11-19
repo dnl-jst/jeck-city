@@ -13,7 +13,7 @@ Everything is placed from a `layout` dict in metres (u = ahead of the origin, x 
     shelf      {'u0', 'u1', 'z'}: cover behind the rear seats, or None
     mirror     (u, z) of the inner mirror
     panels     {'door_fl': (u0, u1), ...}: extent of each door's inner panel
-    panel_z    height of the panels' middle (default 0.61)
+    panel_z    height of the panels' middle (default 0.61); panel_h their height (default 0.6)
     bench      {'w': width, 'cx': centre x} of the bench (default: 1.3 m, centred)
     bulkhead   {'u', 'top'}: a wall behind the seats (panel van), or absent
     tunnel, console   False to leave out the centre tunnel / the centre console
@@ -180,7 +180,11 @@ def build_interior(sh, layout):
         p.box(V((0, -(s['u0'] + s['u1']) / 2, s['z'])), (2 * hw, abs(s['u0'] - s['u1']), 0.025), M['interior'])
     if L.get('mirror'):
         mu, mz = L['mirror']
-        p.cyl(V((0, -mu - 0.05, mz + 0.06)), V((0, -mu, mz)), 0.008, M['interior'], seg=6)
+        # the stalk runs up towards the glass and stops short of it
+        at, up = V((0, -mu, mz)), V((0, -0.55, 0.83)).normalized()
+        ok, hit, _, _ = sh.skin.ray_cast(at, up, distance=1.0)
+        reach = max(0.0, min(0.09, (hit - at).length - 0.035)) if ok else 0.03
+        p.cyl(at + up * reach, at, 0.008, M['interior'], seg=6)
         blob(p, (0, -mu, mz), (0.22, 0.03, 0.065), M['interior'], r=0.012)
     ob = p.to_object(coll)
     ob.parent = body
@@ -188,7 +192,7 @@ def build_interior(sh, layout):
     for i, (x, u, h) in enumerate(L['seats']):
         empty(coll, f'seat_{i}', (x, -u, h), body)
     # door panels: trim board, armrest with a grip, a pocket low down
-    pz = L.get('panel_z', 0.61)
+    pz, ph = L.get('panel_z', 0.61), L.get('panel_h', 0.6)
     for name, (u0, u1) in L.get('panels', {}).items():
         if name not in sh.doors:
             continue
@@ -196,10 +200,10 @@ def build_interior(sh, layout):
         x = s * (hw - 0.012)
         dp = sh.part('details', (s * 0.8, -(u0 + u1) / 2, 0.6))
         n = u1 - u0
-        blob(dp, (x, -(u0 + u1) / 2, pz), (0.035, n, 0.6), M['interior_trim'], r=0.015)
-        blob(dp, (x - s * 0.04, -(u0 + u1) / 2 + 0.03, pz + 0.05), (0.075, n * 0.62, 0.06), M['interior'], r=0.025)
-        blob(dp, (x - s * 0.03, -(u0 + u1) / 2 - 0.02, pz - 0.21), (0.05, n * 0.7, 0.13), M['interior'], r=0.02)
-        dp.box(V((x - s * 0.02, -(u0 + n * 0.2), pz + 0.15)), (0.012, 0.1, 0.025), M['chrome'])  # inner handle
+        blob(dp, (x, -(u0 + u1) / 2, pz), (0.035, n, ph), M['interior_trim'], r=0.015)
+        blob(dp, (x - s * 0.04, -(u0 + u1) / 2 + 0.03, pz + ph / 12), (0.075, n * 0.62, 0.06), M['interior'], r=0.025)
+        blob(dp, (x - s * 0.03, -(u0 + u1) / 2 - 0.02, pz - 0.35 * ph), (0.05, n * 0.7, 0.22 * ph), M['interior'], r=0.02)
+        dp.box(V((x - s * 0.02, -(u0 + n * 0.2), pz + ph / 4)), (0.012, 0.1, 0.025), M['chrome'])  # inner handle
     return ob
 
 
