@@ -1,6 +1,6 @@
 import {
   type BufferGeometry, Color, Group, type Material, type Object3D,
-  DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
+  DataTexture, DataUtils, FrontSide, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
   Vector3, type Scene,
 } from 'three';
 import {
@@ -35,9 +35,39 @@ function modelParts(model: Object3D): Part[] {
   return out;
 }
 
+/**
+ * Clear glass of the rebuilt models: window panes ('glass') and lamp covers ('lens…') that the glTF marks as blended.
+ * The old models' 'glass' is opaque and stays as it is.
+ */
+export function isClearGlass(m: Material): boolean {
+  return m.transparent && (m.name === 'glass' || m.name.startsWith('lens'));
+}
+
+/**
+ * The material a car mesh is drawn with: clear glass as a copy tuned for the game (no depth writes, so panes behind
+ * panes and the interior stay visible; single-sided; glossy), everything else as it is.
+ */
+export function carMaterial(m: Material): Material {
+  if (!(m instanceof MeshStandardMaterial) || !isClearGlass(m)) return m;
+  const c = m.clone();
+  c.transparent = true;
+  c.depthWrite = false;
+  c.side = FrontSide;
+  c.roughness = 0.05;
+  c.metalness = 0;
+  c.envMapIntensity = 1.5;
+  return c;
+}
+
+/** Clear glass throws no shadow and is drawn after the opaque rest of the cars. */
+function glassMesh(mesh: Object3D): void {
+  mesh.castShadow = false;
+  mesh.renderOrder = 1;
+}
+
 /** Paint is white in the instanced copy: instanceColor carries each car's colour. */
 function instanceMaterial(m: Material): Material {
-  if (!(m instanceof MeshStandardMaterial) || m.name !== 'paint') return m;
+  if (!(m instanceof MeshStandardMaterial) || m.name !== 'paint') return carMaterial(m);
   const c = m.clone();
   c.color.set(0xffffff);
   return c;
@@ -137,8 +167,9 @@ function makeRig(model: Object3D, type: CarType): Rig {
       if (mat.name === 'paint') { const c = mat.clone(); paint.push(c); return c; }
       if (mat.name === 'lamp_front') { const c = mat.clone(); c.emissive.set(0xfff1d6); head.push(c); return c; }
       if (mat.name === 'lamp_rear') { const c = mat.clone(); c.emissive.set(0xff1a0a); tail.push(c); return c; }
-      return mat;
+      return carMaterial(mat);
     };
+    if ([m.material].flat().some(isClearGlass)) glassMesh(m);
     m.material = Array.isArray(m.material) ? m.material.map(own) : own(m.material);
   });
   const wheels = WHEEL_NODES.map((n) => {
@@ -386,6 +417,7 @@ export class ParkedCars {
           im.name = `car_${type}_${tag}_${k}`;
           im.count = 0;
           im.castShadow = im.receiveShadow = true;
+          if (isClearGlass(part.material)) glassMesh(im);
           scene.add(im);
           return im;
         });

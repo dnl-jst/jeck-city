@@ -11,6 +11,7 @@ import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
+import { shipCarModels } from './ship-cars.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, LOD2_TILES } from './fetch.js';
 import { generatedLamps } from './lamps.js';
@@ -43,7 +44,6 @@ const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
 const SCOOTER_SEED = 2025611;
 const BIKE_MODELS = 'data/models/bikes';
-const CAR_MODELS = 'data/models/cars';
 /** Frame colour of the cargo bike at the spawn. */
 const SPAWN_BIKE_COLOR = 0x2f5d3a;
 /** Rack bikes this close to the spawn bike are left out (m). */
@@ -288,16 +288,7 @@ async function main() {
   const characterModels = await shipCharacterModels(OUT_DIR);
 
   // car models (data/models/cars, built by their build.py): full detail and the distance version
-  const carModels: WorldManifest['carModels'] = [];
-  for (const type of CAR_TYPES) {
-    let bytes = 0;
-    for (const suffix of ['', '_lod']) {
-      const glb = await prepareProp(await readFile(join(CAR_MODELS, type, `${type}${suffix}.glb`)));
-      await writeFile(join(OUT_DIR, `car_${type}${suffix}.glb`), glb);
-      bytes += glb.byteLength;
-    }
-    carModels.push({ type, file: `car_${type}.glb`, lod: `car_${type}_lod.glb`, bytes });
-  }
+  const carModels = await shipCarModels(OUT_DIR);
   console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 
   const racks = layoutRacks(f, buildings).filter((r) => r.hoops.every(offBridge));
