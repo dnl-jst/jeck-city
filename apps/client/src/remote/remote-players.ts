@@ -483,7 +483,8 @@ function fastestCarNear(cars: ReadonlyMap<string, SnapshotCar>, x: number, z: nu
 }
 
 /** Wheels of a streamed car: spin with its speed along the heading and steer as sent; suspension at rest. */
-function streamedWheels(c: SnapshotCar): WheelSource {
+/** What the wheels of a car known only from the snapshots do: speed along its heading and the streamed steering. */
+export function streamedWheels(c: SnapshotCar): WheelSource {
   // forward = local +z rotated by the chassis quaternion
   const fx = 2 * (c.qx * c.qz + c.qw * c.qy), fz = 1 - 2 * (c.qx * c.qx + c.qy * c.qy);
   const speed = c.vx * fx + c.vz * fz;
