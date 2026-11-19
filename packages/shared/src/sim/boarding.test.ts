@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAR_SEATS } from '../physics/carseats';
 import { CAR_SPECS } from '../physics/cartypes';
-import { BOARD_WALK_SPEED, DOOR_OPEN_S, SIT_S, boardSeconds, boardingPath, fromCarPoint, pathLength, pickSeat, standPoint, toCarPoint } from './boarding';
+import { BOARD_WALK_SPEED, DOOR_OPEN_S, SIT_S, STEP_S, approachPoint, boardSeconds, boardingPath, fromCarPoint, pathLength, pickSeat, standPoint, toCarPoint } from './boarding';
 
 const sp = CAR_SPECS.kleinwagen, L = CAR_SEATS.kleinwagen;
 const inBody = (p: { x: number; u: number }) => Math.abs(p.x) < sp.width / 2 && Math.abs(p.u - sp.bodyZ) < sp.length / 2;
@@ -19,10 +19,21 @@ describe('boarding', () => {
     expect(standPoint(L, 1).x).toBeLessThan(-sp.width / 2 - 0.3);
   });
 
+  it('approaches a door from behind its rear edge, clear of where it swings open', () => {
+    for (let seat = 0; seat < L.seats.length; seat++) {
+      const d = L.doors[L.seats[seat]!.door]!, a = approachPoint(L, seat);
+      expect(a.u).toBeLessThan(d.rearU - 0.1); // behind the door's rear edge
+      expect(Math.sign(a.x)).toBe(Math.sign(d.hingeX));
+      expect(Math.abs(a.x)).toBeGreaterThan(sp.width / 2 + 0.3);
+      // outside the arc the door's rear edge sweeps about its hinge
+      expect(Math.hypot(a.x - d.hingeX, a.u - d.hingeU)).toBeGreaterThan(d.hingeU - d.rearU + 0.1);
+    }
+  });
+
   it('walks straight to the door from the same side', () => {
     const path = boardingPath(sp, L, 0, { x: 1.6, u: -0.8 });
     expect(path).toHaveLength(2);
-    expect(path[1]).toEqual(standPoint(L, 0));
+    expect(path[1]).toEqual(approachPoint(L, 0));
   });
 
   it('walks round the car from the other side, never through it, by the shorter end', () => {
@@ -33,7 +44,7 @@ describe('boarding', () => {
     const fromFrontRight = boardingPath(sp, L, 0, { x: -1.5, u: 1.6 });
     expect(Math.max(...fromFrontRight.map((p) => p.u))).toBeGreaterThan(sp.bodyZ + sp.length / 2); // round the front
     expect(along(fromFrontRight).some(inBody)).toBe(false);
-    expect(fromFrontRight.at(-1)).toEqual(standPoint(L, 0));
+    expect(fromFrontRight.at(-1)).toEqual(approachPoint(L, 0));
   });
 
   it('from straight behind the car it goes round one rear corner only', () => {
@@ -42,10 +53,10 @@ describe('boarding', () => {
     expect(path.every((p) => p.x >= -0.01)).toBe(true);
   });
 
-  it('takes the walk plus opening the door and sitting down', () => {
+  it('takes the walk, opening the door, stepping round it into the opening and sitting down', () => {
     const path = boardingPath(sp, L, 0, { x: 1.6, u: -0.8 });
-    expect(boardSeconds(path)).toBeCloseTo(pathLength(path) / BOARD_WALK_SPEED + DOOR_OPEN_S + SIT_S, 6);
-    expect(boardSeconds([standPoint(L, 0), standPoint(L, 0)])).toBeCloseTo(DOOR_OPEN_S + SIT_S, 6);
+    expect(boardSeconds(path)).toBeCloseTo(pathLength(path) / BOARD_WALK_SPEED + DOOR_OPEN_S + STEP_S + SIT_S, 6);
+    expect(boardSeconds([approachPoint(L, 0), approachPoint(L, 0)])).toBeCloseTo(DOOR_OPEN_S + STEP_S + SIT_S, 6);
   });
 
   it('converts between the world and a car\'s frame', () => {

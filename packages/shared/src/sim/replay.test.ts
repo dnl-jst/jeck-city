@@ -121,7 +121,7 @@ describe('predictionMatches', () => {
   }, 30_000);
 
   test('driving: equal states match; position, velocity, rotation or car off do not', async () => {
-    const { pred, truth } = await twins((t) => (t === 10 ? { ...N, use: true } : t > 150 ? { ...N, forward: 1, right: 0.3 } : N), 240);
+    const { pred, truth } = await twins((t) => (t === 10 ? { ...N, use: true } : t > 360 ? { ...N, forward: 1, right: 0.3 } : N), 450); // (the engine runs once the figure sits)
     expect(pred.mode).toBe('drive');
     expect(Math.hypot(pred.vel.x, pred.vel.z)).toBeGreaterThan(2);
     expect(predictionMatches(pred, truth)).toBe(true);

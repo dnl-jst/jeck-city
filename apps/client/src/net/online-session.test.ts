@@ -248,7 +248,7 @@ describe('OnlineSession', () => {
     play(net, session, 500, () => N, rnd);
     const ev = play(net, session, 100, () => ({ ...N, use: true }), rnd).flatMap((f) => f.events);
     expect(ev).toContainEqual({ t: 'enter', id: ME, car: 0, seat: 0 });
-    play(net, session, 4000, () => N, rnd); // walks to the door, gets in, the engine starts
+    play(net, session, 7000, () => N, rnd); // walks to the door, gets in, the engine starts
     // a left-hand circle of ~30 m radius at full speed, inside the lawn
     const frames = play(net, session, 20_000, () => {
       const p = client.player(ME);
@@ -542,7 +542,7 @@ describe('OnlineSession resting cars', () => {
     const rnd = prng(13);
     play(net, session, 500, () => N, rnd);
     play(net, session, 100, () => ({ ...N, use: true }), rnd);
-    play(net, session, 4000, () => N, rnd); // walks to the door, gets in, the engine starts
+    play(net, session, 7000, () => N, rnd); // walks to the door, gets in, the engine starts
     play(net, session, 2000, () => ({ ...N, forward: 1, yaw: headingOf(client.player(ME).car!) }), rnd);
     play(net, session, 6000, () => ({ ...N, brake: true, yaw: headingOf(client.player(ME).car!) }), rnd);
     expect(client.player(ME).mode).toBe('drive');
@@ -588,7 +588,7 @@ describe('OnlineSession lamps', () => {
     const rnd = prng(5);
     play(net, session, 300, () => N, rnd);
     play(net, session, 50, () => ({ ...N, use: true }), rnd);
-    play(net, session, 4000, () => N, rnd); // walks to the door, gets in, the engine starts
+    play(net, session, 7000, () => N, rnd); // walks to the door, gets in, the engine starts
     const frames = play(net, session, 6000, () => ({ ...N, forward: 1 }), rnd, () => client.props.isStanding(0));
     return { frames, client, server, net, session, rnd };
   }

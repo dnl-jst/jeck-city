@@ -154,7 +154,7 @@ async function riderAndDriver(gap = 30): Promise<WorldSim> {
   sim.step(new Map([[1, USE], [2, USE]]));
   expect(sim.player(1).mode).toBe('ride');
   expect(sim.player(2).mode).toBe('drive');
-  for (let t = 0; t < 100; t++) sim.step(new Map([[1, N], [2, N]])); // the engine starts
+  for (let t = 0; t < 360; t++) sim.step(new Map([[1, N], [2, N]])); // the figure gets in, the engine starts
   return sim;
 }
 
@@ -234,7 +234,7 @@ test('standing on a car that drives off (and turns): rides along on the roof, no
   for (let t = 0; t < 10; t++) sim.step(new Map([[1, N], [2, N]]));
   sim.step(new Map([[1, N], [2, USE]]));
   expect(sim.player(2).mode).toBe('drive');
-  for (let t = 0; t < 100; t++) sim.step(new Map([[1, N], [2, N]])); // the engine starts
+  for (let t = 0; t < 360; t++) sim.step(new Map([[1, N], [2, N]])); // the figure gets in, the engine starts
   // player 1 onto the middle of the roof
   const car = sim.cars.vehicle(0)!.pose();
   sim.onFoot().find((p) => p.id === 1)!.char.teleport({ x: car.x, y: car.y + 1.2, z: car.z });

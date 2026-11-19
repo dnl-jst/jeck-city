@@ -8,7 +8,7 @@ import { headingOf, type CarPose } from './rules';
 import { WorldSim, type SimEvent } from './world-sim';
 
 /** Ticks after pressing E by which the engine runs: the walk to the door, getting in, door, starter. */
-const STARTED = 240;
+const STARTED = 360;
 
 const N = NEUTRAL_INPUT(0);
 const USE: PlayerInput = { ...N, use: true };

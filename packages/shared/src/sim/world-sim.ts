@@ -12,7 +12,7 @@ import { createPhysicsWorld, timeSlicer, type PhysicsWorld } from '../physics/wo
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
-import { boardingPath, boardSeconds, DRIVER_SEAT, pickSeat, toCarPoint } from './boarding';
+import { approachPoint, boardingPath, boardSeconds, DRIVER_SEAT, pickSeat, toCarPoint } from './boarding';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
@@ -645,10 +645,11 @@ export class WorldSim {
       ev.push({ t: 'exitDenied', id, reason: 'speed' });
       return;
     }
-    // out beside the own seat, on its side
+    // out on the own seat's side, behind its door
     const pose = v?.pose() ?? this.cars.poses[i]!, type = this.cars.types[i]!, at = CAR_SEATS[type].seats[seat]!;
     const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) },
-      (x, z) => !v || exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), CAR_SPECS[type].length, at.u, Math.sign(at.x));
+      (x, z) => !v || exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), CAR_SPECS[type].length,
+      approachPoint(CAR_SEATS[type], seat).u, Math.sign(at.x)); // (where they end up after shutting the door behind them)
     if (!spot) {
       ev.push({ t: 'exitDenied', id, reason: 'blocked' });
       return;

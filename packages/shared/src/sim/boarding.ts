@@ -9,10 +9,15 @@ import type { CarSpec } from '../physics/cartypes';
 /** A point in a car's frame on the ground: x to the left, u ahead of the axle midpoint (m). */
 export type CarPoint = { x: number; u: number };
 
-/** How fast the figure walks to its door (m/s), and how long opening the door and sitting down take (s). */
-export const BOARD_WALK_SPEED = 2.2, DOOR_OPEN_S = 0.3, SIT_S = 1.0;
-/** Getting out: door open, out of the seat, door shut (s). */
-export const LEAVE_S = DOOR_OPEN_S + SIT_S + 0.3;
+/**
+ * How fast the figure walks to its door (m/s), and how long the rest takes (s): reaching for the handle and pulling
+ * the door open, stepping round the open door into the opening, getting into the seat, pulling the door shut.
+ */
+export const BOARD_WALK_SPEED = 2.2, DOOR_OPEN_S = 0.7, STEP_S = 0.45, SIT_S = 1.3, DOOR_SHUT_S = 0.7;
+/** Getting out is the same backwards, without the walk (s). */
+export const LEAVE_S = DOOR_OPEN_S + STEP_S + SIT_S + DOOR_SHUT_S;
+/** Where the figure waits to open a door: this far from the car's centre line, and behind the door's rear edge. */
+const APPROACH_SIDE = 1.5, APPROACH_BEHIND = 0.25;
 /** The figure stands this far outside the door's hinge line. */
 const STAND_OUT = 0.55;
 /** The way round keeps this clear of the body; its corners lie CORNER out. */
@@ -22,6 +27,15 @@ const CLEAR = 0.3, CORNER = 0.5;
 export function standPoint(layout: SeatLayout, seat: number): CarPoint {
   const s = layout.seats[seat]!, d = layout.doors[s.door]!;
   return { x: d.hingeX + Math.sign(d.hingeX) * STAND_OUT, u: s.u };
+}
+
+/**
+ * Where the figure stands to open the door of seat `seat` (and to shut it after getting out): beside the car, just
+ * behind the door's rear edge – outside the arc the door swings through.
+ */
+export function approachPoint(layout: SeatLayout, seat: number): CarPoint {
+  const d = layout.doors[layout.seats[seat]!.door]!;
+  return { x: Math.sign(d.hingeX) * APPROACH_SIDE, u: d.rearU - APPROACH_BEHIND };
 }
 
 /** Whether the segment a–b passes through the box |x| < w, u0 < u < u1. */
@@ -47,11 +61,17 @@ export function pathLength(path: readonly CarPoint[]): number {
 }
 
 /**
- * The way on foot from `from` (car frame) to the stand point of `seat`: straight if nothing is in the way, else round
- * the front or the rear of the car, whichever is shorter. Other obstacles are not considered.
+ * The way on foot from `from` (car frame) to where the door of `seat` is opened from (approachPoint).
  */
 export function boardingPath(spec: CarSpec, layout: SeatLayout, seat: number, from: CarPoint): CarPoint[] {
-  const to = standPoint(layout, seat);
+  return pathTo(spec, approachPoint(layout, seat), from);
+}
+
+/**
+ * The way on foot from `from` to `to` beside a car (car frame): straight if nothing is in the way, else round the front
+ * or the rear of the car, whichever is shorter. Other obstacles are not considered.
+ */
+export function pathTo(spec: CarSpec, to: CarPoint, from: CarPoint): CarPoint[] {
   const w = spec.width / 2 + CLEAR, u0 = spec.bodyZ - spec.length / 2 - CLEAR, u1 = spec.bodyZ + spec.length / 2 + CLEAR;
   const hits = (a: CarPoint, b: CarPoint) => crosses(a, b, w, u0, u1);
   const head: CarPoint[] = [from];
@@ -78,9 +98,9 @@ export function boardingPath(spec: CarSpec, layout: SeatLayout, seat: number, fr
   return [...head, ...best.slice(1)];
 }
 
-/** Seconds from pressing E until the figure sits: the walk along `path`, opening the door, sitting down. */
+/** Seconds from pressing E until the figure sits: the walk along `path`, the door, the step into the opening, sitting down. */
 export function boardSeconds(path: readonly CarPoint[]): number {
-  return pathLength(path) / BOARD_WALK_SPEED + DOOR_OPEN_S + SIT_S;
+  return pathLength(path) / BOARD_WALK_SPEED + DOOR_OPEN_S + STEP_S + SIT_S;
 }
 
 /** A world point (x, z) in the frame of a car at (x, z) facing heading (forward = (sin h, cos h), left = (cos h, −sin h)). */
@@ -100,13 +120,13 @@ export const DRIVER_SEAT = 0;
 
 /**
  * The seat someone standing at `from` (car frame) gets: of the free seats (taken[i] false) the one with the shortest
- * walk to its door – the seat behind the door they stand at, if it is free. null when the car is full.
+ * walk to its door (to beside the seat) – the seat behind the door they stand at, if it is free. null when the car is full.
  */
 export function pickSeat(spec: CarSpec, layout: SeatLayout, taken: readonly boolean[], from: CarPoint): number | null {
   let best: number | null = null, bestLen = Infinity;
   for (let i = 0; i < layout.seats.length; i++) {
     if (taken[i]) continue;
-    const n = pathLength(boardingPath(spec, layout, i, from));
+    const n = pathLength(pathTo(spec, standPoint(layout, i), from));
     if (n < bestLen - 1e-9) [best, bestLen] = [i, n];
   }
   return best;
