@@ -30,14 +30,14 @@ S = dict(
     widest=0.42,
     screen=(0.95, 0.25),
     topglass=[(0.93, 0.27), (-1.5, -1.93)],
-    side=[(0.86, -0.06), (-0.16, -1.42)],
+    side=[(0.86, -0.06), (-0.16, -1.27)],  # each pane lies inside its door, framed all round
     extra=[1.275, -1.275, 0.0],
     step=0.15,
     shoulder=0.02, cap_bulge=0.05,
     creases={2: 0.5, 3: 0.45, 4: 0.7, 5: 0.5, 6: 0.8, 7: 0.8},  # 3: a crease along the flank
 )
-# gloss black pillars between and behind the side windows
-S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and -1.42 <= u <= 0.86 else None
+# gloss black window frames on the doors (the pillars between the panes)
+S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and -1.33 <= u <= 0.9 else None
 
 
 def lower_trim(u, ax, z, mat):
@@ -117,12 +117,12 @@ def build(coll, lod=False):
         loc, _ = sh.surface((0, -F, 0.47), (0, 1, 0))
         p.box(V((0, loc.y + 0.006, 0.47)), (0.56, 0.014, 0.135), M['trim'])
     sh.decal('plate', (0, -F, 0.47), (0, 1, 0), rrect(0.52, 0.11, 0.01), off=0.012)
-    sh.decal('plate_eu', (0.235, -F, 0.47), (0, 1, 0), rrect(0.045, 0.1, 0.005), off=0.014)
+    sh.decal('plate_eu', (-0.235, -F, 0.47), (0, 1, 0), rrect(0.045, 0.1, 0.005), off=0.014)
     for s in (1, -1):  # fog lamps
         sh.decal('lamp_front', (s * 0.62, -F, 0.42), (-s * 0.3, 1, 0), rrect(0.11, 0.05, 0.02), bulge=0.004)
     # rear: plate in the tailgate, tailgate seam, lip spoiler with the third brake light
     sh.decal('plate', (0, -B, 0.72), (0, -1, 0), rrect(0.52, 0.11, 0.01), off=0.008)
-    sh.decal('plate_eu', (-0.235, -B, 0.72), (0, -1, 0), rrect(0.045, 0.1, 0.005), off=0.01)
+    sh.decal('plate_eu', (0.235, -B, 0.72), (0, -1, 0), rrect(0.045, 0.1, 0.005), off=0.01)
     sh.decal('dark', (0, -B, 0.97), (0, -1, 0), rrect(1.2, 0.01, 0.004), off=0.002)
     sh.decal('trim', (0, -B, 0.5), (0, -1, 0), poly_round([(-0.74, -0.05), (0.74, -0.05), (0.7, 0.05), (-0.7, 0.05)], 0.03), off=0.003)
     tilt = Matrix.Rotation(-0.24, 3, 'X')

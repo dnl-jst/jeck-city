@@ -103,6 +103,52 @@ def shrink_boundary(bm, d):
             v.co += n.normalized() * d
 
 
+def boundary_frames(bm):
+    """For every vertex on the open boundary of bm: (inward direction along the surface, edges it bounds)."""
+    acc = {}
+    for e in bm.edges:
+        if len(e.link_faces) != 1:
+            continue
+        f = e.link_faces[0]
+        a, b = e.verts
+        inward = f.normal.cross(b.co - a.co)
+        if inward.length < 1e-9:
+            continue
+        inward.normalize()
+        if inward.dot(f.calc_center_median() - (a.co + b.co) / 2) < 0:
+            inward = -inward
+        for v in (a, b):
+            acc[v] = acc.get(v, V((0, 0, 0))) + inward
+    return {v: n.normalized() for v, n in acc.items() if n.length > 1e-9}
+
+
+def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
+    """Adds the door seal for the door skin `me` to the bmesh `seals`: a band behind the door's edge all round (just
+    behind the wall, reaching `half` to either side of the gap), so nothing shows through the gap of a closed door.
+    Left out along the wheel arches, where it would stand in the wheel housing."""
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.normal_update()
+    frames = boundary_frames(bm)
+    reach = S['r'] + S.get('arch_gap', 0.035) + 0.03
+    made = {}
+
+    def pt(v, k):
+        if (v, k) not in made:
+            made[(v, k)] = seals.verts.new(v.co - v.normal * depth + frames[v] * (k * half))
+        return made[(v, k)]
+
+    for e in bm.edges:
+        a, b = e.verts
+        if len(e.link_faces) != 1 or a not in frames or b not in frames:
+            continue
+        m = (a.co + b.co) / 2
+        if any(math.hypot(m.y + ua, m.z - S['r']) < reach for ua in (S['wb'] / 2, -S['wb'] / 2)):
+            continue
+        seals.faces.new([pt(a, -1), pt(b, -1), pt(b, 1), pt(a, 1)])
+    bm.free()
+
+
 def piece(me, name, coll, M, gap=0.0, cutters=()):
     """One part of the car from its skin faces: panes set back, the rest given a wall (inside 'interior_trim', edges
     'rubber'), `cutters` subtracted from the wall (their faces line the recesses). Returns the object (at the origin)."""
@@ -306,15 +352,24 @@ def build_shell(S, M, coll, doors, cuts=None):
     skin.name = 'skin'
     src = skin.data
     out = {}
+    seals = bmesh.new()
     for name, d in doors.items():
         g = groups.index(d['u'])
         me = subset(src, name, lambda f, m, g=g, s=d['side']: m.endswith(f'@{g}') and f.calc_center_median().x * s > 0)
+        add_seal(seals, me, S)
         ob = piece(me, name, coll, M, gap=GAP)
         set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
         out[name] = ob
     body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M, cutters=cuts(skin) if cuts else ())
     for ob in out.values():
         ob.parent = body
+    sme = bpy.data.meshes.new('seals')
+    seals.to_mesh(sme)
+    seals.free()
+    sme.materials.append(M['rubber'])
+    so = bpy.data.objects.new('seals', sme)
+    coll.objects.link(so)
+    so.parent = body
     # the ray target keeps the plain materials
     for i, m in enumerate(src.materials):
         if '@' in m.name:
