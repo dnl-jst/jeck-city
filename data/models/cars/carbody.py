@@ -35,9 +35,9 @@ def car_materials2(paint=(0.55, 0.06, 0.05)):
     m['glass_dark'] = material('glass_dark', (0.07, 0.09, 0.1), rough=0.05, metal=0.2)  # the distance model's opaque glass
     m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.38, rough=0.05)
     m['lens'] = clear('lens', (0.9, 0.9, 0.9), 0.25, rough=0.03)  # clear lamp covers
-    m['interior'] = material('interior', (0.035, 0.035, 0.04), rough=0.8)
-    m['interior_trim'] = material('interior_trim', (0.09, 0.09, 0.095), rough=0.6)
-    m['seat'] = material('seat', (0.06, 0.06, 0.065), rough=0.9)
+    m['interior'] = material('interior', (0.07, 0.07, 0.075), rough=0.8)
+    m['interior_trim'] = material('interior_trim', (0.15, 0.15, 0.155), rough=0.6)
+    m['seat'] = material('seat', (0.2, 0.2, 0.215), rough=0.9)
     m['rubber'] = material('rubber', (0.02, 0.02, 0.02), rough=0.7)
     return m
 
@@ -331,7 +331,12 @@ def setup_render():
     return cam
 
 
-def shoot(cam, path, pos, look, lens=50):
+def shoot(cam, path, pos, look, lens=50, ortho=None, clip=0.1):
+    """One still. ortho: orthographic scale (m) instead of the lens; clip: near clipping distance (cuts the car open)."""
+    cam.data.type = 'ORTHO' if ortho else 'PERSP'
+    if ortho:
+        cam.data.ortho_scale = ortho
+    cam.data.clip_start = clip
     cam.data.lens = lens
     cam.location = pos
     cam.rotation_euler = (V(look) - V(pos)).to_track_quat('-Z', 'Y').to_euler()
@@ -342,13 +347,13 @@ def shoot(cam, path, pos, look, lens=50):
 
 def render2(name, out_dir, L, shell, extra=None):
     """Review stills: the four views and their grid as before, plus 'open' (doors open) and 'through' (eye level,
-    looking through the glass). extra(cam, shot) may add more, shot(tag, pos, look, lens=50) writes one."""
+    looking through the glass). extra(shot, shell) may add more; shot(tag, pos, look, lens=50, ortho=, clip=) writes one."""
     cam = setup_render()
     os.makedirs(out_dir, exist_ok=True)
     k = max(L, 3.9) / 4.2
 
-    def shot(tag, pos, look, lens=50):
-        return shoot(cam, os.path.join(out_dir, f'{name}-{tag}.png'), V(pos), look, lens)
+    def shot(tag, pos, look, lens=50, **kw):
+        return shoot(cam, os.path.join(out_dir, f'{name}-{tag}.png'), V(pos), look, lens, **kw)
 
     paths = [shot('34', V((-3.6, -4.6, 1.7)) * k, (0, 0, 0.6)), shot('side', V((-7.0, 0, 0.9)) * k, (0, 0, 0.7)),
              shot('rear', V((3.2, 4.8, 1.8)) * k, (0, 0, 0.6)), shot('front', V((0.0, -6.5, 0.9)) * k, (0, 0, 0.7))]
@@ -358,7 +363,7 @@ def render2(name, out_dir, L, shell, extra=None):
     paths.append(shot('open', V((4.2, -4.2, 2.3)) * k, (0, 0, 0.6), lens=40))
     swing(shell.doors, shell.specs, 0)
     if extra:
-        paths += extra(shot) or []
+        paths += extra(shot, shell) or []
     return paths
 
 

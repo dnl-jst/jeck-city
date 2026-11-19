@@ -9,6 +9,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 from carbody import V, build_lod_shell, build_shell, car_materials2, run2  # noqa: E402
+from carinterior import build_interior, seat_manikins  # noqa: E402
 from carparts import empty, exhaust, lamp_pair, mirror, poly_round, rrect, wheel, wipers  # noqa: E402
 
 NAME = 'kleinwagen'
@@ -37,6 +38,15 @@ DOORS = {
     'door_fl': dict(u=(-0.11, 0.90), side=1, hinge_x=0.86), 'door_fr': dict(u=(-0.11, 0.90), side=-1, hinge_x=-0.86),
     'door_rl': dict(u=(-1.33, -0.11), side=1, hinge_x=0.87), 'door_rr': dict(u=(-1.33, -0.11), side=-1, hinge_x=-0.87),
 }
+
+# interior (carinterior.py); the seats are CAR_SEATS' hip points
+LAYOUT = dict(
+    seats=[(0.37, 0.05, 0.50), (-0.37, 0.05, 0.50), (0.36, -0.78, 0.53), (-0.36, -0.78, 0.53)], front=2,
+    wheel=dict(x=0.37, u=0.47, z=0.88, rake=0.42, r=0.185),
+    floor=0.22, half_w=0.845, firewall=1.02, dash=dict(u0=0.58, top=0.95),
+    shelf=dict(u0=-1.16, u1=-1.76, z=0.965), mirror=(0.36, 1.33),
+    panels={'door_fl': (-0.07, 0.8), 'door_fr': (-0.07, 0.8), 'door_rl': (-0.98, -0.15), 'door_rr': (-0.98, -0.15)},
+)
 
 
 def build(coll, lod=False):
@@ -78,6 +88,8 @@ def build(coll, lod=False):
     wipers(p, M, skin, S)
     exhaust(p, M, skin, 0.4, B, r=0.036)
     p.cyl(V((0.0, 0.0, 1.47)), V((0.0, 0.35, 1.52)), 0.006, M['trim'], seg=5)  # antenna
+    if not lod:
+        build_interior(sh, LAYOUT)
     sh.finish()
 
     ua, x = S['wb'] / 2, S['track'] / 2
@@ -88,5 +100,17 @@ def build(coll, lod=False):
     return body, S, sh
 
 
+def review(shot, sh):
+    """Interior stills: 'cut' from above with the roof clipped away, 'seated' with a manikin on every seat."""
+    out = [shot('cut', (0, 0.1, 6.0), (0, 0.1, 0), ortho=4.6, clip=6.0 - 1.06)]
+    seat_manikins(sh, LAYOUT)
+    out.append(shot('seated-side', (5.2, 0.2, 1.05), (0, 0.2, 0.85), lens=60))
+    out.append(shot('seated-front', (-0.9, -4.6, 1.45), (0, 0, 0.95), lens=55))
+    sh.doors['door_fl'].rotation_euler.z = -1.13
+    out.append(shot('seated', (3.6, -3.2, 1.9), (0.2, 0, 0.8), lens=45))
+    sh.doors['door_fl'].rotation_euler.z = 0
+    return out
+
+
 if __name__ == '__main__':
-    run2(NAME, HERE, build)
+    run2(NAME, HERE, build, review)
