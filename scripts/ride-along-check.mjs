@@ -40,7 +40,7 @@ const until = async (p, fn, arg, what) => {
 const browser = await chromium.launch({ args: browserArgs });
 try {
   const a = await join(browser, 'Check A'), b = await join(browser, 'Check B');
-  await until(a, () => window.__nnState().players === 2, null, 'does not see 2 players');
+  await until(a, () => window.__nnState().players >= 2, null, 'does not see the other player'); // (somebody else may be on the server too)
   if (!(await a.page.evaluate(() => typeof window.__nnConn === 'function'))) throw new Error('needs a dev-mode server (teleport)');
   const { parked, bikes, spawn } = await a.page.evaluate(() => fetch('/world/manifest.json').then((r) => r.json()));
   const clearAhead = (c) => parked.every((o) => {
