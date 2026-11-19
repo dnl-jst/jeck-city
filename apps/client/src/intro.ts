@@ -108,6 +108,9 @@ export function showIntro(root: HTMLElement, size: DownloadSize | null): Promise
     <h1 class="nn-intro-title">Jeck City</h1>
     <p class="nn-intro-tagline">Ein Open-World-Spiel mitten in Köln – zusammen mit allen, die gerade da sind.</p>
     <ul class="nn-intro-list">${POINTS.map(([icon, html]) => `<li><span class="nn-intro-icon" aria-hidden="true">${icon}</span><span>${html}</span></li>`).join('')}</ul>
+    <p class="nn-intro-warn" role="note"><span class="nn-intro-warn-title">🚧 Work in Progress</span>
+      Jeck City ist noch mitten in der Entwicklung. Vieles in der Welt ist noch kaputt oder unfertig – Häuser, Straßen,
+      Fahrzeuge und mehr werden nach und nach stetig verbessert. Danke für deine Geduld!</p>
     <p class="nn-intro-warn" role="note"><span class="nn-intro-warn-title">⚠ Großer Download</span><span class="nn-intro-size"></span>
       Im Mobilfunknetz kann das dein Datenvolumen aufbrauchen – am besten im WLAN spielen.</p>
     <button class="nn-intro-go" type="button">Weiter</button>
