@@ -1,5 +1,5 @@
 import {
-  BOARD_WALK_SPEED, CAR_SEATS, fromCarPoint, headingOf, standPoint, VEHICLE_REST_Y, type CarPose, type CarType, type DoorName,
+  BOARD_WALK_SPEED, CAR_SEATS, CAR_SPECS, fromCarPoint, headingOf, standPoint, VEHICLE_REST_Y, type CarPose, type CarType, type DoorName,
 } from '@nn/shared';
 import { Vector3, type Object3D } from 'three';
 import { boardPose, footTargets, SEAT_RECLINE, type BoardStage } from './boarding';
@@ -47,7 +47,7 @@ export function poseOccupant(
   }
   // between the door and the seat: stepping in, sitting down, the trailing leg (boardPose); the hands leave the
   // body's sides for the wheel (or the thighs) as the back settles
-  const b = boardPose(st.slide, at, layout.floor, standPoint(layout, seat), fig.hipHeight, SEAT_RECLINE);
+  const b = boardPose(st.slide, at, layout.floor, standPoint(layout, seat), fig.hipHeight, SEAT_RECLINE, CAR_SPECS[type].height);
   const rest = grips ?? thighRest(hip);
   const hands = b.hands.map((h, i) => h.lerp(rest[i]!, b.settle)) as [Vector3, Vector3];
   fig.pose(b.hip, b.yaw, b.pitch, b.feet, hands, 0, 0.2 + 0.8 * b.settle * (grips ? 1 : 0));

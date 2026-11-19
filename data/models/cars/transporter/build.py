@@ -2,7 +2,7 @@
 
 Laid out like today's mid-size vans: a short sloping bonnet, the cab behind the front axle. The cab doors start just
 behind the wheel centre, the rear half of the front wheel arch is cut out of their lower front corner; the driver
-sits about 0.75 m behind the axle. A driver's seat and a double bench, a bulkhead behind them; the load space has no
+sits about 0.95 m behind the axle. A driver's seat and a double bench, a bulkhead behind them; the load space has no
 side windows. The sliding door (right) and the rear wing doors stay shut.
 
 Run headless:  blender -b --factory-startup --python data/models/cars/transporter/build.py
@@ -44,11 +44,11 @@ S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and 0.03 <= u <= 1.31 else N
 # cab doors from just behind the front wheel centre to the B-pillar; as CAR_SEATS
 DOORS = {'door_fl': dict(u=(0.03, 1.31), side=1, hinge_x=0.94, relief=True), 'door_fr': dict(u=(0.03, 1.31), side=-1, hinge_x=-0.94, relief=True)}
 LAYOUT = dict(
-    seats=[(0.47, 0.75, 1.0), (-0.5, 0.75, 1.0)], front=1,
-    wheel=dict(x=0.47, u=1.14, z=1.32, rake=0.55, r=0.2),
+    seats=[(0.47, 0.55, 1.0), (-0.5, 0.55, 1.0)], front=1,
+    wheel=dict(x=0.47, u=0.98, z=1.33, rake=0.55, r=0.2),
     floor=0.56, half_w=0.895, firewall=1.5, dash=dict(u0=1.24, top=1.27),
     shelf=None, mirror=None, tunnel=False, console=False,
-    bench=dict(w=0.86, cx=-0.4), bulkhead=dict(u=0.02, top=1.92),
+    bench=dict(w=0.86, cx=-0.4), bulkhead=dict(u=-0.14, top=1.92),
     panels={'door_fl': (0.1, 1.2), 'door_fr': (0.1, 1.2)}, panel_z=0.95, panel_h=0.5,
 )
 

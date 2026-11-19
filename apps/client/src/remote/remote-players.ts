@@ -4,7 +4,7 @@ import {
   type SnapshotRider, type SnapshotWalker, type StationId,
   plateText, boardingPath, CAR_SEATS, CAR_SPECS, headingOf, toCarPoint, type CarPoint, type DoorName,
 } from '@nn/shared';
-import { enterStage } from '../boarding';
+import { enterStage, leaveStage } from '../boarding';
 import { poseOccupant, shutDoors, type SeatedIn } from '../occupant';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
@@ -107,9 +107,13 @@ type Walker = Figure & {
   roof: { x: number; y: number; z: number } | null;
 };
 type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number; x: number; y: number; z: number };
-type Driven = { view: CarView; label: Label | null; seen: boolean };
+type Driven = { view: CarView; label: Label | null; seen: boolean; /** Where it was drawn last. */ pose: CarPose };
 /** Somebody else in a car: their figure on its seat, or still getting in (board). */
-type Occupant = Figure & { car: number; seat: number; seen: boolean; board: { path: CarPoint[]; t: number } | null };
+type Occupant = Figure & {
+  car: number; seat: number; seen: boolean; board: { path: CarPoint[]; t: number } | null;
+  /** Seconds since they got out (the figure is still shown getting out of the car), or null while in it. */
+  out: number | null;
+};
 /** Whether figures can be seated in a car view (a DrivenCar with its model; the tests' stand-ins cannot). */
 const seatable = (v: CarView): v is CarView & SeatedIn => !!v.root && typeof v.seat === 'function' && typeof v.grips === 'function' && typeof v.setDoor === 'function';
 
@@ -175,6 +179,8 @@ export class RemotePlayers {
         this.walkers.set(s.slot, w);
       }
       w.seen = true;
+      // still shown getting out of a car (below): the figure on foot waits out of sight until that is over
+      w.fig.visible = !this.occupants.has(s.slot);
       this.dress(w, variants.get(s.slot) ?? 0);
       // fell off a bike: tips over, lies, gets up (the figure times it itself); hit by a car: thrown with its push
       const rd = this.opts.ragdolls;
@@ -302,10 +308,11 @@ export class RemotePlayers {
         if (!d) {
           const made = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
           made.show(this.opts.typeOf(id), this.opts.colorOf(id), plateText(id));
-          d = { view: made, label: null, seen: true };
+          d = { view: made, label: null, seen: true, pose };
           this.driven.set(id, d);
         }
         d.seen = true;
+        d.pose = pose;
         d.view.setPose(pose);
         if (c) d.view.setWheels(streamedWheels(c), dt);
         // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
@@ -327,10 +334,11 @@ export class RemotePlayers {
           const from = this.lastFoot.get(o.slot);
           const near = from && Math.hypot(from.x - pose.x, from.z - pose.z) < 8;
           const path = near ? boardingPath(CAR_SPECS[type], CAR_SEATS[type], o.seat, toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, from.x, from.z)) : null;
-          occ = { ...this.takeFigure(), car: id, seat: o.seat, seen: true, board: path ? { path, t: 0 } : null };
+          occ = { ...this.takeFigure(), car: id, seat: o.seat, seen: true, board: path ? { path, t: 0 } : null, out: null };
           this.occupants.set(o.slot, occ);
         }
         occ.seen = true;
+        occ.out = null;
         this.dress(occ, variants.get(o.slot) ?? 0);
         if (occ.board) occ.board.t += dt;
         const st = occ.board ? enterStage(occ.board.path, occ.board.t) : null;
@@ -340,8 +348,20 @@ export class RemotePlayers {
     }
     for (const [slot, occ] of this.occupants) {
       if (occ.seen) continue;
-      // out of the car (their figure on foot comes with the walkers): the door they may have left open shuts
-      const view = local && local.id === occ.car ? this.opts.ownCarView?.() : this.driven.get(occ.car)?.view;
+      // got out: the figure is shown getting out of its door (its walker stays hidden meanwhile, see above); the car
+      // stays drawn as it is until then, also when nobody is left in it
+      const mine = local !== null && local.id === occ.car, d = this.driven.get(occ.car);
+      const view = mine ? this.opts.ownCarView?.() : d?.view, pose = mine ? local.pose : d?.pose;
+      occ.out = (occ.out ?? 0) + dt;
+      const st = leaveStage(occ.out);
+      if (!st.done && view && seatable(view) && pose) {
+        if (d && !mine) {
+          d.seen = true;
+          this.hiding.add(occ.car);
+        }
+        poseOccupant(occ.fig, this.scene, view, this.opts.typeOf(occ.car), occ.seat, pose, st, dt);
+        continue;
+      }
       if (view && seatable(view)) shutDoors(view, this.opts.typeOf(occ.car));
       this.freeFigure(occ);
       this.occupants.delete(slot);

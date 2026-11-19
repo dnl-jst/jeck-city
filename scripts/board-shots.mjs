@@ -46,14 +46,15 @@ try {
     const x = car.x + fwd.x * f + left.x * l, z = car.z + fwd.z * f + left.z * l;
     await page.evaluate(({ x, z, up, yaw, pitch }) => window.__nnFlyTo(x, (window.__nnSurfaceY(x, z) ?? 0) + up, z, yaw, pitch), { x, z, up, yaw: Math.atan2(car.x - x, car.z - z) * 180 / Math.PI, pitch });
   };
-  await view(2.6, 3.0, 1.5, -10);
+  await view(2.6, side * 3.0, 1.5, -10);
   for (const [name, wait] of [['1-walk', 500], ['2-walk', 900], ...Array.from({ length: 16 }, (_, i) => [`4-in-${String(i).padStart(2, '0')}`, 90]), ['6-seated', 1500]]) {
     await page.waitForTimeout(wait);
     await shot(name);
   }
   console.log(JSON.stringify(await page.evaluate(() => { const s = window.__nnState(); return { mode: s.mode, engine: s.engine }; })));
   const riding = (await page.evaluate(() => window.__nnState().mode)) === 'sit'; // got a passenger seat: nothing to drive
-  if (!riding) {
+  const parkedOnly = args.includes('--no-drive'); // get out again where the car stands (close-ups of getting out)
+  if (!riding && !parkedOnly) {
     await page.waitForFunction(() => window.__nnState().engine === 'running', null, { timeout: 20_000 });
     await view(3.2, 0.9, 1.25, -6); // through the windscreen
     await page.waitForTimeout(300);
@@ -69,20 +70,27 @@ try {
     await page.keyboard.down('KeyS');
     await page.waitForFunction(() => Math.abs(window.__nnState().speed) < 0.3, null, { timeout: 20_000 });
     await page.keyboard.up('KeyS');
-  } else {
+  } else if (riding) {
     await view(3.2, -0.9, 1.25, -6); // through the windscreen, from the passenger's side
     await page.waitForTimeout(300);
     await shot('6b-front');
     await page.keyboard.press('KeyF'); // back to the follow camera: keys act again
     await page.waitForTimeout(200);
   }
-  await page.keyboard.press('KeyE');
-  await page.waitForTimeout(60);
-  {
+  if (parkedOnly) {
+    await page.waitForFunction(() => window.__nnState().engine === 'running', null, { timeout: 20_000 });
+    await page.keyboard.press('KeyF'); // back to the follow camera: keys act again
+    await page.waitForTimeout(200);
+    await page.keyboard.press('KeyE');
+    await page.waitForTimeout(60);
+    await view(2.6, side * 3.0, 1.5, -10);
+  } else {
+    await page.keyboard.press('KeyE');
+    await page.waitForTimeout(60);
     const s = await page.evaluate(() => window.__nnState());
     await page.evaluate(({ x, z }) => window.__nnFlyTo(x + 3, (window.__nnSurfaceY(x + 3, z + 3) ?? 0) + 1.6, z + 3, 225, -10), s);
   }
-  for (const [name, wait] of [['8a-out', 400], ['8b-out', 250], ['8c-out', 250], ['9-out', 300], ['10-out', 700]]) {
+  for (const [name, wait] of [...Array.from({ length: 10 }, (_, i) => [`8-out-${String(i).padStart(2, '0')}`, 60]), ['10-out', 700]]) {
     await page.waitForTimeout(wait);
     await shot(name);
   }

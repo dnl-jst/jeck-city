@@ -47,8 +47,8 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
   transporter: {
     floor: 0.56,
     seats: [
-      { x: 0.47, u: 0.75, h: 1, door: 'door_fl' },
-      { x: -0.5, u: 0.75, h: 1, door: 'door_fr' },
+      { x: 0.47, u: 0.55, h: 1, door: 'door_fl' },
+      { x: -0.5, u: 0.55, h: 1, door: 'door_fr' },
     ],
     doors: {
       door_fl: { hingeX: 0.94, hingeU: 1.31, rearU: 0.03, openAngle: 1.13 },

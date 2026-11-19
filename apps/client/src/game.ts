@@ -147,7 +147,9 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
       ragdolls: this.ragdolls,
-      localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? this.pass?.car ?? -1, pose: this.drawnPose } : null),
+      // (also the car still being got out of: the game keeps drawing it, with its door, until the figure is out)
+      localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? this.pass?.car ?? -1, pose: this.drawnPose }
+        : this.boarding?.kind === 'out' ? { id: this.boarding.car, pose: this.leavingPose(this.boarding.car) } : null),
       ownCarView: () => this.driven,
       carPose: (i) => sim.cars.poses[i],
       onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
@@ -463,6 +465,12 @@ export class Game {
     }
   }
 
+  /** Where the car just left is now (somebody else may still sit in it, and drive on). */
+  private leavingPose(car: number): CarPose {
+    const { cars } = this.session.sim;
+    return cars.vehicle(car)?.pose() ?? cars.poses[car]!;
+  }
+
   /** Getting out is over (or cut short): the car goes back to the parked ones, the figure walks again. */
   private finishLeave(): void {
     const b = this.boarding;
@@ -558,7 +566,7 @@ export class Game {
       if (out) {
         // still getting out of the car just left: it stands where it is, its door open
         out.t += dt;
-        const st = leaveStage(out.t), at = this.session.sim.cars.poses[out.car]!;
+        const st = leaveStage(out.t), at = this.leavingPose(out.car);
         this.driven.setPose(at);
         poseOccupant(this.figure, this.ctx.scene, this.driven, this.session.sim.cars.types[out.car]!, out.seat, at, st, dt);
         if (st.done) this.finishLeave();
