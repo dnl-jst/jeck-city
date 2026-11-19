@@ -18,7 +18,7 @@ const twoTris = (y: number): Mesh => ({
   indices: new Uint32Array([0, 2, 1, 3, 5, 4]),
   uv: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
 });
-const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty() });
+const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty(), water: empty(), bridge: empty(), steel: empty() });
 const buildings = () => [boxBuilding('A', 10, 10, 30, 30, 10, 1), boxBuilding('B', 50, 50, 60, 70, 12), boxBuilding('C', -30, 10, -10, 30, 8, 2)];
 const boundary = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 300, z: 300 }, { x: 0, z: 300 }];
 
@@ -136,7 +136,7 @@ const terrain = (): TerrainGrid => {
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) heights[r * n + c] = 0.05 * c + 0.02 * r;
   return { x0: 0, z0: 0, cols: n, rows: n, datum: 40, heights };
 };
-const noStreets = (): StreetMeshes => ({ road: empty(), sidewalk: empty(), curb: empty(), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty() });
+const noStreets = (): StreetMeshes => ({ road: empty(), sidewalk: empty(), curb: empty(), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty(), water: empty(), bridge: empty(), steel: empty() });
 
 test('terrain creates ground-only chunks', () => {
   const chunks = buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain());

@@ -79,11 +79,11 @@ test('ignition: stop while starting, restart from the beginning', () => {
 
 // moved from the client's car.test.ts
 test('nearest free car within 3 m', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, occupied: true }, { id: 2, x: 2.5, z: 0, occupied: false }])).toBe(2);
+  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2, z: 0, full: true }, { id: 2, x: 2.5, z: 0, full: false }])).toBe(2);
 });
-test('no car in range', () => expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 5, z: 0, occupied: false }])).toBeNull());
+test('no car in range', () => expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 5, z: 0, full: false }])).toBeNull());
 test('picks the nearest of several free cars', () => {
-  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2.9, z: 0, occupied: false }, { id: 7, x: 0, z: -1.5, occupied: false }])).toBe(7);
+  expect(nearestEnterableCar({ x: 0, z: 0 }, [{ id: 1, x: 2.9, z: 0, full: false }, { id: 7, x: 0, z: -1.5, full: false }])).toBe(7);
 });
 
 // car facing south (+z): its left is east (+x), its right is west (−x), behind is north (−z)
@@ -114,4 +114,36 @@ test('getting out only below 2 m/s, forwards or reversing', () => {
   expect(canGetOut(-1.9)).toBe(true);
   expect(canGetOut(2.5)).toBe(false);
   expect(canGetOut(-3)).toBe(false);
+});
+
+test('ignition: started with a delay (the walk to the door), every event comes that many ticks later', () => {
+  const ig = new Ignition();
+  ig.start(90);
+  const seen: [IgnitionEvent, number][] = [];
+  for (let t = 1; t <= 300; t++) for (const e of ig.update()) seen.push([e, t]);
+  expect(seen).toEqual([
+    ['doorClose', 90 + Math.round(DOOR_CLOSE_AT * 60)], ['crank', 90 + Math.round(CRANK_AT * 60)],
+    ['running', 90 + Math.round((CRANK_AT + ENGINE_CATCH_S) * 60)],
+  ]);
+  const late = new Ignition();
+  late.start(90);
+  for (let t = 0; t < 90; t++) late.update();
+  expect(late.state).toBe('starting');
+  expect(late.lightLevel()).toBe(0); // still walking: no lamps yet
+});
+
+test('exit spot: beside the seat (ahead of the car\'s middle by the seat\'s position), not beside the middle', () => {
+  const car = { x: 0, z: 0, heading: 0 }; // forward = +z, left = +x
+  expect(exitSpot(car, () => true, 4, 0.7)).toEqual({ x: 1.5, z: 0.7 });
+  // left blocked: the right side, at the same position along the car
+  const right = exitSpot(car, (x) => x < 0, 4, 0.7)!;
+  expect(right.x).toBeCloseTo(-1.5);
+  expect(right.z).toBeCloseTo(0.7);
+});
+
+test('exit spot: a seat on the right gets out to the right first', () => {
+  const car = { x: 0, z: 0, heading: 0 };
+  expect(exitSpot(car, () => true, 4, 0.7, -1)).toEqual({ x: -1.5, z: 0.7 });
+  const other = exitSpot(car, (x) => x > 0, 4, 0.7, -1)!; // right blocked: the left
+  expect(other.x).toBeCloseTo(1.5);
 });

@@ -36,6 +36,8 @@ export class ParkedBikes {
   readonly poses: BikePose[];
   readonly types: BikeType[];
   readonly colors: number[];
+  /** Knocked over in the manifest (e-scooters lying on their side); see lying(). */
+  readonly down: boolean[];
   /** Who rides each bike (a player id), null while it is free. */
   readonly rider: (number | null)[];
   /** Manifest pose of every bike (where the idle reset puts it back). */
@@ -50,6 +52,7 @@ export class ParkedBikes {
     this.poses = this.home.map((p) => ({ ...p }));
     this.types = bikes.map((b) => BIKE_TYPES[b.type]!);
     this.colors = bikes.map((b) => b.color);
+    this.down = bikes.map((b) => b.down === true);
     this.rider = bikes.map(() => null);
   }
 
@@ -220,6 +223,11 @@ export class ParkedBikes {
     if (Math.hypot(p.x - h.x, p.y - h.y, p.z - h.z) > MOVED_DIST) return true;
     const d = p.heading - h.heading;
     return Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > MOVED_ANGLE;
+  }
+
+  /** Whether bike `id` is shown lying on its side: knocked over in the manifest, unridden and not moved since. */
+  lying(id: number): boolean {
+    return this.down[id]! && this.rider[id] === null && !this.isMoved(id);
   }
 
   /** Puts unridden bike `id` back on its manifest spot (a resting body there if it had one). No-op while ridden or followed. */

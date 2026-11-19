@@ -3,6 +3,7 @@ import {
   Vector3, type MeshStandardMaterial, type PointsMaterial, type Scene, type IUniform,
 } from 'three';
 import type { SunState } from '@nn/shared';
+import { CLEAR_LOOK, type WeatherLook } from './weather/look';
 import { LAMP_LIGHT_Y } from './props';
 import { MAX_LAMP_LIGHTS, QUALITY, type Quality } from './quality';
 /** Fog end (m) by day at full view distance (quality 'high'); night pulls it in. */
@@ -40,6 +41,79 @@ export function moodAt(altDeg: number): Mood {
   };
 }
 
+/** Overcast greys a sky colour towards its own luminance, darkened by this factor. */
+const OVERCAST_GREY = 0.75;
+/** Share of the sun's intensity the clouds take away at full cover. */
+const OVERCAST_SUN_LOSS = 0.8;
+/** Share the hemisphere light gains at full cover (diffuse light: soft shadows). */
+const OVERCAST_HEMI_GAIN = 0.3;
+/** Weather fog never closes in nearer than this (m). */
+const MIN_FOG_FAR = 60;
+/** Weather fog starts at this share of its far distance at the latest. */
+const FOG_NEAR_SHARE = 0.3;
+/**
+ * Fog far per metre of reported visibility. Linear fog with this far reads like the reported visibility: real fog
+ * (a few hundred m) and mist (~1 km) close in visibly even at the short view distance of quality 'low'.
+ */
+const FOG_VIS_SCALE = 0.35;
+/** Below this visibility (m: haze) the fog starts nearer and far shrinks to up to half; at and above it nothing changes. */
+const HAZE_VIS = 5000;
+
+function greyTowards(c: Color, k: number): void {
+  const g = (0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b) * OVERCAST_GREY;
+  c.r += (g - c.r) * k;
+  c.g += (g - c.g) * k;
+  c.b += (g - c.b) * k;
+}
+
+/** Applies cloud cover to a mood in place (no allocations). */
+function overcastInPlace(m: Mood, overcast: number, night: number): void {
+  if (overcast <= 0) return;
+  const k = overcast * (1 - night);
+  greyTowards(m.zenith, k);
+  greyTowards(m.horizon, k);
+  m.sunI *= 1 - OVERCAST_SUN_LOSS * overcast;
+  m.hemiI *= 1 + OVERCAST_HEMI_GAIN * k;
+}
+
+/** The mood under cloud cover 0..1: grey sky (fading out towards night), weak sun, more ambient light. */
+export function weatherMood(mood: Mood, overcast: number, night: number): Mood {
+  const m: Mood = {
+    ...mood, zenith: mood.zenith.clone(), horizon: mood.horizon.clone(), sun: mood.sun.clone(),
+    hemiSky: mood.hemiSky.clone(), hemiGround: mood.hemiGround.clone(),
+  };
+  overcastInPlace(m, overcast, night);
+  return m;
+}
+
+/** Cloud cover at which the clouds hide the sun glow, moon and stars completely. */
+const CLOUD_HIDES = 0.9;
+
+/** How much of the sun glow, moon and stars shows through the clouds (1 clear .. 0 at CLOUD_HIDES), regardless of night. */
+export function skyClearness(overcast: number): number {
+  return Math.min(1, Math.max(0, 1 - overcast / CLOUD_HIDES));
+}
+
+export type FogRange = { near: number; far: number };
+
+/**
+ * Fog distances (m) for a visibility (m), written into `out` (no allocation per frame). From HAZE_VIS on the fog stays
+ * as it is; below, near moves towards the camera and far shrinks (haze), and far follows the visibility perceptually
+ * (FOG_VIS_SCALE) down to MIN_FOG_FAR (fog). Far never grows past `far`, near always stays before far.
+ */
+export function weatherFog(near: number, far: number, visibility: number, out: FogRange = { near: 0, far: 0 }): FogRange {
+  if (!(visibility < HAZE_VIS)) {
+    out.near = near;
+    out.far = far;
+    return out;
+  }
+  const t = Math.max(0, visibility / HAZE_VIS); // 0 dense fog .. 1 light haze
+  const f = Math.min(far, Math.max(MIN_FOG_FAR, Math.min(far * (0.5 + 0.5 * t), visibility * FOG_VIS_SCALE)));
+  out.far = f;
+  out.near = Math.min(near * t, f * FOG_NEAR_SHARE);
+  return out;
+}
+
 /** Indices of the `n` lamps nearest to (x, z), nearest first, leaving out those in `skip`. */
 export function nearestLamps(lamps: readonly (readonly [number, number])[], x: number, z: number, n: number, skip?: ReadonlySet<number>): number[] {
   return lamps
@@ -72,6 +146,7 @@ uniform vec3 sunDir;
 uniform vec3 sunCol;
 uniform vec3 moonDir;
 uniform float night;
+uniform float clearSky; // 1 clear .. 0 overcast: hides sun glow, moon and stars
 varying vec3 vDir;
 float h3(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
 void main() {
@@ -80,14 +155,14 @@ void main() {
   vec3 col = mix(horizon, zenith, pow(up, 0.55));
   col = mix(col, horizon * 0.5, smoothstep(0.0, -0.15, d.y)); // below the horizon (hidden by houses)
   float s = max(dot(d, sunDir), 0.0);
-  col += sunCol * (pow(s, 8.0) * 0.35 + pow(s, 64.0) * 0.6) * smoothstep(-0.12, 0.05, sunDir.y);
-  col += sunCol * 12.0 * smoothstep(0.9997, 0.99985, s) * step(-0.02, sunDir.y); // disc
+  col += clearSky * sunCol * (pow(s, 8.0) * 0.35 + pow(s, 64.0) * 0.6) * smoothstep(-0.12, 0.05, sunDir.y);
+  col += clearSky * sunCol * 12.0 * smoothstep(0.9997, 0.99985, s) * step(-0.02, sunDir.y); // disc
   // night: moon disc with a faint halo, stars
   float m = max(dot(d, moonDir), 0.0);
-  col += night * (vec3(0.9, 0.93, 1.0) * 3.0 * smoothstep(0.99955, 0.9997, m) + vec3(0.12, 0.16, 0.28) * pow(m, 40.0));
+  col += clearSky * night * (vec3(0.9, 0.93, 1.0) * 3.0 * smoothstep(0.99955, 0.9997, m) + vec3(0.12, 0.16, 0.28) * pow(m, 40.0));
   vec3 cell = floor(d * 280.0);
   float star = step(0.9975, h3(cell)) * smoothstep(0.35, 0.0, length(fract(d * 280.0) - 0.5));
-  col += night * night * star * smoothstep(0.02, 0.25, d.y) * (0.5 + h3(cell + 7.0)) * 0.9;
+  col += clearSky * night * night * star * smoothstep(0.02, 0.25, d.y) * (0.5 + h3(cell + 7.0)) * 0.9;
   gl_FragColor = vec4(col, 1.0);
   #include <tonemapping_fragment>
   #include <colorspace_fragment>
@@ -110,6 +185,8 @@ export class Lighting {
   private lampCount: number = MAX_LAMP_LIGHTS;
   /** Sun shadows are cast within this radius (m) around the camera. */
   private shadowRadius = 0;
+  /** Whether the quality level has sun shadows at all. */
+  private sunShadows = true;
   /** Fog distances relative to the full view distance (FULL_VIEW): a lower quality level pulls the fog in. */
   private viewScale = 1;
 
@@ -142,6 +219,7 @@ export class Lighting {
         uniforms: {
           zenith: { value: new Color() }, horizon: { value: new Color() }, sunDir: { value: new Vector3() },
           sunCol: { value: new Color() }, moonDir: { value: this.moon.position.clone() }, night: { value: 0 },
+          clearSky: { value: 1 },
         },
       }),
     );
@@ -167,11 +245,12 @@ export class Lighting {
     this.pool.forEach((l, i) => { l.visible = i < this.lampCount; });
     this.poolAt = null; // reassign the pool on the next update
     const s = this.sun.shadow;
-    s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
+    this.sunShadows = q.sunShadow > 0;
+    if (this.sunShadows) s.mapSize.set(q.sunShadow, q.sunShadow); // the shadow map follows on the next render
     this.shadowRadius = q.shadowRadius;
     this.viewScale = q.viewDistance / FULL_VIEW;
-    s.camera.left = s.camera.bottom = -q.shadowRadius;
-    s.camera.right = s.camera.top = q.shadowRadius;
+    s.camera.left = s.camera.bottom = -Math.max(q.shadowRadius, 1);
+    s.camera.right = s.camera.top = Math.max(q.shadowRadius, 1);
     s.camera.updateProjectionMatrix();
   }
 
@@ -191,9 +270,10 @@ export class Lighting {
     return this.fog.far;
   }
 
-  update(sun: SunState, cameraPos: Vector3): void {
+  update(sun: SunState, cameraPos: Vector3, look: WeatherLook = CLEAR_LOOK): void {
     const night = sun.nightFactor;
     const mood = moodAt((sun.altitude * 180) / Math.PI);
+    overcastInPlace(mood, look.overcast, night); // mood is our own fresh copy
     const dir = bodyDirection(sun.altitude, sun.azimuth, this.sunDir);
 
     // sky dome follows the camera; fog fades into the horizon colour
@@ -204,9 +284,12 @@ export class Lighting {
     u.sunDir!.value.copy(dir);
     u.sunCol!.value.copy(mood.sun);
     u.night!.value = night;
+    const clear = skyClearness(look.overcast);
+    u.clearSky!.value = clear;
     this.fog.color.copy(mood.horizon);
-    this.fog.near = (150 - 90 * night) * this.viewScale;
-    this.fog.far = (FULL_VIEW - 200 * night) * this.viewScale;
+    const near = (150 - 90 * night) * this.viewScale;
+    const far = (FULL_VIEW - 200 * night) * this.viewScale;
+    weatherFog(near, far, look.visibility, this.fog);
     this.facadeSky.value.copy(mood.horizon).lerp(mood.zenith, 0.4);
     this.facadeNight.value = night;
 
@@ -218,13 +301,13 @@ export class Lighting {
     const lit = sun.altitude > 0;
     this.sun.color.copy(mood.sun);
     this.sun.intensity = mood.sunI;
-    this.sun.castShadow = lit;
-    const texel = (2 * this.shadowRadius) / this.sun.shadow.mapSize.x;
+    this.sun.castShadow = lit && this.sunShadows;
+    const texel = (2 * Math.max(this.shadowRadius, 1)) / this.sun.shadow.mapSize.x;
     const t = this.sun.target.position.set(Math.round(cameraPos.x / texel) * texel, cameraPos.y, Math.round(cameraPos.z / texel) * texel);
     this.sun.position.copy(t).addScaledVector(dir, 400);
     this.sun.target.updateMatrixWorld();
 
-    this.moon.intensity = 0.35 * night;
+    this.moon.intensity = 0.35 * night * clear;
 
     // lamps: emissive lanterns, halos and real lights at the nearest ones
     this.lampGlass.emissiveIntensity = 6 * night;

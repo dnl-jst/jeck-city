@@ -1,5 +1,6 @@
 import type { MapData } from '@nn/shared';
-import { drawArrow, drawMap } from './draw';
+import { drawArrow, drawMap, drawPlayerDot, playerColor } from './draw';
+import type { MapPlayer } from './others';
 import type { MapGrid } from './grid';
 import { rotForYaw, worldToScreen, type MapView } from './view';
 
@@ -28,11 +29,21 @@ export class Minimap {
     this.street = div('nn-minimap-street', this.box);
   }
 
-  update(x: number, z: number, yaw: number, street: string): void {
+  update(x: number, z: number, yaw: number, street: string, others: readonly MapPlayer[] = []): void {
     const v: MapView = { cx: x, cz: z, scale: SIZE / DIAMETER_M, rot: rotForYaw(yaw), w: SIZE, h: SIZE };
     const ctx = this.ctx;
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     drawMap(ctx, this.data, this.grid, v, { minimap: true });
+    // Other players; those out of range sit on the rim, in their direction, a bit smaller.
+    const rim = SIZE / 2 - 6;
+    for (const o of others) {
+      const q = worldToScreen(v, o.x, o.z);
+      const ox = q.sx - SIZE / 2;
+      const oy = q.sy - SIZE / 2;
+      const d = Math.hypot(ox, oy);
+      if (d <= rim) drawPlayerDot(ctx, q.sx, q.sy, 4.5, playerColor(o.slot));
+      else drawPlayerDot(ctx, SIZE / 2 + (ox / d) * rim, SIZE / 2 + (oy / d) * rim, 3.5, playerColor(o.slot));
+    }
     drawArrow(ctx, SIZE / 2, SIZE / 2, 0, 9);
 
     // North marker: far point towards -z, projected onto the circle edge.

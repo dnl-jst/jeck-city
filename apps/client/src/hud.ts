@@ -4,22 +4,31 @@ import { FetchError, NoWebGLError } from './errors';
 /** User-facing (German) text for a boot failure. */
 export function bootErrorMessage(e: unknown): string {
   if (e instanceof NoWebGLError) return 'Dein Browser kann leider kein 3D (WebGL). Probier es mit einem aktuellen Chrome, Firefox oder Safari.';
-  if (e instanceof FetchError) return 'Nippes konnte nicht geladen werden. Bitte lade die Seite neu.';
+  if (e instanceof FetchError) return 'Jeck City konnte nicht geladen werden. Bitte lade die Seite neu.';
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
 export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · H hupen · R Radio · N Ton · M Karte · G Grafik · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
+/** Bottom hint while driving a car. */
+export const DRIVE_HINT = 'W Gas · S bremsen/rückwärts · A/D lenken · Leertaste Handbremse · H hupen · R Radio (halten: Senderwahl) · Mausrad Sender · E aussteigen';
+/** Bottom hint while riding along in a car. */
+export const PASSENGER_HINT = 'E aussteigen';
 /** Bottom hint while riding a bike. */
 export const RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
 /** Bottom hint on the sound Long John (radio through its box). */
+/** On the e-scooter: a throttle, no pedals, no sprint. */
+export const SCOOTER_RIDE_HINT = 'W Gas · S bremsen · Leertaste hüpfen · H klingeln · E absteigen';
 export const SOUND_RIDE_HINT = 'W treten · Shift antreten · S bremsen · Leertaste hüpfen · H klingeln · R Radio · L Disco · E absteigen';
 
 export const HUD_CSS = `
-  .nn-loading { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);
+  .nn-loading { position: fixed; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(320px, 70vw);
+    padding: 16px 20px; border-radius: 12px; background: rgba(8,6,22,0.72); backdrop-filter: blur(6px); box-shadow: 0 8px 40px rgba(0,0,0,0.5);
     color: #e8ecf8; font: 15px/1.4 system-ui, sans-serif; letter-spacing: 0.05em; text-align: center; transition: opacity 0.6s; }
   .nn-loading.nn-hidden { opacity: 0; pointer-events: none; }
+  /* the name dialog shows the download itself; the box behind it would only show through */
+  body:has(.nn-lobby:not(.nn-hidden)) .nn-loading { visibility: hidden; }
   .nn-loading-track { margin-top: 10px; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); overflow: hidden; }
   .nn-loading-fill { height: 100%; width: 0; background: #f2c46b; transition: width 0.15s; }
   .nn-loading-status { margin-top: 8px; font-size: 12px; opacity: 0.8; }
@@ -107,7 +116,7 @@ export class Hud {
 
   constructor(root: HTMLElement) {
     this.loading = el('div', 'nn-loading', root);
-    el('div', 'nn-loading-label', this.loading).textContent = 'Nippes lädt …';
+    el('div', 'nn-loading-label', this.loading).textContent = 'Jeck City lädt …';
     this.bar = el('div', 'nn-loading-fill', el('div', 'nn-loading-track', this.loading));
     this.status = el('div', 'nn-loading-status', this.loading);
     this.dl = el('div', 'nn-dl', this.loading);

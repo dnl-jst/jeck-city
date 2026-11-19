@@ -1,13 +1,13 @@
-# Nippes Nights
+# Jeck City
 
-Open-world-Spiel in Köln-Nippes: Alle Besucher sind gleichzeitig auf der Neusser Straße, zu Fuß, mit dem Rad oder im Auto.
+Open-World-Spiel in Köln (Repository-Name noch `nippes-nights`; Nippes, Neustadt-Nord, Altstadt-Nord, Altstadt-Süd, Neustadt-Süd): Alle Besucher sind gleichzeitig in derselben Stadt, zu Fuß, mit dem Rad oder im Auto. Los geht es auf der Domplatte. Vor dem Laden erklärt ein Intro-Screen das Spiel und warnt vor der Download-Größe (beim Build aus der erzeugten Welt gemessen).
 TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ## Entwickeln
 
 ```
 npm ci
-npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~350 MB, nicht im Repository)
+npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~1,3 GB, nicht im Repository)
 npm run dev          # Spielserver + Vite
 npm test
 npm run typecheck
@@ -45,6 +45,7 @@ Umgebungsvariablen:
 | `MAX_PLAYERS` | 60 | gleichzeitige Spieler; bis 100 möglich, 100 nur auf einem schnelleren Einzelkern |
 | `PUBLIC_URL` | – | nur nötig, wenn die Spiel-Verbindung über eine andere Adresse laufen soll als die Seite (z. B. `spiel.example.org`); ohne Angabe nutzt der Client die Adresse der Seite |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `NN_WEATHER` | `live` | `live`: alle 15 min von Open-Meteo; `off`: kein Abruf, klares Wetter; im Entwicklungsmodus auch ein festes Wetter: `clear`, `cloudy`, `mist`, `fog`, `drizzle`, `rain`, `heavyrain`, `snow` |
 
 Ohne Docker: ein bloßes `npm start` ohne `NODE_ENV=production` startet den Server im Entwicklungsmodus (Teleport, Fliegen, Schreib-Hooks für Tests). In Produktion immer `NODE_ENV=production` setzen; das Docker-Image tut das.
 

@@ -4,11 +4,11 @@
 // NN_FAKE_LAG=75,10,1 (about 150 ms round trip, 1 % stalls). Start a fresh server for each run: the check drives a
 // parked car and a bike away, and a second run on the same server would look for them at their manifest places.
 // Two headless Chromium contexts (host GPU; NN_SOFTWARE_GL=1: SwiftShader) join as "Check A" and "Check B" (name
-// dialog: fill, Enter) and both must see 2 players. A enters the car at the spawn and drives >= 30 m; B must see A
+// dialog: fill, Enter) and both must see 2 players. A is teleported beside a parked car near the spawn and drives it >= 30 m; B must see A
 // move that far (__nnRemote). A then gets out, is teleported next to the nearest bike (dev hook) and rides it >= 10 m;
-// B must see A in mode 'ride'. Against a production server (no dev hooks: no teleport) nobody is teleported: A enters the
-// parked car that stands at the spawn and drives it, and B walks the few metres to the bike by the spawn and rides it
-// (A must see B in mode 'ride'). All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
+// B must see A in mode 'ride'. Against a production server (no dev hooks: no teleport) nobody is teleported: no car
+// stands at the spawn (the Domplatte), so the drive phase is skipped, and B walks the few metres to the Long John by
+// the spawn and rides it (A must see B in mode 'ride'). All waits are budgets in physics steps (60 per simulated second), see drive-check.mjs.
 // With --lag A also walks 20 s and drives 20 s while every frame's own-pose correction (__nnState().correction) and
 // B's view of A (largest jump between two frames) are recorded: p95 correction per physics step (frame correction / steps that frame) must stay <= 0.2 m, and the remote
 // figure must not teleport (spec 13.4): its move in a frame may exceed what its speed over the two frames before
@@ -62,6 +62,10 @@ async function join(browser, name) {
   url.searchParams.set('time', '14:00');
   url.searchParams.set('date', '2026-06-15');
   await page.goto(url.href);
+  // the intro: its full-screen start layer first (it starts the music), then the button into the lobby
+  const start = page.locator('.nn-intro-start');
+  if (await start.count()) await start.click();
+  await page.locator('.nn-intro-go').click();
   await page.locator('.nn-lobby-input').fill(name);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 180_000 });
@@ -191,71 +195,71 @@ try {
   });
   // no dev hooks (production server): the spawn is where everything happens, see the header
   const canTeleport = await a.page.evaluate(() => typeof window.__nnConn === 'function');
-  if (!canTeleport) console.log('production server (no teleport): using the car and the bike at the spawn');
-  const nearSpawn = (o) => ({ ...o, d: Math.hypot(o.x - spawn.x, o.z - spawn.z) });
-  const car = !canTeleport ? parked.map(nearSpawn).sort((p, q) => p.d - q.d)[0] : parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
-    .map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((p, q) => p.d - q.d)[0];
-  const sx = car.x + Math.cos(car.heading) * 1.5, sz = car.z - Math.sin(car.heading) * 1.5;
+  if (!canTeleport) console.log('production server (no teleport, no car at the spawn): drive phase skipped, B rides the Long John at the spawn');
+  let s0 = null;
   if (canTeleport) {
+    const car = parked.filter((c) => bikes.every((k) => Math.hypot(k.x - c.x, k.z - c.z) > 8) && clearAhead(c))
+      .map((c) => ({ ...c, d: Math.hypot(c.x - spawn.x, c.z - spawn.z) })).sort((p, q) => p.d - q.d)[0];
+    const sx = car.x + Math.cos(car.heading) * 1.5, sz = car.z - Math.sin(car.heading) * 1.5;
     await teleport(a.page, sx, sz);
     await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) < 1, [sx, sz], STEPS.tele, 'teleport next to the car did not arrive');
-  }
-  const s0 = await useE(a, (s) => s.mode === 'drive', 'E did not enter the car');
-  await a.until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
-  const startA = await remoteA(b.page);
-  if (!startA) throw new Error('B does not see A');
-  console.log(`A entered the car at (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)}); B sees A as ${startA.mode}`);
-  let maxD = 0;
-  await record(a.page, true); await record(b.page, true);
-  await a.page.keyboard.down('KeyW');
-  if (lag) {
-    // 20 s shuttling along the street the car stands in (no steering: it keeps to its lane): W until 28 m from where it
-    // started, then S back to within 6 m of it, and so on; half-second chunks
-    let dir = 'KeyW';
-    const t0 = (await a.state()).steps;
-    for (;;) {
-      const before = await a.state();
-      if (before.steps - t0 >= LAG_STEPS) break;
-      const d = Math.hypot(before.x - s0.x, before.z - s0.z);
-      maxD = Math.max(maxD, d);
-      if (dir === 'KeyW' && d > 28) dir = 'KeyS';
-      else if (dir === 'KeyS' && d < 6) dir = 'KeyW';
-      for (const k of ['KeyW', 'KeyS']) await a.page.keyboard[k === dir ? 'down' : 'up'](k);
-      await a.until((s, n) => s.steps > n, before.steps + 30, 200, 'drive phase did not finish');
+    s0 = await useE(a, (s) => s.mode === 'drive', 'E did not enter the car');
+    await a.until((s) => s.engine === 'running', null, STEPS.engine, 'engine did not start');
+    const startA = await remoteA(b.page);
+    if (!startA) throw new Error('B does not see A');
+    console.log(`A entered the car at (${s0.x.toFixed(1)}, ${s0.z.toFixed(1)}); B sees A as ${startA.mode}`);
+    let maxD = 0;
+    await record(a.page, true); await record(b.page, true);
+    await a.page.keyboard.down('KeyW');
+    if (lag) {
+      // 20 s shuttling along the street the car stands in (no steering: it keeps to its lane): W until 28 m from where it
+      // started, then S back to within 6 m of it, and so on; half-second chunks
+      let dir = 'KeyW';
+      const t0 = (await a.state()).steps;
+      for (;;) {
+        const before = await a.state();
+        if (before.steps - t0 >= LAG_STEPS) break;
+        const d = Math.hypot(before.x - s0.x, before.z - s0.z);
+        maxD = Math.max(maxD, d);
+        if (dir === 'KeyW' && d > 28) dir = 'KeyS';
+        else if (dir === 'KeyS' && d < 6) dir = 'KeyW';
+        for (const k of ['KeyW', 'KeyS']) await a.page.keyboard[k === dir ? 'down' : 'up'](k);
+        await a.until((s, n) => s.steps > n, before.steps + 30, 200, 'drive phase did not finish');
+      }
+      for (const k of ['KeyW', 'KeyS']) await a.page.keyboard.up(k);
+    } else {
+      await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 32, [s0.x, s0.z], STEPS.drive, 'car did not get 32 m far');
     }
-    for (const k of ['KeyW', 'KeyS']) await a.page.keyboard.up(k);
-  } else {
-    await a.until((s, [x, z]) => Math.hypot(s.x - x, s.z - z) >= 32, [s0.x, s0.z], STEPS.drive, 'car did not get 32 m far');
-  }
-  await a.page.keyboard.up('KeyW');
-  {
-    await record(a.page, false); await record(b.page, false);
-    const dA = await takeRecord(a.page), dB = await takeRecord(b.page);
-    results.drive = phaseStats(dA, dB);
-    showStats(lag ? 'drive 20 s' : 'drive', results.drive);
-  }
-  const sA = await a.state();
-  const movedA = lag ? maxD : Math.hypot(sA.x - s0.x, sA.z - s0.z); // --lag shuttles: the farthest point counts
-  console.log(`A drove ${movedA.toFixed(1)} m`);
-  if (movedA < 30) throw new Error(`A drove only ${movedA.toFixed(1)} m (< 30)`);
-  // B sees it (the remote catches up within a moment)
-  if (!lag) {
-    await b.until((s, [x, z]) => {
-      const r = window.__nnRemote().find((p) => p.name === 'Check A');
-      return !!r && Math.hypot(r.x - x, r.z - z) >= 30;
-    }, [startA.x, startA.z], STEPS.see, 'B did not see A move 30 m');
-    const seen = await remoteA(b.page);
-    console.log(`B sees A ${Math.hypot(seen.x - startA.x, seen.z - startA.z).toFixed(1)} m from its start, mode ${seen.mode}`);
-  }
+    await a.page.keyboard.up('KeyW');
+    {
+      await record(a.page, false); await record(b.page, false);
+      const dA = await takeRecord(a.page), dB = await takeRecord(b.page);
+      results.drive = phaseStats(dA, dB);
+      showStats(lag ? 'drive 20 s' : 'drive', results.drive);
+    }
+    const sA = await a.state();
+    const movedA = lag ? maxD : Math.hypot(sA.x - s0.x, sA.z - s0.z); // --lag shuttles: the farthest point counts
+    console.log(`A drove ${movedA.toFixed(1)} m`);
+    if (movedA < 30) throw new Error(`A drove only ${movedA.toFixed(1)} m (< 30)`);
+    // B sees it (the remote catches up within a moment)
+    if (!lag) {
+      await b.until((s, [x, z]) => {
+        const r = window.__nnRemote().find((p) => p.name === 'Check A');
+        return !!r && Math.hypot(r.x - x, r.z - z) >= 30;
+      }, [startA.x, startA.z], STEPS.see, 'B did not see A move 30 m');
+      const seen = await remoteA(b.page);
+      console.log(`B sees A ${Math.hypot(seen.x - startA.x, seen.z - startA.z).toFixed(1)} m from its start, mode ${seen.mode}`);
+    }
 
-  // stop, get out
-  await a.page.keyboard.down('Space');
-  await a.until((s) => s.speed < 0.5, null, STEPS.stop, 'car did not stop');
-  await a.page.keyboard.up('Space');
-  const out = await useE(a, (s) => s.mode === 'walk', 'E did not get out of the car');
-  // the server must have applied the E press before the teleport: a fresh figure next to the bike that gets the
-  // still-queued E input would get on the bike right away (and the press below would get off again)
-  await b.until(() => window.__nnRemote().find((p) => p.name === 'Check A')?.mode === 'walk', null, STEPS.see, 'B did not see A get out');
+    // stop, get out
+    await a.page.keyboard.down('Space');
+    await a.until((s) => s.speed < 0.5, null, STEPS.stop, 'car did not stop');
+    await a.page.keyboard.up('Space');
+    const out = await useE(a, (s) => s.mode === 'walk', 'E did not get out of the car');
+    // the server must have applied the E press before the teleport: a fresh figure next to the bike that gets the
+    // still-queued E input would get on the bike right away (and the press below would get off again)
+    await b.until(() => window.__nnRemote().find((p) => p.name === 'Check A')?.mode === 'walk', null, STEPS.see, 'B did not see A get out');
+  }
 
   // ride (A with teleports, else B who is still by the spawn): the nearest bike with no other bike within 4 m (so E there
   // can only mean this one) and, with teleports, away from the car's start (the car just drove off and may have pushed a

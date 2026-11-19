@@ -1,24 +1,29 @@
-import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
+import { Quaternion, Vector3, type Object3D, type PerspectiveCamera, type Scene } from 'three';
+import { WATER_TIME } from './materials/street';
 import {
-  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, staticWorldFilter, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
-  type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
+  BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
+  type PlayerSnapshot, type SimEvent, type SnapshotCar, type StationId, type WorldManifest,
+  plateText, boardingPath, CAR_SEATS, CAR_SPECS, DRIVER_SEAT, fromCarPoint, standPoint, toCarPoint, VEHICLE_REST_Y, type CarPoint,
 } from '@nn/shared';
+import { enterStage, leaveStage } from './boarding';
+import { poseOccupant, shutDoors } from './occupant';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, PASSENGER_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
-import { DrivenCar, lampPower, ParkedCars, type CarModels } from './car';
+import { DrivenCar, lampPower, ParkedCars, setMirrorNight, type CarModels } from './car';
 import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
-import { RemotePlayers } from './remote/remote-players';
+import { RemotePlayers, streamedWheels } from './remote/remote-players';
 import { RemoteCarFeed } from './audio/remote-audio';
+import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -42,10 +47,11 @@ const STATIC_ONLY = staticWorldFilter();
 
 /**
  * The playable game: renders the session's WorldSim (walking figure, cars, bikes, follow camera) and turns keyboard
- * and mouse into the local player's input. Sound, radio wheel, map, camera and glare live here; the simulation does not.
+ * and mouse into the local player's input. Sound, radio wheel, map and camera live here; the simulation does not.
  */
 export class Game {
-  mode: 'walk' | 'drive' | 'ride' = 'walk';
+  /** 'sit': riding along in a car as a passenger. */
+  mode: 'walk' | 'drive' | 'ride' | 'sit' = 'walk';
   flying = false;
   readonly figure: PlayerFigure;
   readonly cars: ParkedCars;
@@ -71,6 +77,13 @@ export class Game {
   mapInput = { dx: 0, dy: 0, notches: 0 };
   /** Steering input of this frame after the map gate. */
   private ctl: DriveControls = { forward: 0, right: 0, brake: false, run: false };
+  /**
+   * Getting into the driven car (walking to the door, the door, sitting down) or out of the car just left; null
+   * otherwise. While it runs the player's controls rest.
+   */
+  private boarding: { kind: 'in'; car: number; seat: number; path: CarPoint[]; t: number } | { kind: 'out'; car: number; seat: number; t: number } | null = null;
+  /** The car and seat ridden along in as a passenger (mode 'sit'), else null. */
+  private pass: { car: number; seat: number } | null = null;
   /** The car the player drives (null on foot). */
   private carId: number | null = null;
   /** Vehicle the last sampled step had the player in ('w' on foot; undefined before the first sample). */
@@ -85,8 +98,16 @@ export class Game {
   /** On foot after the last step: velocity and ground contact (figure animation, footsteps). */
   private vel: Vec3 = { x: 0, y: 0, z: 0 };
   private grounded = true;
+  /** The way the body faces after the last step (the sim's; others see the same). */
+  private facing = 0;
   /** Knocked down after the last step (the figure lies, input is ignored). */
   private down = false;
+  /** Knocked down at the last rendered frame (the ragdoll starts on the change). */
+  private wasDown = false;
+  /** The own car's or bike's pose as drawn this frame (while driving or riding; others on it are drawn on it). */
+  private drawnPose: CarPose | null = null;
+  /** Tumbling figures (own and other players') fall in a physics world of their own. */
+  readonly ragdolls: RagdollWorld;
   /** Seconds in the air on foot (for landing sounds). */
   private airTime = 0;
   /** Radio station last given to the sim for the own car (undefined: none yet in this car). */
@@ -107,6 +128,7 @@ export class Game {
     const { sim } = session;
     this.tramStops = m.tramStops;
     this.figure = new PlayerFigure(scene);
+    this.ragdolls = new RagdollWorld(sim.pw);
     this.character = storedCharacter();
     this.figure.setModel(ctx.character ?? null);
     this.driven = new DrivenCar(scene, ctx.carModels);
@@ -119,11 +141,18 @@ export class Game {
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
     this.remotes = session.remote ? new RemotePlayers(scene, this.cars, {
-      me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!, occluded: (a, b) => this.occluded(a, b),
+      me: session.me, colorOf: (i) => sim.cars.colors[i]!, typeOf: (i) => sim.cars.types[i]!,
       carModels: ctx.carModels, figureModel: ctx.character ?? null, figureFor: (v) => this.figureFor(v),
       bikeModels: ctx.bikeModels?.bikes, bikeTypeOf: (i) => sim.bikes.types[i]!, bikeColorOf: (i) => sim.bikes.colors[i]!,
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
+      ragdolls: this.ragdolls,
+      // (also the car still being got out of: the game keeps drawing it, with its door, until the figure is out)
+      localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? this.pass?.car ?? -1, pose: this.drawnPose }
+        : this.boarding?.kind === 'out' ? { id: this.boarding.car, pose: this.leavingPose(this.boarding.car) } : null),
+      ownCarView: () => this.driven,
+      carPose: (i) => sim.cars.poses[i],
+      onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
     }) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
@@ -151,7 +180,7 @@ export class Game {
   /** Where the player is: feet while walking, chassis centre while driving, the ground under the bike while riding. */
   focus(): Vec3 {
     if (this.mode === 'ride' && this.currBike) return this.currBike;
-    return this.mode === 'drive' && this.currPose ? this.currPose : this.currPos;
+    return (this.mode === 'drive' || this.mode === 'sit') && this.currPose ? this.currPose : this.currPos;
   }
 
   /** Type of the bike being ridden, else null. */
@@ -211,6 +240,17 @@ export class Game {
     return out;
   }
 
+  /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
+  get modeHint(): string {
+    if (this.mode === 'drive') return DRIVE_HINT;
+    if (this.mode === 'sit') return PASSENGER_HINT;
+    if (this.mode === 'ride') {
+      const t = this.bikeType();
+      return t === 'soundjohn' ? SOUND_RIDE_HINT : t === 'escooter' ? SCOOTER_RIDE_HINT : RIDE_HINT;
+    }
+    return '';
+  }
+
   /** One rendered frame: input, the session's fixed steps, poses for rendering. night 0..1 drives the car lights. */
   frame(dt: number, night: number): void {
     const { input, flyAllowed, audio } = this.ctx;
@@ -242,7 +282,7 @@ export class Game {
       if (!this.wheelState.open) this.follow.turn(mouse.dx, mouse.dy);
       const busy = this.figure.busy; // fallen off: no control until up again
       // Space: jump on foot, hop on the bike
-      if (input.consume('Space') && !busy && this.mode !== 'drive') jump = true;
+      if (input.consume('Space') && !busy && this.mode !== 'drive' && this.mode !== 'sit') jump = true;
       const hPressed = input.consume('KeyH'); // a tap between two frames still honks
       if (hPressed && this.mode === 'ride') {
         audio?.bell();
@@ -253,11 +293,11 @@ export class Game {
         this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
       }
       honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
-      if (input.consume('KeyE') && !busy) use = true;
+      if (input.consume('KeyE') && !busy && !this.boarding) use = true;
       if (this.radioOn) for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
     audio?.horn(honk, dt);
-    const still = this.flying || this.figure.busy;
+    const still = this.flying || this.figure.busy || this.boarding !== null; // getting in or out: the controls rest
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
     const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw, horn: honk, bell };
@@ -277,8 +317,10 @@ export class Game {
     const p = sim.player(me);
     const key = vehicleKey(p);
     const changed = key !== this.sampledKey;
-    if (p.carId !== null) {
-      const pose = sim.cars.vehicle(p.carId)!.pose();
+    if (p.carId !== null || p.pass) {
+      // (a passenger's car: its physics stand-in where it has one, else where it rests)
+      const id = p.carId ?? p.pass!.car;
+      const pose = sim.cars.vehicle(id)?.pose() ?? sim.cars.poses[id]!;
       this.prevPose = changed ? pose : this.currPose;
       this.currPose = pose;
     } else if (p.bike) {
@@ -288,6 +330,7 @@ export class Game {
       this.prevPos = changed ? p.pos : this.currPos;
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -317,18 +360,20 @@ export class Game {
       this.currBike = now;
       return;
     }
-    if (p.carId !== null && this.currPose && this.prevPose) {
-      const now = sim.cars.vehicle(p.carId)!.pose(), was = this.currPose, prev = this.prevPose;
+    const inCar = p.carId ?? p.pass?.car ?? null;
+    if (inCar !== null && this.currPose && this.prevPose) {
+      const now = sim.cars.vehicle(inCar)?.pose() ?? sim.cars.poses[inCar]!, was = this.currPose, prev = this.prevPose;
       // rotation the correction applied: now · was⁻¹, applied to the previous sample as well
       const d = this.qa.set(now.qx, now.qy, now.qz, now.qw).multiply(this.qb.set(was.qx, was.qy, was.qz, was.qw).invert());
       const q = d.multiply(this.qc.set(prev.qx, prev.qy, prev.qz, prev.qw));
       this.prevPose = { x: prev.x + now.x - was.x, y: prev.y + now.y - was.y, z: prev.z + now.z - was.z, qx: q.x, qy: q.y, qz: q.z, qw: q.w };
       this.currPose = now;
-    } else if (p.carId === null) {
+    } else if (inCar === null) {
       const was = this.currPos;
       this.prevPos = { x: this.prevPos.x + p.pos.x - was.x, y: this.prevPos.y + p.pos.y - was.y, z: this.prevPos.z + p.pos.z - was.z };
       this.currPos = p.pos;
       this.vel = p.vel;
+      this.facing = p.facing;
       this.grounded = p.char.grounded;
       this.down = p.mode === 'down';
     }
@@ -338,18 +383,20 @@ export class Game {
   private handle(events: SimEvent[]): void {
     const { hud, audio } = this.ctx;
     const me = this.session.me;
+    // a car knocked the own player off the bike: the dismount comes with a knock in the same batch
+    const hitByCar = events.some((e) => e.t === 'knock' && e.id === me);
     for (const e of events) {
       if (e.t === 'lamp') this.fallen.push(e.i);
       else if (e.t === 'bell') { if (e.id !== me) audio?.bellAt(e.x, e.z); }
       else if (e.t === 'impact') audio?.impactAt(e.x, e.z, e.strength);
       else if (e.t === 'knock') this.knockSound(e.id);
-      else if (e.t === 'enter' && e.id === me) this.enteredCar(e.car);
-      else if (e.t === 'exit' && e.id === me) this.leftCar(e.car);
+      else if (e.t === 'enter' && e.id === me) this.enteredCar(e.car, e.seat);
+      else if (e.t === 'exit' && e.id === me) this.leftCar(e.car, e.seat);
       else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
       else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
-      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash);
+      else if (e.t === 'dismount' && e.id === me) this.leftBike(e.heading, e.crash, hitByCar);
       else if (e.t === 'dismountDenied' && e.id === me) hud.flash('Hier kannst du nicht absteigen');
       else if (e.t === 'ignition' && e.car === this.carId) {
         if (e.e === 'doorClose') audio?.doorClosed();
@@ -373,31 +420,75 @@ export class Game {
     if (at) audio.knockAt(at.x, at.z);
   }
 
-  private enteredCar(car: number): void {
+  /** Got into car `car` on `seat` (0: driving it). */
+  private enteredCar(car: number, seat: number): void {
     const pose = this.currPose ?? this.session.sim.cars.poses[car]!;
-    this.carId = car;
+    if (this.boarding?.kind === 'out') this.finishLeave(); // straight into the next car
+    const driver = seat === DRIVER_SEAT;
+    this.carId = driver ? car : null;
+    this.pass = driver ? null : { car, seat };
     this.sentRadio = undefined;
     this.cars.setOwn(car);
-    this.figure.visible = false;
     this.driven.setPose(pose);
-    this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!);
+    const type = this.session.sim.cars.types[car]!;
+    this.driven.show(type, this.session.sim.cars.colors[car]!, plateText(car));
+    // the figure walks to its door from where it stands, gets in and shuts the door
+    const at = this.figure.group.position;
+    const from = toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, at.x, at.z);
+    this.boarding = { kind: 'in', car, seat, path: boardingPath(CAR_SPECS[type], CAR_SEATS[type], seat, from), t: 0 };
     this.follow.setDriving(true, headingOf(pose));
-    this.mode = 'drive';
-    this.ctx.audio?.enterCar();
+    this.mode = driver ? 'drive' : 'sit';
+    this.ctx.hud.setHint(this.modeHint);
+    if (driver) this.ctx.audio?.enterCar();
   }
 
-  private leftCar(car: number): void {
+  private leftCar(car: number, seat: number): void {
+    const wasIn = this.boarding?.kind === 'in';
+    const wasDriver = this.carId !== null;
     this.carId = null;
+    this.pass = null;
     this.currPose = this.prevPose = null;
-    this.cars.setOwn(null);
-    this.driven.hide();
     this.figure.heading = headingOf(this.session.sim.cars.poses[car]!);
     this.figure.visible = true;
     this.follow.setDriving(false);
     this.mode = 'walk';
     this.airTime = 0;
     this.closeWheel();
-    this.ctx.audio?.exitCar();
+    this.ctx.hud.setHint('');
+    if (wasDriver) this.ctx.audio?.exitCar();
+    else this.ctx.audio?.leaveRide();
+    if (wasIn) {
+      // not in yet (a server correction took the seat away): no getting-out to show
+      this.boarding = { kind: 'out', car, seat, t: Infinity };
+      this.finishLeave();
+    } else {
+      this.boarding = { kind: 'out', car, seat, t: 0 }; // the car stays drawn with its door until the figure is out
+    }
+  }
+
+  /** Car `id` as the server streams it, sampled for this frame; null offline or while it rests (not in the snapshots). */
+  private streamedCar(id: number): SnapshotCar | null {
+    for (const c of this.session.remote?.().cars.values() ?? []) if (c.id === id) return c;
+    return null;
+  }
+
+  /** Where the car just left is now (somebody else may still sit in it, and drive on). */
+  private leavingPose(car: number): CarPose {
+    const { cars } = this.session.sim;
+    return cars.vehicle(car)?.pose() ?? cars.poses[car]!;
+  }
+
+  /** Getting out is over (or cut short): the car goes back to the parked ones, the figure walks again. */
+  private finishLeave(): void {
+    const b = this.boarding;
+    if (b?.kind !== 'out') return;
+    shutDoors(this.driven, this.session.sim.cars.types[b.car]!);
+    this.ctx.scene.add(this.figure.group);
+    this.boarding = null;
+    if (this.carId === null && !this.pass) {
+      this.cars.setOwn(null);
+      this.driven.hide();
+    }
   }
 
   private mountedBike(id: number): void {
@@ -414,19 +505,19 @@ export class Game {
     }
     this.follow.setDriving(true, s.heading, 'bike');
     this.mode = 'ride';
-    this.ctx.hud.setHint(ridden.type === 'soundjohn' ? SOUND_RIDE_HINT : RIDE_HINT);
+    this.ctx.hud.setHint(this.modeHint);
     this.ctx.audio?.mountBike(ridden.type === 'soundjohn');
   }
 
-  /** Off the bike (heading: the bike's): stepped off, or crashed and fell. */
-  private leftBike(heading: number, crash: boolean): void {
+  /** Off the bike (heading: the bike's): stepped off, or crashed (into something, or hit by a car) and fell. */
+  private leftBike(heading: number, crash: boolean, hitByCar = false): void {
     this.currBike = this.prevBike = null;
     if (this.rig) {
       this.rig.detachLights();
       this.ctx.scene.remove(this.rig.root);
     }
     this.rig = null;
-    this.ctx.scene.add(this.figure.group);
+    if (!crash) this.ctx.scene.add(this.figure.group); // (crashing: the ragdoll takes it off the rig itself)
     this.figure.heading = heading;
     this.follow.setDriving(false);
     this.mode = 'walk';
@@ -435,9 +526,18 @@ export class Game {
     this.ctx.hud.setHint('');
     this.ctx.audio?.dismountBike();
     if (crash) {
-      this.figure.fall(heading);
+      // from the riding pose, thrown as the sim throws the player (WorldSim.crash): over the handlebar with the bike's
+      // speed, or with the car's push and half of its own
+      const v = this.knockVelocity();
+      this.figure.ragdoll(this.ragdolls, v, ragSpin(v, hitByCar ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
       this.ctx.audio?.crashBike();
     }
+  }
+
+  /** The velocity the sim knocked the own player down with (the character's knock velocity). */
+  private knockVelocity(): Vec3 {
+    const c = this.session.sim.player(this.session.me).char;
+    return { x: c.vx, y: Math.max(0, c.vy), z: c.vz };
   }
 
   /** One rig (a clone of the model) per bike type, made on first use. */
@@ -452,16 +552,35 @@ export class Game {
   }
 
   private render(dt: number, night: number): void {
+    setMirrorNight(night);
     const { audio } = this.ctx;
     const a = this.session.alpha;
     const off = this.session.renderOffset();
+    WATER_TIME.value = (WATER_TIME.value + dt) % 3600;
+    this.ragdolls.step(dt);
     if (this.mode === 'walk') {
+      // hit by a car: limp from the walking pose, thrown with the car's push
+      if (this.down && !this.wasDown && !this.figure.busy) {
+        const v = this.knockVelocity();
+        this.figure.ragdoll(this.ragdolls, v, ragSpin(v, KNOCK_SPIN), KNOCKDOWN_S);
+      }
+      this.wasDown = this.down;
       const p = lerp3(this.prevPos, this.currPos, a);
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt);
-      if (!this.flying) this.follow.update(p, 0, dt);
+      const out = this.boarding?.kind === 'out' ? this.boarding : null;
+      if (out) {
+        // still getting out of the car just left: it stands where it is, its door open
+        out.t += dt;
+        const st = leaveStage(out.t), at = this.leavingPose(out.car);
+        this.driven.setPose(at);
+        poseOccupant(this.figure, this.ctx.scene, this.driven, this.session.sim.cars.types[out.car]!, out.seat, at, st, dt);
+        if (st.done) this.finishLeave();
+      } else {
+        this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
+      }
+      if (!this.flying) this.follow.update(p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
@@ -471,6 +590,7 @@ export class Game {
       const s: BikeState = { ...cur, ...lerp3(prev, cur, a), heading: prev.heading + angleDelta(prev.heading, cur.heading) * a };
       // server correction still fading out (online)
       s.x += off.x; s.y += off.y; s.z += off.z;
+      this.drawnPose = headingPose(s);
       const rig = this.rig;
       if (rig) {
         const ridden = this.session.sim.riddenBike(this.session.me);
@@ -479,26 +599,49 @@ export class Game {
         this.figure.ride(rig.localPoint('seat'), [rig.localPoint('grip_l'), rig.localPoint('grip_r')],
           [rig.localPoint('pedal_l'), rig.localPoint('pedal_r')], RIDER_POSTURE[rig.type]);
       }
-      if (!this.flying) this.follow.update(s, s.heading, dt);
-      audio?.ride({ speed: Math.abs(s.speed), pedalling: this.ctl.forward > 0 && s.speed > 0.3, grounded: s.grounded }, dt);
-    } else if (this.currPose && this.carId !== null) {
+      if (!this.flying) this.follow.update(s, s.heading, dt, Math.abs(s.speed));
+      // a scooter has no freewheel: never ticks
+      audio?.ride({ speed: Math.abs(s.speed), pedalling: (this.ctl.forward > 0 && s.speed > 0.3) || BIKE_SPECS[this.rig?.type ?? 'dutch'].motor === true, grounded: s.grounded }, dt);
+    } else if (this.currPose && (this.carId !== null || this.pass)) {
       const { sim } = this.session;
+      const car = this.carId ?? this.pass!.car, seat = this.pass?.seat ?? DRIVER_SEAT;
       const prev = this.prevPose ?? this.currPose;
-      const pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
-      // server correction still fading out: offset on top (rotation first)
-      pose.x += off.x; pose.y += off.y; pose.z += off.z;
-      if (off.qw !== 1) {
-        const q = this.qc.set(off.qx, off.qy, off.qz, off.qw).multiply(this.qa.set(pose.qx, pose.qy, pose.qz, pose.qw));
-        pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
+      let pose = { ...lerp3(prev, this.currPose, a), ...slerpQ(this.qa, this.qb, prev, this.currPose, a) };
+      // riding along, the car is somebody else's: drawn straight from the server's stream as sampled for this frame
+      // (as every other player's car is). Its stand-in in the own simulation only follows that stream step by step –
+      // blending between those steps on top makes it stutter.
+      const streamed = this.pass ? this.streamedCar(car) : null;
+      if (streamed) {
+        pose = { x: streamed.x, y: streamed.y, z: streamed.z, qx: streamed.qx, qy: streamed.qy, qz: streamed.qz, qw: streamed.qw };
+      } else {
+        // server correction still fading out: offset on top (rotation first)
+        pose.x += off.x; pose.y += off.y; pose.z += off.z;
+        if (off.qw !== 1) {
+          const q = this.qc.set(off.qx, off.qy, off.qz, off.qw).multiply(this.qa.set(pose.qx, pose.qy, pose.qz, pose.qw));
+          pose.qx = q.x; pose.qy = q.y; pose.qz = q.z; pose.qw = q.w;
+        }
       }
       this.driven.setPose(pose);
-      this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
-      this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
-      if (!this.flying) this.follow.update(pose, headingOf(pose), dt);
-      this.driven.updateGlare(this.ctx.camera, this.occluded, dt);
-      if (audio) {
+      this.drawnPose = pose;
+      const vehicle = sim.cars.vehicle(car);
+      if (streamed) this.driven.setWheels(streamedWheels(streamed), dt);
+      else if (vehicle) this.driven.setWheels(vehicle, dt);
+      const into = this.boarding?.kind === 'in' ? this.boarding : null;
+      if (into) into.t += dt;
+      const st = into ? enterStage(into.path, into.t) : null;
+      poseOccupant(this.figure, this.ctx.scene, this.driven, sim.cars.types[car]!, seat, pose, st, dt);
+      if (st?.done) this.boarding = null;
+      // the lamps: the own ignition when driving; riding along, what the server says about the car
+      const level = this.carId !== null ? sim.ignition(car).lightLevel() : this.session.roster?.().cars.get(car)?.level ?? 0;
+      // (the brake lights of somebody else's car come with the stream, as for every other car)
+      this.driven.setLights(night, streamed ? streamed.brakeLight : sim.braking(car), lampPower(level, Math.random));
+      const v = streamed ? { x: streamed.vx, y: streamed.vy, z: streamed.vz } : vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
+      if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
+      // riding along: the car's radio, as the driver hears it
+      if (this.pass) audio?.rideAlong(this.session.roster?.().cars.get(car)?.radio ?? null);
+      if (audio && this.carId !== null) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
-        const h = headingOf(pose), v = sim.cars.vehicle(this.carId)!.chassis.linvel();
+        const h = headingOf(pose);
         const s = Math.sin(h), c = Math.cos(h);
         audio.drive({
           forward: v.x * s + v.z * c, lateral: v.x * c - v.z * s, vx: v.x, vz: v.z,
@@ -508,9 +651,9 @@ export class Game {
     }
     if (this.remotes) {
       const { walkers, cars, riders } = this.session.remote!();
-      const { names, variants, cars: info } = this.session.roster!();
-      this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants);
-      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt), dt);
+      const { names, variants, cars: info, seats } = this.session.roster!();
+      this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants, seats);
+      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null), dt);
 
     }
     if (audio) {
@@ -519,26 +662,25 @@ export class Game {
     }
   }
 
-  /** Line of sight between two points blocked by static world geometry (lamp glare vs. camera). */
-  private readonly occluded = (from: Vec3, to: Vec3): boolean => {
-    const { rapier: R, world: w } = this.session.sim.pw;
-    const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
-    const d = Math.hypot(dx, dy, dz);
-    if (d < 0.5) return false;
-    return w.castRay(new R.Ray(from, { x: dx / d, y: dy / d, z: dz / d }), d, true, undefined, undefined, undefined, undefined, STATIC_ONLY) !== null;
-  };
-
   private toggleFly(): void {
     this.flying = !this.flying;
     this.ctx.input.clearPresses();
     this.closeWheel();
-    if (this.flying) this.fly.setHeading(this.follow.yaw, this.follow.pitch);
+    if (this.flying) {
+      this.fly.setHeading(this.follow.yaw, this.follow.pitch);
+      this.follow.resetFov();
+    }
     else this.follow.snap();
   }
 
   /** The radio can be tuned: in a car with the engine running, or on the sound Long John. */
-  private get radioOn(): boolean {
+  get radioOn(): boolean {
     return (this.mode === 'drive' && this.engine === 'running') || (this.mode === 'ride' && this.bikeType() === 'soundjohn');
+  }
+
+  /** On the sound Long John with its disco ball (L). */
+  get discoAvailable(): boolean {
+    return this.mode === 'ride' && this.rig?.hasDisco === true;
   }
 
   private closeWheel(): void {
@@ -560,6 +702,7 @@ function nearestStop(stops: WorldManifest['tramStops'], x: number, z: number): {
 /** Which vehicle a player state is in: 'c<car>', 'b<bike>' or 'w' (on foot). */
 function vehicleKey(p: PlayerSnapshot): string {
   if (p.carId !== null) return `c${p.carId}`;
+  if (p.pass) return `s${p.pass.car}:${p.pass.seat}`;
   return p.bikeId !== null ? `b${p.bikeId}` : 'w';
 }
 

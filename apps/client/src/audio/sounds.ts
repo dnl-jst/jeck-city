@@ -4,7 +4,7 @@ export type FileSoundId =
   | 'doorOpen' | 'doorClose' | 'engineStart' | 'engineStop'
   | 'engineIdle' | 'engineMid' | 'engineHigh'
   | 'skid' | 'impact1' | 'impact2' | 'impact3'
-  | 'ambience' | 'tramBell' | 'static';
+  | 'ambience' | 'tramBell' | 'static' | 'rain';
 /** Sounds synthesised in the browser (bike, see bike-sound.ts; car horn, see horn.ts); the mixer generates them on unlock. */
 export type SynthSoundId = 'bikeTick' | 'bikeBell' | 'carHorn';
 export type SoundId = FileSoundId | SynthSoundId;
@@ -38,6 +38,7 @@ export const SOUNDS: Record<FileSoundId, SoundDef> = {
   ambience: { file: 'ambience.ogg', loop: true },
   tramBell: { file: 'tram-bell.ogg', loop: false },
   static: { file: 'static.ogg', loop: true },
+  rain: { file: 'rain.ogg', loop: true },
 };
 
 /** Engine loops present in the set, ascending by `rpm` (all from the same car). */

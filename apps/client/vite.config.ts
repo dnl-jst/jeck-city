@@ -1,5 +1,7 @@
 import { gzipSync } from "node:zlib";
-import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
+import { defineConfig, type UserConfig } from "vite";
+import { measureDownload } from "./src/build/download-size";
 
 // dev: the client port (NN_CLIENT_PORT) and the game server it proxies to (PORT, as for the server itself) are configurable,
 // so a second checkout can run next to the first
@@ -13,12 +15,32 @@ const proxy = {
   '^/[A-Za-z0-9_-]{8,}/[A-Za-z0-9_-]{8,}(\\?.*)?$': { target, ws: true },
 };
 
-export default defineConfig({
+// the intro screen's download warning: compressed size of the generated world, audio and portraits (null without a world)
+const here = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
+
+export default defineConfig(async (): Promise<UserConfig> => ({
+  define: { __NN_DOWNLOAD__: JSON.stringify(await measureDownload(here("public"), here("node_modules/.cache/nn-download-size.json"))) },
   server: { host: true, port: clientPort, strictPort: true, proxy },
   // vite preview does not compress; a real static host does. gzip text/binary assets so `npm run accept` measures
   // what a deployment would transfer.
   preview: { port: 4173 },
   plugins: [{
+    // dev only: POST /__nnlog lines from devices without a console (phones, tablets) into this terminal (src/devlog.ts)
+    name: "nn-devlog",
+    configureServer(server) {
+      server.middlewares.use("/__nnlog", (req, res) => {
+        let body = "";
+        req.on("data", (c: Buffer) => { body += c.toString(); if (body.length > 20000) req.destroy(); });
+        req.on("end", () => {
+          const ua = String(req.headers["user-agent"] ?? "");
+          const dev = /iPad|Macintosh/.test(ua) ? "iPad" : /iPhone/.test(ua) ? "iPhone" : /Android/.test(ua) ? "Android" : "Browser";
+          for (const line of body.split("\n")) if (line) console.log(`[${dev}] ${line}`);
+          res.statusCode = 204;
+          res.end();
+        });
+      });
+    },
+  }, {
     name: "preview-gzip",
     configurePreviewServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -49,4 +71,4 @@ export default defineConfig({
     },
   }],
   build: { target: "es2022", chunkSizeWarningLimit: 1500 },
-});
+}));

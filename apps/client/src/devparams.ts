@@ -19,7 +19,7 @@ export function withDateParam(now: Date, s: string | null): Date {
   return out.getFullYear() === y && out.getMonth() === m && out.getDate() === d ? out : now;
 }
 
-export type DevAllowed = { cam: boolean; fly: boolean; writeHooks: boolean };
+export type DevAllowed = { cam: boolean; fly: boolean; writeHooks: boolean; weather: boolean };
 
 /**
  * Which dev hooks apply. Offline: as before (`?cam` always, fly with `?debug=1`, write hooks in a dev build or with `?debug=1`). Online: everything
@@ -28,7 +28,7 @@ export type DevAllowed = { cam: boolean; fly: boolean; writeHooks: boolean };
 export function devAllowed(
   mode: 'offline' | 'online', welcome: { devMode: boolean } | null, debug: boolean, devBuild = false,
 ): DevAllowed {
-  if (mode === 'offline') return { cam: true, fly: debug, writeHooks: devBuild || debug };
+  if (mode === 'offline') return { cam: true, fly: debug, writeHooks: devBuild || debug, weather: true };
   const dev = welcome?.devMode === true;
-  return { cam: dev, fly: dev, writeHooks: dev };
+  return { cam: dev, fly: dev, writeHooks: dev, weather: dev };
 }

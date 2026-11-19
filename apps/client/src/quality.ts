@@ -4,11 +4,11 @@
  * pixel of every standard material (also at intensity 0), so fewer lights is the biggest saving, then resolution and
  * shadows. Everything but antialiasing switches live (G); antialiasing is a WebGL context option, read at startup.
  */
-export type QualityLevel = 'low' | 'medium' | 'high';
+export type QualityLevel = 'minimal' | 'low' | 'medium' | 'high';
 
-export const QUALITY_LEVELS: readonly QualityLevel[] = ['low', 'medium', 'high'];
+export const QUALITY_LEVELS: readonly QualityLevel[] = ['minimal', 'low', 'medium', 'high'];
 
-export const QUALITY_LABEL: Record<QualityLevel, string> = { low: 'Niedrig', medium: 'Mittel', high: 'Hoch' };
+export const QUALITY_LABEL: Record<QualityLevel, string> = { minimal: 'Sehr niedrig', low: 'Niedrig', medium: 'Mittel', high: 'Hoch' };
 
 export type Quality = {
   /** Upper bound of the renderer pixel ratio (devicePixelRatio is capped at this). */
@@ -19,11 +19,11 @@ export type Quality = {
   lampLights: number;
   /** Disco ball spot lights (of 8; picked evenly round the ball). */
   discoDots: number;
-  /** The own car's red tail-lamp spot lights (the lamp glass and glare glow regardless). */
+  /** The own car's red tail-lamp spot lights (the lamp glass glows regardless). */
   tailLights: boolean;
   /** Shadow map size of the own car's headlight beams; 0 = the beams cast no shadows. */
   beamShadow: number;
-  /** Sun shadow map size. */
+  /** Sun shadow map size; 0 = no sun shadows at all (no shadow pass). */
   sunShadow: number;
   /** Sun shadows are cast within this radius (m) around the camera. */
   shadowRadius: number;
@@ -42,20 +42,27 @@ export type Quality = {
   treeRadius: number;
   /** Parked cars are drawn within this radius (m). */
   carRadius: number;
+  /** Rain streaks / snow flakes around the camera at full intensity. */
+  precipDrops: number;
 };
 
 export const QUALITY: Record<QualityLevel, Quality> = {
   high: {
     pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
-    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150,
+    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000,
   },
   medium: {
     pixelRatio: 1.5, antialias: true, lampLights: 5, discoDots: 4, tailLights: false, beamShadow: 512, sunShadow: 2048, shadowRadius: 100, treeShadowRadius: 50,
-    viewDistance: 450, loadRadius: 420, unloadRadius: 600, treeRadius: 190, carRadius: 120,
+    viewDistance: 450, loadRadius: 420, unloadRadius: 600, treeRadius: 190, carRadius: 120, precipDrops: 12000,
+  },
+  // phones and tablets: no shadow pass, fewest lights, the shortest view
+  minimal: {
+    pixelRatio: 1, antialias: false, lampLights: 2, discoDots: 0, tailLights: false, beamShadow: 0, sunShadow: 0, shadowRadius: 0, treeShadowRadius: 0,
+    viewDistance: 280, loadRadius: 250, unloadRadius: 380, treeRadius: 110, carRadius: 70, precipDrops: 3000,
   },
   low: {
     pixelRatio: 1, antialias: false, lampLights: 3, discoDots: 2, tailLights: false, beamShadow: 0, sunShadow: 1024, shadowRadius: 70, treeShadowRadius: 30,
-    viewDistance: 300, loadRadius: 280, unloadRadius: 450, treeRadius: 140, carRadius: 90,
+    viewDistance: 300, loadRadius: 280, unloadRadius: 450, treeRadius: 140, carRadius: 90, precipDrops: 6000,
   },
 };
 
@@ -63,12 +70,14 @@ export const QUALITY: Record<QualityLevel, Quality> = {
 export const MAX_LAMP_LIGHTS = Math.max(...QUALITY_LEVELS.map((l) => QUALITY[l].lampLights));
 
 export const DEFAULT_QUALITY: QualityLevel = 'low';
+/** The default on phones and tablets (a coarse primary pointer). */
+export const DEFAULT_TOUCH_QUALITY: QualityLevel = 'minimal';
 
 /** localStorage key of the chosen level (a per-viewer convenience; missing storage = the default). */
 const QUALITY_KEY = 'nn.quality';
 
-/** The level from `?quality=` if valid, else the stored one, else the default. */
-export function storedQuality(param: string | null = null): QualityLevel {
+/** The level from `?quality=` if valid, else the stored one, else the default (`fallback`). */
+export function storedQuality(param: string | null = null, fallback: QualityLevel = DEFAULT_QUALITY): QualityLevel {
   if (param && (QUALITY_LEVELS as readonly string[]).includes(param)) return param as QualityLevel;
   try {
     const v = localStorage.getItem(QUALITY_KEY);
@@ -76,7 +85,7 @@ export function storedQuality(param: string | null = null): QualityLevel {
   } catch {
     // storage blocked: default
   }
-  return DEFAULT_QUALITY;
+  return fallback;
 }
 
 export function storeQuality(v: QualityLevel): void {
@@ -87,7 +96,7 @@ export function storeQuality(v: QualityLevel): void {
   }
 }
 
-/** The next level for the G key: low → medium → high → low. */
+/** The next level for the G key: minimal → low → medium → high → minimal. */
 export const nextQuality = (v: QualityLevel): QualityLevel => QUALITY_LEVELS[(QUALITY_LEVELS.indexOf(v) + 1) % QUALITY_LEVELS.length]!;
 
 /** Which of `total` lights (fanned evenly round a circle) stay on when only `n` may: an even spread of indices. */

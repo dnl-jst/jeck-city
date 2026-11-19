@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, NEUTRAL_INPUT, PROTOCOL_VERSION, worldHash,
+  decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
   type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
@@ -13,7 +13,8 @@ import { startServer, type RunningServer } from './server';
 
 const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
 writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
-const cfg = loadConfig({}, { port: 0, maxPlayers: 2, logLevel: 'error', joinPerMin: 1000, reconnectS: 3, clientDir });
+const base = { port: 0, maxPlayers: 2, logLevel: 'error' as const, joinPerMin: 1000, reconnectS: 3, clientDir, weather: 'off' as const };
+const cfg = loadConfig({}, base);
 const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(`${cfg.worldDir}/${f}`));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -335,7 +336,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await leaveAll();
   });
 
-  it('car hits walker → down, up after ~1 s', async () => {
+  it('car hits walker → down, up after KNOCKDOWN_S', async () => {
     const a = await join('Anna'), b = await join('Bert');
     const wb = watch(b);
     const { x, z, h } = besideCar(2);
@@ -351,10 +352,10 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await until(() => wb.events.some((e) => e.t === 'knock'), 8000);
     pa.input = { ...NEUTRAL_INPUT(0), brake: true }; // stop before running him over again
     expect(wb.events).toContainEqual({ t: 'knock', slot: slotOf(b) });
-    await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2);
+    await until(() => wb.modeAt.some((m) => m.mode === 2) && wb.last!.own.mode !== 2, (KNOCKDOWN_S + 3) * 1000);
     const down = wb.modeAt.findIndex((m) => m.mode === 2);
     const downS = (wb.modeAt[down + 1]!.tick - wb.modeAt[down]!.tick) / 60;
-    expect(Math.abs(downS - 1)).toBeLessThanOrEqual(0.1 + 1 / 20); // 1.0 s ± 0.1 s, measured at 20 Hz resolution
+    expect(Math.abs(downS - KNOCKDOWN_S)).toBeLessThanOrEqual(0.1 + 1 / 20); // ± 0.1 s, measured at 20 Hz resolution
     pa.stop();
     await leaveAll();
   }, 30_000);
@@ -423,6 +424,18 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(h.rssMb).toBeGreaterThan(10);
     expect(h.tickP95Ms).toBeGreaterThanOrEqual(0);
     expect(Number.isInteger(h.dropped)).toBe(true);
+    await leaveAll();
+  });
+
+  // Uses the shared server: a fixed weather is just room.setWeather() at startup (server.ts), and a second
+  // startServer() reloads the whole world, which alone can take >20 s on a CI runner.
+  it('syncs the weather through the room state', async () => {
+    srv.room.setWeather(weatherPreset('snow')!);
+    const c = await join('Anna');
+    const w = () => c.state as unknown as { weather: { known: boolean; kind: string } };
+    await until(() => w().weather?.known === true && w().weather.kind === 'snow');
+    srv.room.setWeather(weatherPreset('rain')!);
+    await until(() => w().weather.kind === 'rain');
     await leaveAll();
   });
 });

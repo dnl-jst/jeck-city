@@ -11,6 +11,8 @@ export type MapData = {
   /** Per building a flat triangle list [x0,z0,x1,z1,x2,z2, …] (roof triangles in xz). */
   buildings: number[][];
   greens: number[][];
+  /** Water outlines (the Rhine); outer rings and holes wind in opposite directions (nonzero fill). */
+  water: number[][];
   /** name '' = unnamed. */
   squares: { name: string; pts: number[] }[];
   tram: number[][];
@@ -67,6 +69,7 @@ export function parseMapData(json: unknown): MapData {
     }),
     buildings: arr(o.buildings, 'buildings', (v, p) => flat(v, p, 6)),
     greens: arr(o.greens, 'greens', (v, p) => flat(v, p)),
+    water: o.water === undefined ? [] : arr(o.water, 'water', (v, p) => flat(v, p)),
     squares: arr(o.squares, 'squares', (v, p) => {
       const s = obj(v, p);
       return { name: str(s.name, `${p}.name`), pts: flat(s.pts, `${p}.pts`) };

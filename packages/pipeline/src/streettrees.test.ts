@@ -4,7 +4,7 @@ import type { OsmFeatures, Pt, Road } from './osm.js';
 import { edgeAt } from './roadprofile.js';
 import { streetTrees, TREE_KERB_OFFSET, TREE_SPACING } from './streettrees.js';
 
-const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 // eastbound road along z = 0; "right" of travel is +z (south)
 const road = (over: Partial<Road> = {}): Road => ({
   id: 1, kind: 'secondary', name: 'A', points: [{ x: 0, z: 0 }, { x: 300, z: 0 }], width: 10, oneway: false, lanes: 2, cross: crossOf('secondary', 10), ...over,

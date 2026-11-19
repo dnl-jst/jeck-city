@@ -51,10 +51,15 @@ export class GameAudio {
   private readonly hornState = new HornState();
   private hornVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
+  /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
+  private rainVoice: LoopVoice | null = null;
+  private rain = 0;
   private unlocking: Promise<void> | null = null;
   private unlocked = false;
   private loaded = false;
   private inCar = false;
+  /** Riding along as a passenger: the station of that car's radio (null: off); undefined when not riding along. */
+  private passenger: StationId | null | undefined = undefined;
   /** Engine caught (Ignition 'running'): engine voices and radio on. */
   private engineOn = false;
   /** The starter clip while cranking; stopped if the player leaves before the engine catches. */
@@ -64,7 +69,7 @@ export class GameAudio {
 
   constructor(private readonly d: { mixer: AudioMixerLike; radio: RadioLike; tuner: RadioTuner; flash(text: string): void; rand?: () => number; remote?: RemoteAudio }) {
     this.rand = d.rand ?? Math.random;
-    this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'sfx') });
+    this.vehicle = new VehicleSound({ loop: (id) => d.mixer.loop(id, 'cabin') });
     this.tramBell = new TramBell(this.rand);
     this.bike = new BikeSound({ oneShot: (id, o) => d.mixer.oneShot(id, o) });
   }
@@ -90,6 +95,11 @@ export class GameAudio {
       this.startLoops();
     });
     this.d.radio.unlocked();
+  }
+
+  /** Sound switched off (N). */
+  get isMuted(): boolean {
+    return this.muted;
   }
 
   toggleMute(): void {
@@ -127,7 +137,7 @@ export class GameAudio {
 
   crank(): void {
     this.starter?.stop();
-    this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine });
+    this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine, bus: 'cabin' });
   }
 
   /** The engine has caught: engine voices (once loaded + unlocked) and the radio. */
@@ -137,6 +147,29 @@ export class GameAudio {
     this.starter = null; // the clip's own idle tail may play out
     this.startLoops();
     this.tune(this.d.tuner.enterCar());
+  }
+
+  /**
+   * Riding along in somebody's car, every frame: `station` is what its radio plays (null: off). The passenger hears
+   * it as the driver does, in the cabin; only the driver tunes.
+   */
+  rideAlong(station: StationId | null): void {
+    if (this.passenger === undefined) this.d.mixer.setInCar(true);
+    else if (this.passenger === station) return;
+    const first = this.passenger === undefined;
+    this.passenger = station;
+    if (first && station === null) return;
+    this.stopStatic();
+    this.d.radio.tune(station);
+    if (station !== null) this.d.flash(stationLabel(station));
+  }
+
+  /** Got out of the car ridden along in. */
+  leaveRide(): void {
+    if (this.passenger === undefined) return;
+    if (this.passenger !== null) this.d.radio.tune(null);
+    this.passenger = undefined;
+    this.d.mixer.setInCar(false);
   }
 
   exitCar(): void {
@@ -259,6 +292,12 @@ export class GameAudio {
     this.d.mixer.oneShot('impact1', { gain: 0.5 * MIX.impact, at: { x, z } });
   }
 
+  /** Rain intensity 0..1 (0 when dry or snowing); remembered until the loops start. */
+  weather(rain: number): void {
+    this.rain = rain;
+    this.rainVoice?.setGain(MIX.rain * rain);
+  }
+
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
@@ -295,6 +334,10 @@ export class GameAudio {
     if (!this.ambience) {
       this.ambience = this.d.mixer.loop('ambience', 'ambience');
       this.ambience.setGain(MIX.ambience);
+    }
+    if (!this.rainVoice) {
+      this.rainVoice = this.d.mixer.loop('rain', 'ambience');
+      this.rainVoice.setGain(MIX.rain * this.rain);
     }
     if (this.inCar && this.engineOn) this.vehicle.start();
     if (this.riding) this.bike.start();

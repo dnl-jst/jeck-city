@@ -1,11 +1,15 @@
-import type { Camera, Object3D, Scene } from 'three';
+import { Vector3, type Camera, type Object3D, type Scene } from 'three';
 import {
-  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
+  BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, BIKE_ROOF, fromCarLocal, headingPose, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
+  plateText, boardingPath, CAR_SEATS, CAR_SPECS, headingOf, toCarPoint, type CarPoint, type DoorName,
 } from '@nn/shared';
+import { enterStage, leaveStage } from '../boarding';
+import { poseOccupant, shutDoors, type SeatedIn } from '../occupant';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
+import { CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../ragdoll';
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
 /** Figure height (m) the label floats above. */
@@ -18,6 +22,12 @@ const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 const ROOF_H = 1.5;
 /** A walker that moved further than this in one frame was teleported: no running animation for it. */
 const JUMP_M = 3;
+/** Moving slower than this (m/s) on the local player's car roof: standing still. */
+const ROOF_STILL = 0.8;
+/** A knocked-down walker's car: the fastest one within this distance (m) of them. */
+const KNOCK_CAR_M = 6;
+/** Upwards throw of a car's hit (m/s; as the sim's collisions.ts). */
+const KNOCK_UP = 3;
 
 type Vec3 = { x: number; y: number; z: number };
 
@@ -28,12 +38,16 @@ export interface ParkedHider {
 
 /** The parts of DrivenCar this uses (tests replace it, DrivenCar builds canvas textures). */
 export interface CarView {
-  show(type: CarType, color: number): void;
+  show(type: CarType, color: number, plate?: string): void;
   hide(): void;
   setPose(p: CarPose): void;
   setWheels(w: WheelSource, dt: number): void;
   setLights(night: number, braking: boolean, power: number): void;
-  updateGlare(camera: Camera, occluded: (from: Vec3, to: Vec3) => boolean, dt: number): void;
+  /** To seat the driver's figure (DrivenCar): the model's root, a seat's hip point and the steering wheel's grips in its frame. */
+  readonly root?: Object3D | null;
+  seat?(i: number): Vector3 | null;
+  grips?(): [Vector3, Vector3] | null;
+  setDoor?(name: DoorName, k: number): void;
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
@@ -71,16 +85,37 @@ export type RemoteOptions = {
   /** Pitch and height so a remote bike's wheels sit on uneven ground (absent: shown level). */
   bikeGroundPose?(type: BikeType, s: BikeState): { pitch: number; dy: number };
   makeRig?: (type: BikeType) => RiderRig | null;
-  occluded(from: Vec3, to: Vec3): boolean;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
+  /** The car the local player drives or the bike they ride, and its pose as drawn (someone on it is drawn on it), or null. */
+  localCar?: () => { id: number; pose: CarPose } | null;
+  /** The view the game draws the local player's car with: other occupants are seated in it. */
+  ownCarView?: () => CarView;
+  /** Where car `id` rests (for an occupied car that is not in the snapshot). */
+  carPose?: (id: number) => CarPose | undefined;
+  /** Where another player (slot) stands on the local player's car, in its frame (Session.onOwnRoof). */
+  onOwnRoof?: (slot: number) => { x: number; y: number; z: number } | null;
+  /** Physics for falls (crashing off a bike, hit by a car); without it the figure tips over as an animation. */
+  ragdolls?: RagdollWorld;
 };
 
 /** A pooled figure and the character template it shows (undefined: not set yet). */
 type Figure = { fig: PlayerFigure; model: Object3D | null | undefined };
-type Walker = Figure & { label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number };
-type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean };
-type Driven = { view: CarView; label: Label | null; seen: boolean };
+type Walker = Figure & {
+  label: Label | null; px: number; pz: number; vx: number; vz: number; seen: boolean; fresh: boolean; state: number;
+  /** Where it stood on the local player's car last frame (car frame), or null. */
+  roof: { x: number; y: number; z: number } | null;
+};
+type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number; x: number; y: number; z: number };
+type Driven = { view: CarView; label: Label | null; seen: boolean; /** Where it was drawn last. */ pose: CarPose };
+/** Somebody else in a car: their figure on its seat, or still getting in (board). */
+type Occupant = Figure & {
+  car: number; seat: number; seen: boolean; board: { path: CarPoint[]; t: number } | null;
+  /** Seconds since they got out (the figure is still shown getting out of the car), or null while in it. */
+  out: number | null;
+};
+/** Whether figures can be seated in a car view (a DrivenCar with its model; the tests' stand-ins cannot). */
+const seatable = (v: CarView): v is CarView & SeatedIn => !!v.root && typeof v.seat === 'function' && typeof v.grips === 'function' && typeof v.setDoor === 'function';
 
 /**
  * Other players: figures on foot (pooled; a figure is hidden when its player leaves and reused for the next), each
@@ -95,6 +130,9 @@ export class RemotePlayers {
   private readonly freeFigures: Figure[] = [];
   private readonly freeRigs = new Map<BikeType, RiderRig[]>();
   private readonly driven = new Map<number, Driven>();
+  /** Other players seated in cars, by slot; and where each player was last seen on foot (to walk to a door from). */
+  private readonly occupants = new Map<number, Occupant>();
+  private readonly lastFoot = new Map<number, { x: number; z: number }>();
   private readonly freeCars: CarView[] = [];
   private readonly hiding = new Set<number>();
 
@@ -108,28 +146,82 @@ export class RemotePlayers {
   update(
     sample: RemoteSampleIn, names: ReadonlyMap<number, string>, cars: ReadonlyMap<number, RemoteCarInfo>, camera: Camera, night: number, dt: number,
     variants: ReadonlyMap<number, number> = new Map(),
+    /** Who sits where: car → slot per seat (slow state). Without it: the drivers of `cars`, in the cars of the sample. */
+    seats?: ReadonlyMap<number, readonly (number | undefined)[]>,
   ): void {
     const cp = camera.position;
     for (const w of this.walkers.values()) w.seen = false;
+    const riding = new Set<number>();
+    for (const r of sample.riders?.values() ?? []) riding.add(r.slot);
     for (const s of sample.walkers.values()) {
+      this.lastFoot.set(s.slot, { x: s.x, z: s.z });
       if (s.slot === this.opts.me) continue;
       let w = this.walkers.get(s.slot);
+      const was = this.riders.get(s.slot);
+      if (!w && was && !riding.has(s.slot) && s.state === 3 && this.opts.ragdolls) {
+        // crashed off the bike: the rider's own figure goes limp from the riding pose and flies on with the bike's
+        // speed, or (a fast car right there) with the car's push and some of its own
+        const car = fastestCarNear(sample.cars, s.x, s.z);
+        const v = car
+          ? { x: car.vx * 0.9 + was.vx * 0.5, y: Math.max(0, car.vy * 0.9) + KNOCK_UP, z: car.vz * 0.9 + was.vz * 0.5 }
+          : this.crashThrow(was);
+        was.fig.ragdoll(this.opts.ragdolls, v, spin(v, car ? KNOCK_SPIN : CRASH_SPIN), TUNING.bike.getUpSeconds);
+        was.label?.dispose();
+        this.freeRig(was);
+        this.riders.delete(s.slot);
+        w = { fig: was.fig, model: was.model, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: 3, roof: null };
+        this.walkers.set(s.slot, w);
+      }
       if (!w) {
         const f = this.takeFigure();
         f.fig.heading = s.yaw;
-        w = { ...f, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: -1 };
+        w = { ...f, label: null, px: s.x, pz: s.z, vx: 0, vz: 0, seen: true, fresh: true, state: -1, roof: null };
         this.walkers.set(s.slot, w);
       }
       w.seen = true;
+      // still shown getting out of a car (below): the figure on foot waits out of sight until that is over
+      w.fig.visible = !this.occupants.has(s.slot);
       this.dress(w, variants.get(s.slot) ?? 0);
-      // fell off a bike: tips over, lies, gets up (the figure times it itself)
-      if (s.state === 3 && w.state !== 3) w.fig.fall(s.yaw);
+      // fell off a bike: tips over, lies, gets up (the figure times it itself); hit by a car: thrown with its push
+      const rd = this.opts.ragdolls;
+      if (s.state !== w.state && (s.state === 2 || s.state === 3) && !w.fig.busy) {
+        if (!rd) {
+          if (s.state === 3) w.fig.fall(s.yaw);
+        } else if (s.state === 3) {
+          const v = { x: w.vx, y: TUNING.bike.crashUp, z: w.vz };
+          w.fig.ragdoll(rd, v, spin(v, CRASH_SPIN), TUNING.bike.getUpSeconds);
+        } else {
+          const car = fastestCarNear(sample.cars, s.x, s.z);
+          const v = car ? { x: car.vx * 0.9, y: Math.max(0, car.vy * 0.9) + KNOCK_UP, z: car.vz * 0.9 } : { x: w.vx, y: KNOCK_UP, z: w.vz };
+          w.fig.ragdoll(rd, v, spin(v, KNOCK_SPIN), KNOCKDOWN_S);
+        }
+      }
       w.state = s.state;
+      // on the roof of the car the local player drives: drawn on that car as it is drawn here (predicted, a little
+      // ahead of the streamed pose the walker's position goes with), moving as it moves on the roof
+      let at: { x: number; y: number; z: number } = s;
+      const local = this.opts.localCar?.();
+      const onIt = local ? this.opts.onOwnRoof?.(s.slot) ?? null : null;
+      if (local && onIt) at = fromCarLocal(onIt, local.pose);
       let vx = 0, vz = 0;
       if (!w.fresh && dt > 1e-4) {
-        const dx = s.x - w.px, dz = s.z - w.pz;
-        if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
+        if (onIt && w.roof) {
+          // its walking on the roof (in the car's frame), turned into the world by the car's heading
+          const lx = (onIt.x - w.roof.x) / dt, lz = (onIt.z - w.roof.z) / dt, q = local!.pose;
+          const h = Math.atan2(2 * (q.qx * q.qz + q.qw * q.qy), 1 - 2 * (q.qx * q.qx + q.qy * q.qy));
+          vx = lx * Math.cos(h) + lz * Math.sin(h);
+          vz = -lx * Math.sin(h) + lz * Math.cos(h);
+          // the offset comes in 20 Hz steps of a moving car: what is left below a slow walk is noise, it stands
+          if (Math.hypot(vx, vz) < ROOF_STILL) vx = vz = 0;
+        } else {
+          const dx = s.x - w.px, dz = s.z - w.pz;
+          if (Math.hypot(dx, dz) < JUMP_M) { vx = dx / dt; vz = dz / dt; }
+          // riding on a streamed car's roof or a bike: only the walking on it animates
+          const under = carrierVelocity(sample, s);
+          if (under) { vx -= under.x; vz -= under.z; }
+        }
       }
+      w.roof = onIt;
       w.fresh = false;
       // smoothed: the interpolated stream moves in 20 Hz-shaped steps
       const k = Math.min(1, dt * 12);
@@ -137,8 +229,8 @@ export class RemotePlayers {
       w.vz += (vz - w.vz) * k;
       w.px = s.x; w.pz = s.z;
       w.fig.setDown(s.state === 2 ? 1 : 0);
-      w.fig.update(s.x, s.y, s.z, { x: w.vx, y: 0, z: w.vz }, dt);
-      w.label = this.label(w.label, names.get(s.slot), s.x, s.y + FIGURE_H + LABEL_GAP, s.z, cp);
+      w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt, false, s.yaw);
+      w.label = this.label(w.label, names.get(s.slot), at.x, at.y + FIGURE_H + LABEL_GAP, at.z, cp);
     }
     for (const [slot, w] of this.walkers) {
       if (w.seen) continue;
@@ -157,12 +249,15 @@ export class RemotePlayers {
         r.rig = this.takeRig(type);
       }
       if (!r) {
-        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true };
+        r = { ...this.takeFigure(), label: null, rig: this.takeRig(type), crank: 0, seen: true, vx: 0, vz: 0, x: s.x, y: s.y, z: s.z };
         this.riders.set(s.slot, r);
       }
       r.seen = true;
       this.dress(r, variants.get(s.slot) ?? 0);
       if (s.pedalling && s.speed > 0) r.crank += s.speed * CRANK_PER_M * dt;
+      r.x = s.x; r.y = s.y; r.z = s.z;
+      r.vx = Math.sin(s.heading) * s.speed;
+      r.vz = Math.cos(s.heading) * s.speed;
       const st: BikeState = { x: s.x, y: s.y, z: s.z, heading: s.heading, speed: s.speed, steer: s.steer, vy: 0, grounded: !s.airborne, crank: r.crank };
       const rig = r.rig;
       if (rig) {
@@ -186,26 +281,90 @@ export class RemotePlayers {
       this.riders.delete(slot);
     }
 
+    // cars somebody else sits in: drawn as a car of their own (the parked instance hidden), their figures on the seats.
+    // The car the local player sits in is drawn by the game: the others' figures are seated in that one.
     this.hiding.clear();
     for (const d of this.driven.values()) d.seen = false;
-    for (const c of sample.cars.values()) {
-      const info = cars.get(c.id);
-      if (!c.hasDriver || !info || info.driver === this.opts.me) continue;
-      this.hiding.add(c.id);
-      let d = this.driven.get(c.id);
-      if (!d) {
-        const view = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
-        view.show(this.opts.typeOf(c.id), this.opts.colorOf(c.id));
-        d = { view, label: null, seen: true };
-        this.driven.set(c.id, d);
+    for (const o of this.occupants.values()) o.seen = false;
+    const streamed = new Map<number, SnapshotCar>();
+    for (const c of sample.cars.values()) streamed.set(c.id, c);
+    const local = this.opts.localCar?.() ?? null;
+    const seatsOf: ReadonlyMap<number, readonly (number | undefined)[]> = seats ?? new Map([...cars].map(([id, i]) => [id, [i.driver]]));
+    for (const [id, slots] of seatsOf) {
+      const others: { slot: number; seat: number }[] = [];
+      slots.forEach((slot, seat) => { if (slot !== undefined && slot >= 0 && slot !== this.opts.me) others.push({ slot, seat }); });
+      if (others.length === 0) continue;
+      const c = streamed.get(id), info = cars.get(id);
+      let view: CarView | undefined, pose: CarPose | undefined;
+      if (local && local.id === id) {
+        view = this.opts.ownCarView?.();
+        pose = local.pose;
+      } else {
+        if (!seats && !c?.hasDriver) continue;
+        pose = c ?? this.opts.carPose?.(id);
+        if (!pose) continue; // not in the snapshot and no resting pose known
+        this.hiding.add(id);
+        let d = this.driven.get(id);
+        if (!d) {
+          const made = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
+          made.show(this.opts.typeOf(id), this.opts.colorOf(id), plateText(id));
+          d = { view: made, label: null, seen: true, pose };
+          this.driven.set(id, d);
+        }
+        d.seen = true;
+        d.pose = pose;
+        d.view.setPose(pose);
+        if (c) d.view.setWheels(streamedWheels(c), dt);
+        // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
+        d.view.setLights(night, c?.brakeLight ?? false, lampPower(info?.level ?? 0, Math.random));
+        const who = others.map((o) => names.get(o.slot)).filter((n) => n !== undefined && n !== '').join(' · ');
+        d.label = this.label(d.label, who === '' ? undefined : who, pose.x, pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, pose.z, cp);
+        view = d.view;
       }
-      d.seen = true;
-      d.view.setPose(c);
-      d.view.setWheels(streamedWheels(c), dt);
-      // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
-      d.view.setLights(night, c.brakeLight, lampPower(info.level, Math.random));
-      d.view.updateGlare(camera, this.opts.occluded, dt);
-      d.label = this.label(d.label, names.get(info.driver), c.x, c.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, c.z, cp);
+      if (!view || !seatable(view)) continue;
+      const type = this.opts.typeOf(id);
+      for (const o of others) {
+        let occ = this.occupants.get(o.slot);
+        if (occ && (occ.car !== id || occ.seat !== o.seat)) {
+          this.freeFigure(occ);
+          occ = undefined;
+        }
+        if (!occ) {
+          // just got in: from where they were last seen on foot nearby, they walk to their door and get in
+          const from = this.lastFoot.get(o.slot);
+          const near = from && Math.hypot(from.x - pose.x, from.z - pose.z) < 8;
+          const path = near ? boardingPath(CAR_SPECS[type], CAR_SEATS[type], o.seat, toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, from.x, from.z)) : null;
+          occ = { ...this.takeFigure(), car: id, seat: o.seat, seen: true, board: path ? { path, t: 0 } : null, out: null };
+          this.occupants.set(o.slot, occ);
+        }
+        occ.seen = true;
+        occ.out = null;
+        this.dress(occ, variants.get(o.slot) ?? 0);
+        if (occ.board) occ.board.t += dt;
+        const st = occ.board ? enterStage(occ.board.path, occ.board.t) : null;
+        if (st?.done) occ.board = null;
+        poseOccupant(occ.fig, this.scene, view, type, o.seat, pose, st, dt);
+      }
+    }
+    for (const [slot, occ] of this.occupants) {
+      if (occ.seen) continue;
+      // got out: the figure is shown getting out of its door (its walker stays hidden meanwhile, see above); the car
+      // stays drawn as it is until then, also when nobody is left in it
+      const mine = local !== null && local.id === occ.car, d = this.driven.get(occ.car);
+      const view = mine ? this.opts.ownCarView?.() : d?.view, pose = mine ? local.pose : d?.pose;
+      occ.out = (occ.out ?? 0) + dt;
+      const st = leaveStage(occ.out);
+      if (!st.done && view && seatable(view) && pose) {
+        if (d && !mine) {
+          d.seen = true;
+          this.hiding.add(occ.car);
+        }
+        poseOccupant(occ.fig, this.scene, view, this.opts.typeOf(occ.car), occ.seat, pose, st, dt);
+        continue;
+      }
+      if (view && seatable(view)) shutDoors(view, this.opts.typeOf(occ.car));
+      this.freeFigure(occ);
+      this.occupants.delete(slot);
     }
     for (const [id, d] of this.driven) {
       if (d.seen) continue;
@@ -215,6 +374,15 @@ export class RemotePlayers {
       this.driven.delete(id);
     }
     this.parked.setHidden(this.hiding);
+  }
+
+  /** A rider crashing into something: thrown on with the bike's speed, over it if it is low enough (as the sim). */
+  private crashThrow(r: Rider): Vec3 {
+    const B = TUNING.bike, sp = Math.hypot(r.vx, r.vz), rd = this.opts.ragdolls;
+    if (!rd || sp < 0.5) return { x: r.vx, y: B.crashUp, z: r.vz };
+    const dx = r.vx / sp, dz = r.vz / sp;
+    const t = vaultThrow(rd.src, { x: r.x, y: r.y + B.riderHips - TUNING.character.radius, z: r.z }, dx, dz, sp, B.crashUp);
+    return { x: dx * t.speed, y: t.up, z: dz * t.speed };
   }
 
   /** A figure from the pool (or a new one), visible in the scene. */
@@ -295,8 +463,28 @@ export class RemotePlayers {
   }
 }
 
+/** The velocity of the streamed car or ridden bike whose top the feet at p are on, if any. */
+function carrierVelocity(sample: RemoteSampleIn, p: Vec3): { x: number; z: number } | null {
+  for (const c of sample.cars.values()) if (onRoof(c, p)) return { x: c.vx, z: c.vz };
+  for (const r of sample.riders?.values() ?? []) {
+    if (onRoof(headingPose(r), p, BIKE_ROOF)) return { x: Math.sin(r.heading) * r.speed, z: Math.cos(r.heading) * r.speed };
+  }
+  return null;
+}
+
+/** The fastest streamed car within KNOCK_CAR_M of (x, z) (the one that knocked a walker down), if any moves. */
+function fastestCarNear(cars: ReadonlyMap<string, SnapshotCar>, x: number, z: number): SnapshotCar | null {
+  let best: SnapshotCar | null = null, top = 1;
+  for (const c of cars.values()) {
+    const sp = Math.hypot(c.vx, c.vz);
+    if (sp > top && Math.hypot(c.x - x, c.z - z) < KNOCK_CAR_M) { best = c; top = sp; }
+  }
+  return best;
+}
+
 /** Wheels of a streamed car: spin with its speed along the heading and steer as sent; suspension at rest. */
-function streamedWheels(c: SnapshotCar): WheelSource {
+/** What the wheels of a car known only from the snapshots do: speed along its heading and the streamed steering. */
+export function streamedWheels(c: SnapshotCar): WheelSource {
   // forward = local +z rotated by the chassis quaternion
   const fx = 2 * (c.qx * c.qz + c.qw * c.qy), fz = 1 - 2 * (c.qx * c.qx + c.qy * c.qy);
   const speed = c.vx * fx + c.vz * fz;

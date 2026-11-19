@@ -1,7 +1,7 @@
 import type { RemoteCarInfo } from './remote/remote-players';
 import {
   FixedStepper, TUNING, type PlayerId, type PlayerInput, type SimEvent, type SnapshotCar, type SnapshotRider, type SnapshotWalker, type StationId,
-  type WorldSim,
+  type Weather, type WorldSim,
 } from '@nn/shared';
 
 /**
@@ -32,7 +32,14 @@ export interface Session {
   renderOffset(): RenderOffset;
   /** Online only: other players (on foot, driving, riding), cars and names as of this frame. */
   remote?(): { walkers: ReadonlyMap<string, SnapshotWalker>; cars: ReadonlyMap<string, SnapshotCar>; riders: ReadonlyMap<string, SnapshotRider> };
-  roster?(): { names: ReadonlyMap<number, string>; variants: ReadonlyMap<number, number>; cars: ReadonlyMap<number, RemoteCarInfo> };
+  /**
+   * While the local player drives: where another player (slot) stands on the own car's roof, in the car's frame (from
+   * the newest snapshot, where both are of one server tick); null if they are not on it.
+   */
+  onOwnRoof?(slot: number): { x: number; y: number; z: number } | null;
+  roster?(): { names: ReadonlyMap<number, string>; variants: ReadonlyMap<number, number>; cars: ReadonlyMap<number, RemoteCarInfo>; /** car → slot per seat (0 the driver). */ seats?: ReadonlyMap<number, readonly (number | undefined)[]> };
+  /** Online only: the city's weather, or null until the server has real data. */
+  weather?(): Weather | null;
   /** Online only: the own character variant (index into CHARACTER_VARIANTS) changed. */
   setVariant?(v: number): void;
 }

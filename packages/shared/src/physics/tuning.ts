@@ -23,8 +23,15 @@ export const TUNING = {
     runSpeed: 5.5,
     /** Vertical acceleration applied by the character itself (m/s²). */
     gravity: -20,
-    /** Take-off speed of a jump (m/s): apex jumpSpeed² / (2·|gravity|) ≈ 0.76 m. */
-    jumpSpeed: 5.5,
+    /** Take-off speed of a jump (m/s): apex jumpSpeed² / (2·|gravity|) ≈ 1.06 m. */
+    jumpSpeed: 6.5,
+    /**
+     * Jumping while walking or running at something whose top is at most climbMax above the feet (a car, a wall, a
+     * bench) takes off fast enough to get on top of it (climbClear higher), looking up to climbReach ahead.
+     */
+    climbMax: 1.75,
+    climbClear: 0.2,
+    climbReach: 1.0,
     /** Character controller skin width: gap kept between capsule and obstacles. */
     skin: 0.02,
     /** Autostep: highest step climbed without jumping, and minimum free width on top of it. */
@@ -88,6 +95,14 @@ export const TUNING = {
     brake: 60,
     /** Light brake when no throttle is given, so the car rolls to a stop. */
     coastBrake: 2,
+    /**
+     * Handbrake (Space): brake impulse on each rear wheel; while the car moves faster than handbrakeSlideAbove (m/s)
+     * the locked rear tyres keep only handbrakeGrip of their grip along and handbrakeSideGrip of it across.
+     */
+    handbrake: 60,
+    handbrakeGrip: 0.55,
+    handbrakeSideGrip: 0.3,
+    handbrakeSlideAbove: 2,
     /** Parking brake of an unoccupied car. */
     parkingBrake: 50,
 
@@ -139,7 +154,12 @@ export const TUNING = {
     /** Faster than this (km/h) into an obstacle more head-on than crashBlocked (cos of the angle to its normal): the rider falls. */
     crashKmh: 22,
     crashBlocked: 0.7,
-    getUpSeconds: 1.1,
+    /** Seconds without control after a crash: thrown off, tumbling (ragdoll on the client), lying, getting up. */
+    getUpSeconds: 3.8,
+    /** A crashed rider flies on with the speed the bike hit the obstacle with, plus this upwards (m/s). */
+    crashUp: 2.2,
+    /** A rider's hips above the bike's ground (m): a crash throws them from there. */
+    riderHips: 1.0,
     /** Getting off faster than this (km/h) is a jump off; the bike rolls on. */
     dismountJumpKmh: 10,
     /** Parked bikes get a physics body within near (m) of the player, lose it beyond far. */

@@ -1,6 +1,8 @@
 import { BoxGeometry, type Bone, type BufferGeometry, Euler, Group, Matrix4, Mesh, MeshStandardMaterial, type Object3D, Quaternion, SphereGeometry, Vector3, type Scene } from 'three';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from '@nn/shared';
+import type { RagdollWorld } from './ragdoll';
 
 /** Shortest signed angle from a to b (rad). */
 export const angleDelta = (a: number, b: number): number => Math.atan2(Math.sin(b - a), Math.cos(b - a));
@@ -11,9 +13,75 @@ const GET_UP = 0.5;
 /** Knocked down by a car: seconds to fall over backwards and to get up again (setDown). */
 export const DOWN_IN_S = 0.25, DOWN_OUT_S = 0.3;
 
-export type Posture = 'upright' | 'sport' | 'race';
+/**
+ * The ragdoll's centre of mass follows the sim's position (the thrown ball the camera follows, or the streamed
+ * position of another player): a stiff spring and damper towards it and its velocity (1/s², 1/s), the same
+ * acceleration on every part so the body moves as one and only arms, legs and the turning are left to the joints.
+ * TRACK_Y: the centre of mass above the sim's feet position; TRACK_MAX: the most acceleration (m/s²) it applies.
+ */
+const TRACK_K = 50, TRACK_C = 14, TRACK_Y = 0.2, TRACK_MAX = 80;
+
+/**
+ * A get-up keyframe in the frame of the spot the figure will stand on (feet at the origin, facing +z): hip joint
+ * height and forward offset (m, for 0.92 m hips; scaled to the model), pelvis pitch (+ forward), torso and head pitch,
+ * hip flexion and knee bend per leg, arm raise (forward) per arm, arms out to the side, elbow bend.
+ */
+type Key = { t: number; hy: number; hz: number; p: number; torso: number; head: number; hip: [number, number]; knee: [number, number]; arm: [number, number]; out: number; elbow: number };
+/** Squatting on both feet, arms forward for balance; then standing. */
+const SQUAT: Omit<Key, 't'> = { hy: 0.56, hz: -0.28, p: 0.6, torso: 0.15, head: -0.35, hip: [1.95, 1.8], knee: [1.75, 1.6], arm: [0.7, 0.5], out: 0.12, elbow: 0.6 };
+const STAND: Omit<Key, 't'> = { hy: 0.92, hz: 0, p: 0, torso: 0, head: 0, hip: [0, 0], knee: [0, 0], arm: [0, 0], out: 0.05, elbow: 0.15 };
+/** Face down (head towards +z): hands under the shoulders, push up, onto hands and knees, squat, stand. */
+const GET_UP_PRONE: Key[] = [
+  { t: 0, hy: 0.17, hz: 0.45, p: 1.25, torso: 0, head: -0.5, hip: [-0.2, -0.2], knee: [0.15, 0.1], arm: [0.25, 0.25], out: 0.5, elbow: 1.6 },
+  { t: 0.35, hy: 0.38, hz: 0.3, p: 1.25, torso: 0.1, head: -0.55, hip: [0.7, 0.5], knee: [1.1, 0.9], arm: [1.25, 1.25], out: 0.2, elbow: 0.25 },
+  { t: 0.7, hy: 0.5, hz: 0, p: 1.4, torso: 0.05, head: -0.6, hip: [1.5, 1.45], knee: [1.55, 1.55], arm: [1.45, 1.45], out: 0.1, elbow: 0.05 },
+  { t: 1.15, ...SQUAT },
+  { t: 1.65, ...STAND },
+];
+/** Face up (head towards −z): sit up leaning on the hands, knees drawn up, rock forward into a squat, stand. */
+const GET_UP_SUPINE: Key[] = [
+  { t: 0, hy: 0.13, hz: -0.55, p: -1.5, torso: 0, head: 0.35, hip: [0.1, 0.15], knee: [0.2, 0.3], arm: [0.2, 0.2], out: 0.3, elbow: 0.3 },
+  { t: 0.5, hy: 0.14, hz: -0.5, p: -0.35, torso: 0.4, head: 0.1, hip: [2.1, 1.7], knee: [2.2, 1.6], arm: [-0.55, -0.45], out: 0.25, elbow: 0.1 },
+  { t: 1.1, ...SQUAT },
+  { t: 1.6, ...STAND },
+];
+/** Seconds to blend from the ragdoll's last pose into the first get-up keyframe. */
+const RISE_BLEND = 0.3;
+/** Least height (m) of every joint above the ground while getting up. */
+const RISE_CLEAR = 0.03;
+/** The longest get-up (blend and keyframes): the ragdoll lies until this long before the sim lets the player go. */
+export const RISE_S = RISE_BLEND + Math.max(GET_UP_PRONE.at(-1)!.t, GET_UP_SUPINE.at(-1)!.t);
+/**
+ * Joint motors (acceleration-based stiffness, damping) towards the standing rest pose: a little muscle tone, so the
+ * body neither folds like cloth nor stays stiff. Knees are hinges with limits.
+ */
+const TONE = { spine: [40, 6], neck: [25, 3], hip: [8, 1.5], shoulder: [3, 0.8], elbow: [4, 0.8], knee: [3, 0.8] } as const;
+/**
+ * How far the ball joints turn (rad, about the parent's x, y, z; sign conventions of update(): + x bends the torso and
+ * head forward, − x swings a thigh or an arm forward and bends an elbow), so a body lying still is not crumpled.
+ * Sideways (z) ranges are for the left side (+x); the right side mirrors them.
+ */
+type Range = readonly [number, number];
+const RANGE: Record<'spine' | 'neck' | 'hip' | 'shoulder' | 'elbow', readonly [Range, Range, Range]> = {
+  spine: [[-0.5, 1.5], [-0.6, 0.6], [-0.45, 0.45]],
+  neck: [[-0.8, 0.9], [-1.1, 1.1], [-0.5, 0.5]],
+  hip: [[-2.3, 0.5], [-0.6, 0.6], [-0.3, 0.9]],
+  shoulder: [[-3.0, 1.0], [-1.3, 1.3], [-0.5, 2.8]],
+  elbow: [[-2.6, -0.05], [-1.3, 1.3], [-0.4, 0.4]],
+};
+/** Knee hinge range (rad, flexion positive about the shin's x axis). */
+const KNEE_MIN = -0.02, KNEE_MAX = 2.5;
+
+type Vec3 = { x: number; y: number; z: number };
+/**
+ * Ragdoll parts (body, torso, head, thighs, shins, upper arms, forearms) and the part each hangs from: torso and
+ * thighs from the pelvis, head and upper arms from the torso, shins from the thighs, forearms from the upper arms.
+ */
+const RAG_PARENT = [-1, 0, 1, 0, 0, 3, 4, 1, 1, 7, 8];
+
+export type Posture = 'upright' | 'sport' | 'race' | 'standing';
 /** Upper-body pitch on the bike (rad, forward): Dutch/cargo upright, MTB sport, road race. */
-const POSTURE_PITCH: Record<Posture, number> = { upright: 0.17, sport: 0.52, race: 0.87 };
+const POSTURE_PITCH: Record<Posture, number> = { upright: 0.17, sport: 0.52, race: 0.87, standing: 0.06 };
 
 /** How much further than its posture a rider may lean to reach the bar (rad). */
 const MAX_EXTRA_PITCH = 0.6;
@@ -182,6 +250,11 @@ const mirror = (v: Vector3, s: number) => new Vector3(v.x * s, v.y, v.z);
  * legs and arms onto pedals and grips, a fall tips it over. Shown either as a primitive stand-in or, after
  * setModel(), as a skinned character model whose bones follow that skeleton.
  */
+/** Where a seated figure's hands rest on its thighs (left, right), for the hip point `seat`. */
+export function thighRest(seat: Vector3): [Vector3, Vector3] {
+  return [1, -1].map((s) => new Vector3(seat.x + s * 0.13, seat.y + 0.1, seat.z + 0.3)) as [Vector3, Vector3];
+}
+
 export class PlayerFigure {
   readonly group = new Group();
   /** Facing (heading convention, forward = (sin h, cos h)); turns smoothly towards the walking direction. */
@@ -216,8 +289,16 @@ export class PlayerFigure {
   /** Knocked down (setDown): target (0 standing … 1 lying) and the smoothed amount. */
   private downTarget = 0;
   private down = 0;
+  /** Ragdoll (ragdoll()): its parts (body per skeleton group), seconds since it started, when it gets up. */
+  private rag: {
+    world: RagdollWorld; parts: { node: Object3D; body: RAPIER.RigidBody }[]; t: number; upAt: number;
+    /** The sim position last frame and its velocity (smoothed), to track. */
+    last: Vector3 | null; vel: Vector3;
+  } | null = null;
+  /** Getting up from the ragdoll: from its last pose to standing at the sim's position, over RISE_S. */
+  private rise: { t: number; pos: Vector3; q: Quaternion; locals: Quaternion[]; heading: number; keys: Key[]; from: Vector3 } | null = null;
 
-  constructor(scene: Scene) {
+  constructor(private readonly scene: Scene) {
     for (let i = 0; i < 2; i++) {
       const leg = new Group(), shin = new Group(), arm = new Group(), forearm = new Group(), hand = new Group();
       const foot = new Group();
@@ -373,10 +454,21 @@ export class PlayerFigure {
 
   /**
    * Places the figure at the feet position and animates it from its velocity v (m/s): facing turns towards
-   * the horizontal velocity when moving, arms and legs swing, in the air the legs tuck and the arms lift.
-   * During a fall (fall()) it tips over, lies, and gets up again.
+   * the horizontal velocity when moving, arms and legs swing; airborne (jumping, falling: not standing on anything,
+   * from the character controller) the legs tuck and the arms lift. Not from v.y: climbing stairs or a steep ramp
+   * moves up fast while the feet are on the ground. During a fall (fall()) it tips over, lies, and gets up again.
    */
-  update(x: number, y: number, z: number, v: { x: number; y: number; z: number }, dt: number): void {
+  update(x: number, y: number, z: number, v: { x: number; y: number; z: number }, dt: number, airborne = false, facing?: number): void {
+    if (this.rag) {
+      this.tickRagdoll(x, y, z, dt);
+      this.model?.apply();
+      return;
+    }
+    if (this.rise) {
+      this.tickRise(x, y, z, dt);
+      this.model?.apply();
+      return;
+    }
     this.torso.rotation.set(0, 0, 0);
     this.headNode.rotation.set(0, 0, 0);
     if (this.fallT >= 0) {
@@ -386,8 +478,10 @@ export class PlayerFigure {
       return;
     }
     const speed = Math.hypot(v.x, v.z);
-    this.air += ((Math.abs(v.y) > 0.6 ? 1 : 0) - this.air) * Math.min(1, dt * 8);
-    if (speed > 0.2) this.heading += angleDelta(this.heading, Math.atan2(v.x, v.z)) * Math.min(1, dt * 12);
+    this.air += ((airborne ? 1 : 0) - this.air) * Math.min(1, dt * 8);
+    // the sim's facing when given (the same on every client), else towards where it walks
+    if (facing !== undefined) this.heading += angleDelta(this.heading, facing) * Math.min(1, dt * 12);
+    else if (speed > 0.2) this.heading += angleDelta(this.heading, Math.atan2(v.x, v.z)) * Math.min(1, dt * 12);
     const k = Math.min(1, dt * 6);
     // amp: 0 standing … 1 walking; run: 0 walking … 1 running (both smoothed, so gaits blend)
     this.swingAmp += (Math.min(1, speed / 1.2) - this.swingAmp) * k;
@@ -404,7 +498,7 @@ export class PlayerFigure {
     for (let i = 0; i < 2; i++) {
       const g = poses[i]!;
       // the feet land nearer the midline than the hips are apart (more so running)
-      this.legs[i]!.rotation.set(-(g.hip * amp + (i === 0 ? 0.55 : 0.3) * air), 0, -(i === 0 ? 1 : -1) * (0.04 + 0.03 * run) * amp);
+      this.legs[i]!.rotation.set(-(g.hip * amp + (i === 0 ? 0.55 : 0.3) * air), 0, -(i === 0 ? 1 : -1) * (0.04 + 0.03 * run) * amp, 'XYZ');
       this.shins[i]!.rotation.set(g.knee * amp + (i === 0 ? 0.6 : 0.3) * air, 0, 0);
       this.feet[i]!.rotation.set(g.ankle * amp + 0.25 * air, 0, 0);
     }
@@ -458,6 +552,8 @@ export class PlayerFigure {
    */
   ride(seat: Vector3, grips: [Vector3, Vector3], pedals: [Vector3, Vector3], posture: Posture): void {
     this.fallT = -1;
+    this.endRagdoll();
+    this.rise = null;
     const p = this.p;
     this.group.position.set(seat.x, seat.y - p.hip.y, seat.z);
     this.group.rotation.set(0, 0, 0);
@@ -494,6 +590,58 @@ export class PlayerFigure {
     }
     this.group.updateMatrixWorld(true);
     this.model?.apply();
+  }
+
+  /** The hips' height above the feet when standing (m). */
+  get hipHeight(): number {
+    return this.p.hip.y;
+  }
+
+  /**
+   * A whole-body pose by its ends, in the frame the figure hangs in (the caller parents `group`; e.g. a car model,
+   * facing +z): the hips at `hip`, the body turned by `yaw` about the vertical and leaning forward by `pitch`
+   * (negative: back), the ankles on `feet`, the palms on `hands` (two-bone IK each). handTurn: the hands turned about
+   * the forward axis (on a steering wheel); curl: how far the fingers close (0..1).
+   */
+  pose(hip: Vector3, yaw: number, pitch: number, feet: [Vector3, Vector3], hands: [Vector3, Vector3], handTurn = 0, curl = 0.2): void {
+    this.fallT = -1;
+    this.endRagdoll();
+    this.rise = null;
+    const p = this.p;
+    this.group.position.set(hip.x, hip.y - p.hip.y, hip.z);
+    this.group.rotation.set(0, yaw, 0);
+    this.body.position.set(0, 0, 0);
+    this.body.rotation.set(0, 0, 0);
+    this.torso.rotation.set(pitch, 0, 0);
+    this.headNode.rotation.set(-pitch * 0.85, 0, 0); // looking ahead, neither at the roof nor at the floor
+    // the leg solver works in the unturned figure: turn the targets back about the hips' vertical
+    const c = Math.cos(-yaw), sn = Math.sin(-yaw), base = this.group.position;
+    for (let i = 0; i < 2; i++) {
+      this.feet[i]!.rotation.set(0, 0, 0);
+      const dx = feet[i]!.x - base.x, dz = feet[i]!.z - base.z;
+      this.solveLeg(i, new Vector3(base.x + dx * c + dz * sn, feet[i]!.y, base.z - dx * sn + dz * c));
+    }
+    this.group.updateMatrixWorld(true);
+    const turn = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), handTurn);
+    const handRot = [0, 1].map((i) => turn.clone().multiply(gripRotation(i === 0 ? 1 : -1, this.fingerAxis(i))));
+    for (let i = 0; i < 2; i++) {
+      const wrist = hands[i]!.clone().add(GRIP_PALM).sub(this.segs(i).palm.applyQuaternion(handRot[i]!));
+      this.solveArm(i, this.group.parent ? this.group.parent.localToWorld(wrist) : wrist);
+      this.orientHand(i, handRot[i]!);
+      this.curlFingers(i, curl);
+    }
+    this.group.updateMatrixWorld(true);
+    this.model?.apply();
+  }
+
+  /**
+   * Sitting in a car (see pose): hips on `seat`, leaning back by `recline`, feet on the floor at `feet`, hands on the
+   * wheel at `grips` – or resting on the thighs without.
+   */
+  sit(seat: Vector3, feet: [Vector3, Vector3], grips: [Vector3, Vector3] | null, recline: number): void {
+    const hands = grips ?? thighRest(seat);
+    const across = hands[0].clone().sub(hands[1]);
+    this.pose(seat, 0, -recline, feet, hands, grips ? Math.atan2(across.y, across.x) : 0, grips ? 1 : 0.2);
   }
 
   /** How far (m) the lower of ball and heel of foot i is below its rest height (negative: above), body at 0. */
@@ -540,12 +688,19 @@ export class PlayerFigure {
     hand.quaternion.copy(part.invert().multiply(resid));
   }
 
-  /** Two-bone IK in the leg's y/z plane: the ball of the foot onto `pedal` (in the group's parent frame). */
+  /**
+   * Two-bone IK: the ball of the foot onto `pedal` (in the group's parent frame). The knee bends in the leg's y/z plane;
+   * a pedal (or scooter deck spot) beside the hip rolls that plane about the forward axis (Euler order ZYX: pitch
+   * first, then the roll), so feet can stand closer together than the hips.
+   */
   private solveLeg(i: number, pedal: Vector3): void {
     const { thigh, shin } = this.segs(i);
     const hip = this.legs[i]!.position;
     const base = this.group.position;
-    const dy = pedal.y - base.y - hip.y, dz = pedal.z - base.z - hip.z;
+    const dx = pedal.x - base.x - hip.x; // thigh and shin hang straight below the hip (no x offset)
+    const dy0 = pedal.y - base.y - hip.y, dz = pedal.z - base.z - hip.z;
+    const roll = Math.atan2(dx, -dy0);
+    const dy = -Math.hypot(dx, dy0); // the hip → pedal distance down the rolled leg plane
     const L1 = Math.hypot(thigh.y, thigh.z), L2 = Math.hypot(shin.y, shin.z);
     const D = Math.min(L1 + L2 - 1e-4, Math.max(Math.abs(L1 - L2) + 1e-4, Math.hypot(dy, dz)));
     const toward = Math.atan2(dz, -dy); // forward angle of hip → pedal
@@ -555,7 +710,7 @@ export class PlayerFigure {
     const thighAbs = toward + hipBend;
     const shinAbs = thighAbs - (Math.PI - kneeIn);
     const r1 = Math.atan2(thigh.z, -thigh.y) - thighAbs;
-    this.legs[i]!.rotation.set(r1, 0, 0);
+    this.legs[i]!.rotation.set(r1, 0, roll, 'ZYX');
     this.shins[i]!.rotation.set(Math.atan2(shin.z, -shin.y) - shinAbs - r1, 0, 0);
   }
 
@@ -588,7 +743,7 @@ export class PlayerFigure {
     this.upAt = TUNING.bike.getUpSeconds - GET_UP;
     this.group.rotation.set(0, direction, 0);
     this.heading = direction;
-    this.legs.forEach((l) => l.rotation.set(0, 0, 0));
+    this.legs.forEach((l) => l.rotation.set(0, 0, 0, 'XYZ'));
     this.shins.forEach((s) => s.rotation.set(0.3, 0, 0));
     this.feet.forEach((f) => f.rotation.set(0.3, 0, 0));
     this.forearms.forEach((f) => f.quaternion.setFromEuler(new Euler(-0.3, 0, 0)));
@@ -597,6 +752,8 @@ export class PlayerFigure {
 
   /** Standing at once: no fall in progress, not knocked down (a pooled figure handed to another player). */
   reset(): void {
+    this.endRagdoll();
+    this.rise = null;
     this.fallT = -1;
     this.upAt = Infinity;
     this.down = this.downTarget = 0;
@@ -607,11 +764,244 @@ export class PlayerFigure {
   /** Starts getting up now (if lying). */
   getUp(): void {
     if (this.fallT >= 0) this.upAt = Math.min(this.upAt, this.fallT);
+    if (this.rag) this.rag.upAt = Math.min(this.rag.upAt, this.rag.t);
   }
 
   /** Falling, lying or getting up: no control. */
   get busy(): boolean {
-    return this.fallT >= 0;
+    return this.fallT >= 0 || !!this.rag || !!this.rise;
+  }
+
+  /** A ragdoll is tumbling, or the figure is getting up from one. */
+  get ragdolling(): boolean {
+    return !!this.rag || !!this.rise;
+  }
+
+  /**
+   * Goes limp from the current pose (riding or walking, wherever the group hangs) as a ragdoll in `world`: every part
+   * starts with velocity v, plus a spin about the horizontal axis across v (spin > 0: head first along v, as over the
+   * handlebar; < 0: legs swept away). Gets up after `upSeconds` (the last RISE_S of it getting up) at the position
+   * update() is given, which it is drawn towards while lying. A ragdoll already going is left alone.
+   */
+  ragdoll(world: RagdollWorld, v: Vec3, spin: number, upSeconds: number): void {
+    if (this.rag) return;
+    this.fallT = -1;
+    this.upAt = Infinity;
+    this.rise = null;
+    this.down = this.downTarget = 0;
+    const R = world.R, p = this.p;
+    this.group.updateWorldMatrix(true, true);
+    const nodes: Object3D[] = [this.body, this.torso, this.headNode, ...this.legs, ...this.shins, ...this.arms, ...this.forearms];
+    const pos = nodes.map((n) => n.getWorldPosition(new Vector3()));
+    const rot = nodes.map((n) => n.getWorldQuaternion(new Quaternion()));
+    // spin about the axis up × v̂, centred on the hips
+    const hv = Math.hypot(v.x, v.z);
+    const omega = (hv > 1e-3 ? new Vector3(v.z / hv, 0, -v.x / hv) : new Vector3()).multiplyScalar(spin);
+    const hips = pos[0]!.clone().add(new Vector3(0, p.hip.y, 0).applyQuaternion(rot[0]!));
+    const parts = nodes.map((node, k) => {
+      const w = omega.clone().cross(pos[k]!.clone().sub(hips));
+      const body = world.addBody(pos[k]!, rot[k]!, { x: v.x + w.x, y: v.y + w.y, z: v.z + w.z });
+      body.setAngvel({ x: omega.x, y: omega.y, z: omega.z }, true);
+      return { node, body };
+    });
+    /** A capsule from `from` to `to` (in the body's frame). */
+    const capsule = (body: RAPIER.RigidBody, to: Vector3, radius: number, from = new Vector3()) => {
+      const d = to.clone().sub(from), len = d.length();
+      const q = new Quaternion().setFromUnitVectors(new Vector3(0, 1, 0), d.clone().normalize());
+      const mid = from.clone().addScaledVector(d, 0.5);
+      world.addCollider(R.ColliderDesc.capsule(Math.max(0.01, len / 2 - radius * 0.5), radius).setTranslation(mid.x, mid.y, mid.z)
+        .setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }), body);
+    };
+    const [pelvis, torso, head] = parts.map((x) => x.body) as [RAPIER.RigidBody, RAPIER.RigidBody, RAPIER.RigidBody];
+    const neck = this.headNode.position.clone();
+    world.addCollider(R.ColliderDesc.roundCuboid(p.hip.x + 0.02, 0.07, 0.06, 0.05).setTranslation(0, p.hip.y + 0.02, 0), pelvis);
+    world.addCollider(R.ColliderDesc.roundCuboid(Math.max(0.08, p.shoulder.x - 0.13), Math.max(0.05, neck.y / 2 - 0.08), 0.06, 0.05)
+      .setTranslation(0, neck.y / 2, 0), torso);
+    world.addCollider(R.ColliderDesc.ball(0.11).setTranslation(0, 0.12, 0.01), head);
+    const joint = (a: RAPIER.RigidBody, b: RAPIER.RigidBody, anchor: Vector3, tone: readonly [number, number], range: readonly [Range, Range, Range], side = 1) => {
+      const j = world.world.createImpulseJoint(R.JointData.spherical(anchor, { x: 0, y: 0, z: 0 }), a, b, true);
+      // rapier.js 0.21 reports a spherical joint as generic and wraps it without the motor methods: borrow them
+      const S = R.SphericalImpulseJoint.prototype;
+      for (const ax of [R.JointAxis.AngX, R.JointAxis.AngY, R.JointAxis.AngZ]) {
+        S.configureMotorModel.call(j, ax, R.MotorModel.AccelerationBased);
+        S.configureMotorPosition.call(j, ax, 0, tone[0], tone[1]);
+      }
+      // limits per angular axis (the raw set takes any axis; the generic wrapper has no setter for them)
+      const raw = (j as unknown as { rawSet: { jointSetLimits(h: number, axis: number, min: number, max: number): void } }).rawSet;
+      const [rx, ry, rz] = range;
+      raw.jointSetLimits(j.handle, R.JointAxis.AngX, rx[0], rx[1]);
+      raw.jointSetLimits(j.handle, R.JointAxis.AngY, ry[0], ry[1]);
+      raw.jointSetLimits(j.handle, R.JointAxis.AngZ, side > 0 ? rz[0] : -rz[1], side > 0 ? rz[1] : -rz[0]);
+    };
+    joint(pelvis, torso, this.torso.position, TONE.spine, RANGE.spine);
+    joint(torso, head, neck, TONE.neck, RANGE.neck);
+    for (let i = 0; i < 2; i++) {
+      const thigh = parts[3 + i]!.body, shin = parts[5 + i]!.body, upper = parts[7 + i]!.body, fore = parts[9 + i]!.body;
+      const knee = this.shins[i]!.position, ankle = this.feet[i]!.position, elbow = this.forearms[i]!.position;
+      capsule(thigh, knee, 0.075);
+      capsule(shin, ankle, 0.06);
+      // the foot: a box from the ankle forward to the ball
+      world.addCollider(R.ColliderDesc.cuboid(0.045, 0.035, 0.12).setTranslation(ankle.x, ankle.y - 0.03, ankle.z + 0.05), shin);
+      capsule(upper, elbow, 0.055);
+      capsule(fore, this.hands[i]!.position.clone().add(this.segs(i).palm), 0.045);
+      const side = i === 0 ? 1 : -1;
+      joint(pelvis, thigh, this.legs[i]!.position, TONE.hip, RANGE.hip, side);
+      joint(torso, upper, this.arms[i]!.position, TONE.shoulder, RANGE.shoulder, side);
+      joint(upper, fore, elbow, TONE.elbow, RANGE.elbow, side);
+      const k = world.world.createImpulseJoint(R.JointData.revolute(knee, { x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }), thigh, shin, true) as RAPIER.RevoluteImpulseJoint;
+      k.setLimits(KNEE_MIN, KNEE_MAX);
+      k.configureMotorModel(R.MotorModel.AccelerationBased);
+      k.configureMotorPosition(0, TONE.knee[0], TONE.knee[1]);
+      this.feet[i]!.rotation.set(0.15, 0, 0);
+      this.hands[i]!.quaternion.identity();
+      this.curlFingers(i, 0.25);
+    }
+    world.use(true);
+    world.cover(hips.x, hips.z);
+    // the figure now hangs in the scene at the origin; the parts carry it
+    this.scene.add(this.group);
+    this.group.position.set(0, 0, 0);
+    this.group.rotation.set(0, 0, 0);
+    this.rag = { world, parts, t: 0, upAt: Math.max(0.3, upSeconds - RISE_S), last: null, vel: new Vector3(v.x, v.y, v.z) };
+    this.readRagdoll();
+    this.model?.apply();
+  }
+
+  /** Drops the ragdoll's bodies (if any). */
+  private endRagdoll(): void {
+    const rag = this.rag;
+    if (!rag) return;
+    for (const { body } of rag.parts) rag.world.world.removeRigidBody(body);
+    rag.world.use(false);
+    this.rag = null;
+  }
+
+  /** The skeleton groups from the parts: the pelvis in the scene (group at the origin), the others relative to their parent. */
+  private readRagdoll(): void {
+    const parts = this.rag!.parts;
+    const world = parts.map(({ body }) => {
+      const r = body.rotation();
+      return new Quaternion(r.x, r.y, r.z, r.w);
+    });
+    const t = parts[0]!.body.translation();
+    this.body.position.set(t.x, t.y, t.z);
+    this.body.quaternion.copy(world[0]!);
+    for (let k = 1; k < parts.length; k++) parts[k]!.node.quaternion.copy(world[RAG_PARENT[k]!]!.clone().invert().multiply(world[k]!));
+  }
+
+  private tickRagdoll(x: number, y: number, z: number, dt: number): void {
+    const rag = this.rag!;
+    rag.t += dt;
+    // the whole body's centre of mass and velocity
+    let m = 0;
+    const c = new Vector3(), v = new Vector3();
+    for (const { body } of rag.parts) {
+      const bm = body.mass(), p = body.worldCom(), lv = body.linvel();
+      m += bm;
+      c.x += p.x * bm; c.y += p.y * bm; c.z += p.z * bm;
+      v.x += lv.x * bm; v.y += lv.y * bm; v.z += lv.z * bm;
+    }
+    c.divideScalar(m);
+    v.divideScalar(m);
+    rag.world.cover(c.x, c.z);
+    // follow the sim's position: where it is and how fast it moves (from frame to frame, smoothed)
+    const target = new Vector3(x, y + TRACK_Y, z);
+    if (rag.last && dt > 1e-4) rag.vel.lerp(target.clone().sub(rag.last).divideScalar(dt), Math.min(1, dt * 20));
+    rag.last = target.clone();
+    const a = target.sub(c).multiplyScalar(TRACK_K).add(rag.vel.clone().sub(v).multiplyScalar(TRACK_C));
+    if (a.length() > TRACK_MAX) a.setLength(TRACK_MAX);
+    for (const { body } of rag.parts) {
+      const k = body.mass() * dt;
+      body.applyImpulse({ x: a.x * k, y: a.y * k, z: a.z * k }, true);
+    }
+    this.readRagdoll();
+    // fell through the world (a gap in the copied surroundings): stand up where the sim is
+    if (rag.t >= rag.upAt || y - c.y > 20) this.startRise();
+  }
+
+  /**
+   * From the ragdoll's last pose: the bodies go and the figure gets up the way a person does from how it lies — face
+   * down over hands and knees, face up by sitting up — facing along its body (head first face down, feet first face up).
+   */
+  private startRise(): void {
+    const q = this.body.quaternion.clone();
+    const prone = new Vector3(0, 0, 1).applyQuaternion(q).y < 0; // the chest faces the ground
+    const head = new Vector3(0, 1, 0).applyQuaternion(q);
+    const heading = prone ? Math.atan2(head.x, head.z) : Math.atan2(-head.x, -head.z);
+    const keys = prone ? GET_UP_PRONE : GET_UP_SUPINE;
+    // where the first keyframe's hips are is where the ragdoll's hips lie: that places the standing spot
+    const hips = this.body.position.clone().add(new Vector3(0, this.p.hip.y, 0).applyQuaternion(q));
+    const sc = this.p.hip.y / 0.92;
+    const from = hips.sub(new Vector3(0, 0, keys[0]!.hz * sc).applyAxisAngle(new Vector3(0, 1, 0), heading));
+    const locals = this.riseNodes().map((n) => n.quaternion.clone());
+    this.rise = { t: 0, pos: this.body.position.clone(), q, locals, heading, keys, from };
+    this.endRagdoll();
+  }
+
+  private riseNodes(): Object3D[] {
+    return [this.torso, this.headNode, ...this.legs, ...this.shins, ...this.arms, ...this.forearms, ...this.feet];
+  }
+
+  /** Poses the skeleton as keyframe k, standing spot `at` (feet), facing `heading` (group at the origin). */
+  private poseKey(k: Omit<Key, 't'>, at: Vector3, heading: number): void {
+    const sc = this.p.hip.y / 0.92;
+    const yaw = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), heading);
+    this.body.quaternion.copy(yaw).multiply(new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), k.p));
+    const hips = new Vector3(0, k.hy * sc, k.hz * sc).applyQuaternion(yaw).add(at);
+    this.body.position.copy(hips).sub(new Vector3(0, this.p.hip.y, 0).applyQuaternion(this.body.quaternion));
+    this.torso.rotation.set(k.torso, 0, 0);
+    this.headNode.rotation.set(k.head, 0, 0);
+    for (let i = 0; i < 2; i++) {
+      const s = i === 0 ? 1 : -1;
+      this.legs[i]!.rotation.set(-k.hip[i]!, 0, 0);
+      this.shins[i]!.rotation.set(k.knee[i]!, 0, 0);
+      // the feet stay flat on the ground (from the shin's forward tilt), within what an ankle bends
+      const shinTilt = k.hip[i]! - k.p - k.knee[i]!;
+      this.feet[i]!.rotation.set(Math.max(-0.7, Math.min(0.7, shinTilt)), 0, 0);
+      this.arms[i]!.rotation.set(-k.arm[i]!, 0, s * k.out);
+      this.forearms[i]!.rotation.set(-k.elbow, 0, 0);
+    }
+  }
+
+  private tickRise(x: number, y: number, z: number, dt: number): void {
+    const r = this.rise!;
+    r.t += dt;
+    const keys = r.keys, end = RISE_BLEND + keys.at(-1)!.t;
+    // the standing spot moves from below the lying body to where the sim has the player
+    const at = r.from.clone().lerp(new Vector3(x, 0, z), smooth(Math.min(1, r.t / end))).setY(y);
+    const kt = Math.max(0, r.t - RISE_BLEND);
+    let j = 0;
+    while (j < keys.length - 2 && keys[j + 1]!.t <= kt) j++;
+    const a = keys[j]!, b = keys[j + 1]!;
+    const u = smooth(Math.min(1, Math.max(0, (kt - a.t) / (b.t - a.t))));
+    const m = (x0: number, x1: number) => mix(x0, x1, u);
+    this.poseKey({
+      hy: m(a.hy, b.hy), hz: m(a.hz, b.hz), p: m(a.p, b.p), torso: m(a.torso, b.torso), head: m(a.head, b.head),
+      hip: [m(a.hip[0], b.hip[0]), m(a.hip[1], b.hip[1])], knee: [m(a.knee[0], b.knee[0]), m(a.knee[1], b.knee[1])],
+      arm: [m(a.arm[0], b.arm[0]), m(a.arm[1], b.arm[1])], out: m(a.out, b.out), elbow: m(a.elbow, b.elbow),
+    }, at, r.heading);
+    if (r.t < RISE_BLEND) {
+      // out of the ragdoll's pose into the first keyframe
+      const w = smooth(r.t / RISE_BLEND);
+      this.body.position.lerpVectors(r.pos, this.body.position.clone(), w);
+      this.body.quaternion.slerpQuaternions(r.q, this.body.quaternion.clone(), w);
+      this.riseNodes().forEach((n, i) => n.quaternion.slerpQuaternions(r.locals[i]!, n.quaternion.clone(), w));
+    }
+    // no joint below the ground (the blend and the keyframes are not exact for every build): lift the whole body
+    this.group.updateMatrixWorld(true);
+    let low = Infinity;
+    const p = new Vector3();
+    for (const n of [this.headNode, ...this.riseNodes(), ...this.hands]) low = Math.min(low, n.getWorldPosition(p).y);
+    if (low < y + RISE_CLEAR) this.body.position.y += y + RISE_CLEAR - low;
+    if (r.t < end) return;
+    // standing: back to the normal frame (group at the feet, turned to the heading)
+    this.rise = null;
+    this.heading = r.heading;
+    this.body.position.set(0, 0, 0);
+    this.body.quaternion.identity();
+    this.riseNodes().forEach((n) => n.quaternion.identity());
+    this.group.position.set(x, y, z);
+    this.group.rotation.set(0, r.heading, 0, 'YXZ');
   }
 
   /** Pitch of the upper body (rad, + = forward). */

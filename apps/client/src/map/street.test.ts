@@ -10,7 +10,7 @@ const data: MapData = {
     { kind: 'residential', name: 'B', width: 6, pts: [0, -100, 0, 100] },
     { kind: 'footway', width: 2, pts: [-100, 5, 100, 5] },
   ],
-  buildings: [], greens: [], squares: [], tram: [], tramStops: [],
+  buildings: [], greens: [], water: [], squares: [], tram: [], tramStops: [],
 };
 const make = () => new StreetTracker(data, new MapGrid(data));
 

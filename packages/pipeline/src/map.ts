@@ -18,7 +18,7 @@ function roofTriangles(b: BuildingMesh): number[] {
 }
 
 /** Vector map for the client (minimap and big map): coordinates rounded to 0.1 m, validated against the shared schema. */
-export function buildMapData(f: OsmFeatures, buildings: BuildingMesh[]): MapData {
+export function buildMapData(f: OsmFeatures, buildings: BuildingMesh[], water: Pt[][] = []): MapData {
   const boundary = flatten(f.boundary);
   const roads = f.roads.map((r) => ({ kind: r.kind, ...(r.name !== undefined ? { name: r.name } : {}), width: r.width, pts: flatten(r.points) }));
   let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
@@ -37,6 +37,7 @@ export function buildMapData(f: OsmFeatures, buildings: BuildingMesh[]): MapData
     roads,
     buildings: buildings.map(roofTriangles).filter((t) => t.length > 0),
     greens: f.greens.map(flatten),
+    water: water.map(flatten),
     squares: f.squares.map((s) => ({ name: s.name, pts: flatten(s.outline) })),
     tram: f.tramTracks.map(flatten),
     tramStops: f.tramStops.map((s) => ({ name: s.name, x: r1(s.pos.x), z: r1(s.pos.z) })),

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { decodeSnapshot, encodeSnapshot, NEUTRAL_INPUT, type PlayerInput, type Snapshot } from '../net/codec';
 import { Interest } from '../net/interest';
 import type { WorldAssets } from './assets';
-import { fixtureAssets, haveRealAssets, realAssets } from './fixture.test-util';
+import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from './fixture.test-util';
 import { ownStateOf, predictionMatches } from './replay';
 import { headingOf, type CarPose } from './rules';
 import { buildSnapshot } from './snapshot';
@@ -79,7 +79,7 @@ describe('WorldSim.replay', () => {
       sim.step(new Map([[1, N]]));
     }
     expect(asleep()).toEqual(before);
-  }, 30_000);
+  }, WHOLE_CITY_TIMEOUT);
 
   test('replay from a saved state retraces the stepped path', async () => {
     const sim = await WorldSim.create(fixtureAssets());
@@ -121,7 +121,7 @@ describe('predictionMatches', () => {
   }, 30_000);
 
   test('driving: equal states match; position, velocity, rotation or car off do not', async () => {
-    const { pred, truth } = await twins((t) => (t === 10 ? { ...N, use: true } : t > 150 ? { ...N, forward: 1, right: 0.3 } : N), 240);
+    const { pred, truth } = await twins((t) => (t === 10 ? { ...N, use: true } : t > 360 ? { ...N, forward: 1, right: 0.3 } : N), 450); // (the engine runs once the figure sits)
     expect(pred.mode).toBe('drive');
     expect(Math.hypot(pred.vel.x, pred.vel.z)).toBeGreaterThan(2);
     expect(predictionMatches(pred, truth)).toBe(true);
@@ -159,14 +159,16 @@ for (const [name, assets, skip] of worlds) {
     /**
      * Spec 13.3: a server sim (own player 1 plus a bystander, player 2) and a client prediction sim (player 1, the
      * bystander as a proxy) run the same inputs; after every 3rd tick the snapshot goes through the codec and the
-     * client reconciles at once (0 ms latency). Returns the largest position error seen before a reconciliation.
+     * client reconciles at once (0 ms latency). Returns the largest position error seen before a reconciliation. The
+     * client streams its city (as in the browser), the server has all of it.
      */
     async function run(ticks: number, input: (t: number, s: WorldSim) => PlayerInput, car: number | null, bike: number | null = null): Promise<number> {
       const a = await assets();
       const server = await WorldSim.create(a);
-      const client = await WorldSim.create(a);
       const at = car !== null ? leftOf(server.cars.poses[car]!, 2.5)
         : bike !== null ? leftOfBike(server.bikes.poses[bike]!, 1) : a.manifest.spawn;
+      // the client as in the browser: only the city around its player has colliders
+      const client = await WorldSim.create(a, { streamCity: [at] });
       server.addPlayer(1, at);
       client.addPlayer(1, at);
       server.addPlayer(2, { x: at.x + 1.5, z: at.z - 1.5 });
@@ -195,7 +197,7 @@ for (const [name, assets, skip] of worlds) {
     test('prediction matches server at 0 ms latency: walking', async () => {
       const err = await run(600, () => ({ ...N, forward: 1, run: true }), null);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('prediction matches server at 0 ms latency: driving', async () => {
       const a = await assets();
@@ -207,7 +209,7 @@ for (const [name, assets, skip] of worlds) {
         return { ...N, forward: t > 100 ? 1 : 0, yaw: p.car ? headingOf(p.car) : 0 };
       }, car);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
 
     test('prediction matches server at 0 ms latency: riding', async () => {
       const a = await assets();
@@ -222,7 +224,7 @@ for (const [name, assets, skip] of worlds) {
       expect(rode).toBe(true);
       expect(a.manifest.bikes.length).toBeGreaterThan(0);
       expect(err).toBeLessThan(MAX_PREDICTION_ERROR);
-    }, 60_000);
+    }, WHOLE_CITY_TIMEOUT);
   });
 }
 

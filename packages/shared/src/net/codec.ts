@@ -70,12 +70,13 @@ export function decodeInputs(b: Uint8Array): InputPacket | null {
 
 // -------------------------------------------------------------- snapshot
 
-export type OwnMode = 0 | 1 | 2 | 3; // walk / drive / down / ride
+export type OwnMode = 0 | 1 | 2 | 3 | 4; // walk / drive / down / ride / sit (riding along)
 export type EngineState = 0 | 1 | 2; // off / starting / running
 /** standing / walking / down (knocked over by a car) / fallen (off a bike: lying and getting up). */
 export type WalkerState = 0 | 1 | 2 | 3;
 
 /** Walker position range on the wire: x/z int24 cm (±83 km), y int16 cm (±327 m); values are clamped. */
+/** yaw: the way the walker's body faces (the sim's facing, not their camera). */
 export type SnapshotWalker = { slot: number; x: number; y: number; z: number; yaw: number; speed: number; state: WalkerState };
 /** horn: the driver holds the horn. */
 export type SnapshotCar = {
@@ -100,11 +101,12 @@ export type SnapshotEvent =
   | { t: 'bell'; slot: number; x: number; z: number };
 
 /**
- * The own player in full (for reconciliation). carId: the car while driving (0 otherwise; car null), bikeId: the bike
+ * The own player in full (for reconciliation). carId: the car while driving (car set) or riding along in it (mode 4,
+ * with `seat` ≥ 1; car null); 0 otherwise, bikeId: the bike
  * while riding (0 otherwise; bike null), fallTicks: ticks left lying after falling off a bike.
  */
 export type SnapshotOwn = {
-  mode: OwnMode; engine: EngineState; carId: number; char: CharacterState; car: VehicleState | null;
+  mode: OwnMode; engine: EngineState; carId: number; seat: number; char: CharacterState; car: VehicleState | null;
   bikeId: number; fallTicks: number; bike: BikeState | null;
 };
 export type Snapshot = {
@@ -221,7 +223,7 @@ export function encodeSnapshot(full: Snapshot): Uint8Array {
   w.u8(s.events.length);
 
   w.u8(own.mode);
-  w.u8(own.engine);
+  w.u8(own.engine | (clampInt(own.seat, 0, 15) << 2)); // the seat shares the engine's byte
   w.u16(own.carId);
   w.u8((own.char.grounded ? 1 : 0) | (own.car ? 2 : 0) | (own.bike ? 4 : 0) | (own.bike?.grounded ? 8 : 0));
   w.u16(own.char.downTicks);
@@ -307,13 +309,13 @@ export function decodeSnapshot(b: Uint8Array): Snapshot | null {
   const nEvents = r.u8();
 
   const mode = r.u8();
-  const engine = r.u8();
+  const engineSeat = r.u8(), engine = engineSeat & 3, seat = engineSeat >> 2;
   const carId = r.u16();
   const flags = r.u8();
   const downTicks = r.u16();
   const bikeId = r.u16();
   const fallTicks = r.u8();
-  if (mode > 3 || engine > 2) return null;
+  if (mode > 4 || engine > 2) return null;
   const hasCar = (flags & 2) !== 0, hasBike = (flags & 4) !== 0;
   const need = (hasCar ? 4 * CAR_FIELDS.length : 0) + (hasBike ? 8 * BIKE_FIELDS.length : 0) + 4 * CHAR_FIELDS.length +
     nWalkers * WALKER_SIZE + nCars * CAR_SIZE + nRiders * RIDER_SIZE + nBikes * BIKE_SIZE + nLamps * LAMP_SIZE + nEvents * 2;
@@ -406,7 +408,7 @@ export function decodeSnapshot(b: Uint8Array): Snapshot | null {
   if (r.left !== 0) return null;
   return {
     serverTick, ackSeq,
-    own: { mode: mode as OwnMode, engine: engine as EngineState, carId, char, car, bikeId, fallTicks, bike },
+    own: { mode: mode as OwnMode, engine: engine as EngineState, carId, seat, char, car, bikeId, fallTicks, bike },
     walkers, cars, riders, bikes, lamps, events,
   };
 }

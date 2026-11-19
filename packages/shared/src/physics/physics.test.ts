@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
+import { headingOf } from '../sim/rules';
 import { FixedStepper } from './step';
 import { TUNING } from './tuning';
 import { Vehicle, VEHICLE_REST_Y, type VehicleInput } from './vehicle';
@@ -14,7 +15,8 @@ const DT = 1 / 60;
 const KMH = 3.6;
 
 /** Mini scene: ground ±300 m at y = 0, a wall at x = 10 (10..10.5, 4 m high),
- *  a 0.12 m kerb slab from z = 5 to z = 40 (x −100..9), boundary square ±250. */
+ *  a 0.12 m kerb slab from z = 5 to z = 40 (x −100..9), a 1.4 m block (x 196..200, z 196..199),
+ *  boundary square ±250. */
 function miniScene(): CollisionAsset {
   const v: number[] = [];
   const idx: number[] = [];
@@ -34,6 +36,7 @@ function miniScene(): CollisionAsset {
   quad([-300, 0, -300], [-300, 0, 300], [300, 0, 300], [300, 0, -300]);
   box(10, 0, -300, 10.5, 4, 300);
   box(-100, 0, 5, 9, 0.12, 40);
+  box(196, 0, 196, 200, 1.4, 199);
   return {
     vertices: new Float32Array(v),
     indices: new Uint32Array(idx),
@@ -49,6 +52,9 @@ function runChar(pw: PhysicsWorld, c: Character, input: CharacterInput, seconds:
     pw.step();
   }
 }
+
+/** b − a, wrapped to −π..π. */
+const angleDelta = (a: number, b: number): number => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 
 function runCar(pw: PhysicsWorld, car: Vehicle, input: VehicleInput, seconds: number, each?: () => void) {
   for (let i = 0; i < Math.round(seconds * 60); i++) {
@@ -323,7 +329,7 @@ describe('character', () => {
     expect(c.position().x).toBeGreaterThan(9);
   });
 
-  test('jump: rises about 0.75 m, lands again, no second jump in the air', async () => {
+  test('jump: rises about 1 m, lands again, no second jump in the air', async () => {
     const pw = await createPhysicsWorld(miniScene());
     const c = new Character(pw, { x: 0, y: 0, z: -20 });
     runChar(pw, c, idle, 0.5);
@@ -335,9 +341,33 @@ describe('character', () => {
       pw.step();
       top = Math.max(top, c.position().y);
     }
-    expect(top).toBeGreaterThan(0.6);
-    expect(top).toBeLessThan(0.95);
+    expect(top).toBeGreaterThan(0.9);
+    expect(top).toBeLessThan(1.2);
     expect(c.position().y).toBeCloseTo(0, 1); // landed after 1.5 s
+  });
+
+  test('jumping while running at a 1.4 m block climbs onto it; at a 4 m wall it is a plain jump', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const c = new Character(pw, { x: 198, y: 0, z: 192 });
+    runChar(pw, c, idle, 0.3);
+    const run = { forward: 1, right: 0, run: true, yaw: 0 };
+    // run at the block (face at z = 196), jump about 1 m before it, keep running
+    while (c.position().z < 194.8) runChar(pw, c, run, 1 / 60);
+    c.applyInput({ ...run, jump: true });
+    pw.step();
+    runChar(pw, c, run, 0.8);
+    expect(c.position().y).toBeCloseTo(1.4, 1);
+    expect(c.position().z).toBeGreaterThan(196);
+
+    const w = new Character(pw, { x: 8, y: 0, z: -20 });
+    runChar(pw, w, idle, 0.3);
+    const towards = { forward: 1, right: 0, run: true, yaw: Math.PI / 2 };
+    while (w.position().x < 9.2) runChar(pw, w, towards, 1 / 60);
+    w.applyInput({ ...towards, jump: true });
+    pw.step();
+    let top = 0;
+    for (let i = 0; i < 60; i++) { w.applyInput(towards); pw.step(); top = Math.max(top, w.position().y); }
+    expect(top).toBeLessThan(1.2);
   });
 
   test('setEnabled(false) removes it from collision queries', async () => {
@@ -396,22 +426,66 @@ describe('vehicle', () => {
     expect(car.pose().z).toBeLessThan(-10);
   });
 
-  test('braking from top speed stops within 13 m, both via brake and via reverse throttle', async () => {
-    for (const input of [{ throttle: 0, steer: 0, brake: true }, { throttle: -1, steer: 0, brake: false }]) {
-      const pw = await createPhysicsWorld(miniScene());
-      const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI }); // heading north (−z)
-      car.setOccupied(true);
-      runCar(pw, car, full, 10);
-      const z0 = car.pose().z;
-      let steps = 0;
-      while (car.speed() > 0.3 && steps < 300) {
-        car.applyInput(input);
-        pw.step();
-        steps++;
-      }
-      expect(z0 - car.pose().z).toBeLessThan(13);
-      expect(car.wheelsInContact()).toBe(4); // no nose-dive flip
+  /** From top speed heading north: holds `input` until the car stands (or 6 s); returns the distance covered. */
+  const stopWith = async (input: VehicleInput): Promise<{ dist: number; car: Vehicle }> => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI }); // heading north (−z)
+    car.setOccupied(true);
+    runCar(pw, car, full, 10);
+    const z0 = car.pose().z;
+    let steps = 0;
+    while (car.speed() > 0.3 && steps < 360) {
+      car.applyInput(input);
+      pw.step();
+      steps++;
     }
+    return { dist: z0 - car.pose().z, car };
+  };
+
+  test('braking from top speed (reverse throttle) stops within 13 m', async () => {
+    const { dist, car } = await stopWith({ throttle: -1, steer: 0, brake: false });
+    expect(dist).toBeLessThan(13);
+    expect(car.wheelsInContact()).toBe(4); // no nose-dive flip
+  });
+
+  test('the handbrake works on the rear wheels only: it stops the car, but takes clearly longer than the brakes', async () => {
+    const foot = await stopWith({ throttle: -1, steer: 0, brake: false });
+    const hand = await stopWith({ throttle: 0, steer: 0, brake: true });
+    expect(hand.car.speed()).toBeLessThan(0.3); // it does stop
+    expect(hand.dist).toBeGreaterThan(foot.dist * 1.6);
+    expect(hand.dist).toBeLessThan(45);
+    expect(hand.car.wheelsInContact()).toBe(4);
+  });
+
+  test('the handbrake in a bend lets the tail swing out: the car turns much further than by steering alone, sliding sideways', async () => {
+    const turn = async (brake: boolean) => {
+      const pw = await createPhysicsWorld(miniScene());
+      const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI });
+      car.setOccupied(true);
+      runCar(pw, car, full, 6); // ~50 km/h
+      let slip = 0;
+      runCar(pw, car, { throttle: 0, steer: 1, brake }, 1.2, () => {
+        // angle between where the car points and where it moves
+        const h = headingOf(car.pose()), v = car.chassis.linvel();
+        if (Math.hypot(v.x, v.z) > 3) slip = Math.max(slip, Math.abs(angleDelta(h, Math.atan2(v.x, v.z))));
+      });
+      return { turned: Math.abs(angleDelta(Math.PI, headingOf(car.pose()))), slip, car };
+    };
+    const steer = await turn(false), hand = await turn(true);
+    expect(hand.turned).toBeGreaterThan(steer.turned * 1.5);
+    expect(hand.slip).toBeGreaterThan(0.3); // > 17°: a slide
+    expect(steer.slip).toBeLessThan(0.2); // steering alone: it goes where it points
+    expect(hand.car.wheelsInContact()).toBeGreaterThanOrEqual(3); // it does not roll over
+  });
+
+  test('the handbrake holds a standing car on a throttle that is not given, and lets it go again', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI });
+    car.setOccupied(true);
+    runCar(pw, car, { throttle: 0, steer: 0, brake: true }, 2);
+    expect(Math.abs(car.speed())).toBeLessThan(0.15);
+    runCar(pw, car, full, 3);
+    expect(car.speed() * KMH).toBeGreaterThan(20);
   });
 
   test('steer > 0 turns right', async () => {
@@ -526,7 +600,7 @@ test('same inputs give bit-identical results in two worlds', async () => {
 });
 
 test('tuning holds the brief values', () => {
-  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20, jumpSpeed: 5.5 });
+  expect(TUNING.character).toMatchObject({ radius: 0.3, height: 1.8, walkSpeed: 1.6, runSpeed: 5.5, gravity: -20, jumpSpeed: 6.5 });
   expect(TUNING.vehicle).toMatchObject({ mass: 1200, maxForwardKmh: 60, maxReverseKmh: 20 });
 });
 
@@ -536,7 +610,7 @@ const TERRAIN_BIN = fileURLToPath(new URL('../../../../apps/client/public/world/
 const haveReal = existsSync(COLLISION_BIN) && existsSync(MANIFEST) && existsSync(TERRAIN_BIN);
 
 test.skipIf(!haveReal)(
-  haveReal ? 'real collision.bin + terrain.bin: world builds, character at spawn stands on the sidewalk (y ≈ spawn.y)' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
+  haveReal ? 'real collision.bin + terrain.bin: world builds, character stands at the spawn (y ≈ spawn.y) and walks up the Dom stairs' : 'real collision.bin smoke test [SKIPPED: apps/client/public/world/{collision,terrain}.bin not found — run the pipeline]',
   async () => {
     const file = readFileSync(COLLISION_BIN);
     const asset = decodeCollision(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength));
@@ -544,14 +618,31 @@ test.skipIf(!haveReal)(
     const terrain = decodeTerrain(tf.buffer.slice(tf.byteOffset, tf.byteOffset + tf.byteLength));
     const spawn = JSON.parse(readFileSync(MANIFEST, 'utf8')).spawn as { x: number; y: number; z: number };
     const t0 = performance.now();
-    const pw = await createPhysicsWorld(asset, terrain);
+    // as the browser builds it: only the city around the spawn (both flights below are within CITY_NEED of it)
+    const pw = await createPhysicsWorld(asset, terrain, { stream: [spawn] });
     // a generous bound: the budget (< 3 s) is measured in the browser; a loaded CI box must not flake here
     expect(performance.now() - t0).toBeLessThan(15_000);
     const c = new Character(pw, spawn);
     runChar(pw, c, idle, 1);
-    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = terrain + sidewalk 0.12
+    expect(Math.abs(c.position().y - spawn.y)).toBeLessThanOrEqual(0.03); // spawn.y = the walkable surface there
+    // the Domtreppe down to the Bahnhofsvorplatz and the steps up from the Kardinal-Höffner-Platz (data/models/
+    // koelner-dom): walked up from 3 m in front of the lowest step, without jumping (autostep is 0.25 m; a lip at the
+    // foot left the figure stuck)
+    const flights = [
+      { name: 'Domtreppe', from: { x: 350.5, z: 2352.8 }, yaw: 0, up: (p: { x: number; z: number }) => p.z > 2372.8, top: 8.7 },
+      { name: 'Kardinal-Höffner-Platz', from: { x: 228.5, z: 2420.8 }, yaw: Math.PI / 2, up: (p: { x: number; z: number }) => p.x > 243.5, top: 7.75 },
+    ];
+    for (const f of flights) {
+      const w = new Character(pw, { x: f.from.x, y: heightAt(terrain, f.from.x, f.from.z) + 0.05, z: f.from.z });
+      runChar(pw, w, idle, 0.5);
+      runChar(pw, w, { forward: 1, right: 0, run: false, yaw: f.yaw }, 20); // walking pace: ~1.4 m/s up the flight
+      const p = w.position();
+      expect({ name: f.name, up: f.up(p), y: p.y > f.top - 0.3 }).toEqual({ name: f.name, up: true, y: true });
+      w.dispose();
+    }
   },
-  15_000,
+  // decoding and building the city in a full parallel test run can take longer than the build bound alone
+  30_000,
 );
 
 describe('multiplayer physics', () => {

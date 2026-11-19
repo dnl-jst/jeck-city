@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const TICK_HZ = 60;
 export const SNAPSHOT_EVERY = 3;
 export const MAX_INPUTS_PER_PACKET = 3;
@@ -11,7 +11,7 @@ export const JOIN_PER_IP_PER_MIN = 5;
 export const MAX_INPUTS_PER_S = 90;
 export const MAX_MESSAGE_BYTES = 512;
 export const KNOCKDOWN_KMH = 8;
-export const KNOCKDOWN_S = 1.0;
+export const KNOCKDOWN_S = 3.6;
 export const ENTER_MAX_DIST = 3;
 export const RESET_AFTER_S = 600;
 export const RESET_CLEAR_RADIUS = 100;

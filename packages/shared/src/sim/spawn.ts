@@ -17,6 +17,11 @@ const CLEARANCE = 0.1;
  * street; nobody should spawn on the road there.
  */
 const SIDEWALK_TOL = 0.06;
+/**
+ * A candidate's surface must lie within this (m) of the manifest spawn's height: the Domplatte is level with the
+ * terrain, so the sidewalk test alone would also accept the steps and stairs at its edges.
+ */
+const LEVEL_TOL = 0.5;
 
 /** Height of the first surface below 3 m above the terrain at (x, z) (sidewalk, kerb or the ground itself). */
 export function standY(pw: PhysicsWorld, terrain: TerrainGrid, x: number, z: number): number {
@@ -25,11 +30,13 @@ export function standY(pw: PhysicsWorld, terrain: TerrainGrid, x: number, z: num
 }
 
 /**
- * Spawn candidates in order: the manifest spawn, then alternately ±k·SPAWN_STEP along the street (the spawn's
- * heading axis, forward = (sin h, cos h)) up to SPAWN_MAX_DIST.
+ * Spawn candidates in order: the manifest spawn, then alternately ±k·SPAWN_STEP side by side, across the spawn
+ * heading (forward = (sin h, cos h); +k is to the left), up to SPAWN_MAX_DIST: on the Domplatte everyone stands in a
+ * row facing the cathedral.
  */
 export function spawnCandidates(spawn: WorldManifest['spawn']): { x: number; z: number }[] {
-  const s = Math.sin(spawn.heading), c = Math.cos(spawn.heading);
+  // the axis across the heading: forward turned 90°
+  const s = Math.cos(spawn.heading), c = -Math.sin(spawn.heading);
   const out = [{ x: spawn.x, z: spawn.z }];
   for (let k = 1; k * SPAWN_STEP <= SPAWN_MAX_DIST + 1e-9; k++) {
     for (const sign of [1, -1]) out.push({ x: spawn.x + sign * k * SPAWN_STEP * s, z: spawn.z + sign * k * SPAWN_STEP * c });
@@ -39,7 +46,7 @@ export function spawnCandidates(spawn: WorldManifest['spawn']): { x: number; z: 
 
 /**
  * Feet position for a new player: the first candidate (see spawnCandidates) on the sidewalk (as high above the terrain
- * as the manifest spawn) where a standing capsule overlaps nothing in the world and `occupied` (other people and
+ * as the manifest spawn) and on the spawn's level (within LEVEL_TOL of its height) where a standing capsule overlaps nothing in the world and `occupied` (other people and
  * things the physics queries cannot see yet) is false; the manifest spawn if all are taken. y is the surface the feet
  * stand on.
  */
@@ -51,7 +58,7 @@ export function findSpawn(pw: PhysicsWorld, manifest: WorldManifest, terrain: Te
   for (const p of spawnCandidates(manifest.spawn)) {
     if (occupied(p.x, p.z)) continue;
     const y = standY(pw, terrain, p.x, p.z);
-    if (Math.abs(y - heightAt(terrain, p.x, p.z) - kerb) > SIDEWALK_TOL) continue;
+    if (Math.abs(y - heightAt(terrain, p.x, p.z) - kerb) > SIDEWALK_TOL || Math.abs(y - manifest.spawn.y) > LEVEL_TOL) continue;
     const centre = { x: p.x, y: y + CLEARANCE + T.height / 2, z: p.z };
     if (world.intersectionWithShape(centre, { x: 0, y: 0, z: 0, w: 1 }, capsule, undefined, undefined, undefined, undefined, SOLID) === null) {
       return { x: p.x, y, z: p.z };

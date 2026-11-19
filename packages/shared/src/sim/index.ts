@@ -1,5 +1,6 @@
 export * from './assets';
 export * from './cars';
+export * from './boarding';
 export * from './ignition';
 export * from './rules';
 export * from './spawn';
@@ -8,3 +9,4 @@ export * from './snapshot';
 export * from './proxies';
 export * from './replay';
 export * from './pick';
+export * from './roof';

@@ -54,6 +54,7 @@ export function drawMap(ctx: CanvasRenderingContext2D, data: MapData, grid: MapG
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
 
+  fillPolys(ctx, data.water, MAP_STYLE.water); // a few rings: drawn whole, not via the grid
   fillPolys(ctx, items.greens.map((i) => data.greens[i]!), MAP_STYLE.green);
   fillPolys(ctx, items.squares.map((i) => data.squares[i]!.pts), MAP_STYLE.square);
   fillTriangles(ctx, items.buildings.map((i) => data.buildings[i]!), MAP_STYLE.building);
@@ -131,4 +132,32 @@ export function drawArrow(ctx: CanvasRenderingContext2D, sx: number, sy: number,
   ctx.stroke();
   ctx.fill();
   ctx.restore();
+}
+
+/** Another player on the map: a dot in their colour, optionally with their name beside it. */
+export function drawPlayerDot(ctx: CanvasRenderingContext2D, sx: number, sy: number, r: number, color: string, name?: string): void {
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(sx, sy, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.strokeStyle = MAP_STYLE.labelHalo;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fill();
+  if (name) {
+    ctx.font = '600 12px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 3;
+    ctx.strokeText(name, sx + r + 4, sy);
+    ctx.fillStyle = MAP_STYLE.label;
+    ctx.fillText(name, sx + r + 4, sy);
+  }
+  ctx.restore();
+}
+
+/** Stable, distinct colour per player slot. */
+export function playerColor(slot: number): string {
+  return `hsl(${(slot * 137.5 + 190) % 360} 85% 62%)`;
 }

@@ -3,7 +3,7 @@ import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomE
 import {
   CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
   parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
-  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type WorldAssets,
+  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
 import type { Config } from './config';
 import { LagLine } from './fake-lag';
@@ -12,6 +12,9 @@ import { InputQueue } from './inputs';
 import { JoinLimiter } from './join-limit';
 import { ipHash, log } from './log';
 import { BikeSlowState, CarState, LampState, NippesState, PlayerState } from './state';
+
+/** Metres a player moves before the coarse map position in the slow state is rewritten. */
+const MAP_POS_STEP = 4;
 
 /** What the room is built from; the world is loaded once at server start. */
 export type RoomDeps = { cfg: Config; assets: WorldAssets; worldHash: string };
@@ -27,7 +30,7 @@ const MAX_RAW_NAME = 100;
 /** Messages per second before Colyseus drops a client: inputs come at 60 Hz, radio and pings rarely. */
 const MAX_MESSAGES_PER_S = 5 * TICK_HZ;
 
-const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
+const MODE = { walk: 0, drive: 1, down: 2, ride: 3, sit: 4 } as const;
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
 
 type Auth = { name: string; ipHash: string; variant: number };
@@ -159,7 +162,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
     };
     this.seats.set(client.sessionId, seat);
-    this.state.players.set(String(slot), new PlayerState({ slot, name, mode: MODE.walk, carId: -1, bikeId: -1, variant: auth.variant }));
+    const start = this.sim.player(slot).pos;
+    this.state.players.set(String(slot), new PlayerState({
+      slot, name, mode: MODE.walk, carId: -1, seat: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
+    }));
     this.watchMessageSize(client);
     client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
@@ -207,6 +213,11 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
   onUncaughtException(error: RoomException, methodName: RoomMethodName): void {
     if (error.cause instanceof ServerError) return; // a deliberate rejection (onAuth/onJoin), already logged
     log('error', 'uncaught exception', { method: methodName, error: String(error), stack: error.stack });
+  }
+
+  /** Publishes a new weather to everyone (only changed fields travel). */
+  setWeather(w: Weather): void {
+    Object.assign(this.state.weather, w);
   }
 
   /** Test and diagnostics access: the input queue / slot of a session. */
@@ -333,17 +344,23 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       const e = state.players.get(String(seat.slot));
       if (!e) continue;
       if (e.mode !== MODE[p.mode]) e.mode = MODE[p.mode];
-      const carId = p.carId ?? -1;
+      // the car driven, or the one ridden along in (then with the seat)
+      const carId = p.carId ?? p.pass?.car ?? -1, place = p.carId !== null ? 0 : p.pass?.seat ?? -1;
       if (e.carId !== carId) e.carId = carId;
+      if (e.seat !== place) e.seat = place;
       const bikeId = p.bikeId ?? -1;
       if (e.bikeId !== bikeId) e.bikeId = bikeId;
+      if (Math.abs(p.pos.x - e.mapX) >= MAP_POS_STEP || Math.abs(p.pos.z - e.mapZ) >= MAP_POS_STEP) {
+        e.mapX = Math.round(p.pos.x);
+        e.mapZ = Math.round(p.pos.z);
+      }
     }
 
     const cars = sim.cars;
     for (let i = 0; i < cars.count; i++) {
       const key = String(i);
       const driver = cars.driver[i] ?? null;
-      if (driver === null && !cars.isMoved(i)) {
+      if (!cars.occupied(i) && !cars.isMoved(i)) {
         if (state.cars.has(key)) state.cars.delete(key);
         continue;
       }

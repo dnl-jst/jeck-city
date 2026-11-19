@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { Quaternion, Vector3 } from 'three';
+import { MeshStandardMaterial, Quaternion, Vector3 } from 'three';
 import { headingOf, parkedPose, terrainNormal, VEHICLE_REST_Y, type TerrainGrid } from '@nn/shared';
-import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, glareFacing, lampPower, needsCarRebuild, visibleCars } from './car';
+import { CAR_REBUILD_MOVE, CAR_RENDER_RADIUS, beamPattern, carMaterial, isClearGlass, setMirrorNight, lampPower, needsCarRebuild, visibleCars } from './car';
 
 test('visibleCars: indices of the cars within the render radius, in manifest order', () => {
   const poses = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 0, z: -249 }, { x: 176, z: 176 }, { x: 177, z: 178 }];
@@ -53,14 +53,6 @@ test('low beam: falls off smoothly sideways, no hard edge', () => {
     expect(xs[i - 1]! - xs[i]!).toBeLessThan(0.35);
   }
 });
-test('glare: full head-on, gone beside and behind the lamp', () => {
-  const fwd = new Vector3(0, 0, 1);
-  expect(glareFacing(fwd, new Vector3(0, 0, 1), 3)).toBe(1);
-  expect(glareFacing(fwd, new Vector3(1, 0, 0), 3)).toBe(0);
-  expect(glareFacing(fwd, new Vector3(0, 0, -1), 3)).toBe(0);
-  expect(glareFacing(fwd, new Vector3(Math.SQRT1_2, 0, Math.SQRT1_2), 3)).toBeLessThan(0.4);
-});
-
 test('parked car rests on terrain and follows its slope', () => {
   const cols = 101, rows = 101;
   const heights = new Float32Array(cols * rows);
@@ -95,4 +87,38 @@ test('parkedPose (@nn/shared, plain math) equals the former Three.js version', (
     expect(p.qz).toBeCloseTo(q.z, 12);
     expect(p.qw).toBeCloseTo(q.w, 12);
   }
+});
+
+test('car glass: clear glass (blended in the model) is tuned for the game', () => {
+  const g = new MeshStandardMaterial({ name: 'glass', transparent: true, opacity: 0.38 });
+  expect(isClearGlass(g)).toBe(true);
+  const m = carMaterial(g) as MeshStandardMaterial;
+  expect(m).not.toBe(g);
+  expect(m.transparent).toBe(true);
+  expect(m.depthWrite).toBe(false);
+  expect(m.opacity).toBeCloseTo(0.38);
+  expect(isClearGlass(new MeshStandardMaterial({ name: 'lens_red', transparent: true, opacity: 0.6 }))).toBe(true);
+});
+
+test('car glass: the old models\' opaque glass and other materials stay untouched', () => {
+  const g = new MeshStandardMaterial({ name: 'glass' });
+  expect(isClearGlass(g)).toBe(false);
+  expect(carMaterial(g)).toBe(g);
+  const blendedPaint = new MeshStandardMaterial({ name: 'paint', transparent: true });
+  expect(isClearGlass(blendedPaint)).toBe(false);
+});
+
+test('car mirrors: the mirror glass reflects a sky-and-street environment that dims at night', () => {
+  const mirror = new MeshStandardMaterial({ name: 'mirror' });
+  const m = carMaterial(mirror) as MeshStandardMaterial;
+  expect(m).toBe(mirror); // shared by all cars of the type: tuned in place
+  expect(m.envMap).not.toBeNull();
+  expect(m.metalness).toBe(1);
+  expect(m.roughness).toBeLessThan(0.1);
+  setMirrorNight(0);
+  const day = m.envMapIntensity;
+  setMirrorNight(1);
+  expect(m.envMapIntensity).toBeLessThan(day * 0.3);
+  expect(m.envMapIntensity).toBeGreaterThan(0);
+  expect((carMaterial(new MeshStandardMaterial({ name: 'chrome' })) as MeshStandardMaterial).envMap).toBeNull();
 });

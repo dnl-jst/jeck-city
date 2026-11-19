@@ -12,8 +12,10 @@ import type { PlayerSnapshot } from './world-sim';
  * while riding. fallTicks: ticks left lying after falling off a bike.
  */
 export type OwnState = {
-  mode: 'walk' | 'drive' | 'down' | 'ride';
+  mode: 'walk' | 'drive' | 'down' | 'ride' | 'sit';
   carId: number | null;
+  /** The car and seat ridden along in while mode is 'sit'. */
+  pass?: { car: number; seat: number } | null;
   char: CharacterState;
   car: VehicleState | null;
   bikeId?: number | null;
@@ -28,7 +30,7 @@ export type OwnState = {
   jump?: boolean;
 };
 
-const MODES = ['walk', 'drive', 'down', 'ride'] as const;
+const MODES = ['walk', 'drive', 'down', 'ride', 'sit'] as const;
 const ENGINES = ['off', 'starting', 'running'] as const;
 
 /** The own state a snapshot carries, as replay takes it (carId only while driving, bikeId only while riding). */
@@ -37,6 +39,7 @@ export function ownStateOf(o: SnapshotOwn): OwnState {
   const drive = mode === 'drive' && o.car !== null;
   const ride = mode === 'ride' && o.bike !== null;
   return {
+    pass: mode === 'sit' ? { car: o.carId, seat: o.seat } : null,
     mode, carId: drive ? o.carId : null, char: o.char, car: drive ? o.car : null, engine: drive ? ENGINES[o.engine] : 'off',
     bikeId: ride ? o.bikeId : null, bike: ride ? o.bike : null, fallTicks: o.fallTicks,
   };
@@ -57,6 +60,8 @@ const MATCH_SPIN = 0.01;
 export function predictionMatches(pred: PlayerSnapshot, server: OwnState): boolean {
   if (pred.mode !== server.mode || pred.carId !== server.carId || pred.bikeId !== (server.bikeId ?? null)) return false;
   if (pred.engine !== (server.engine ?? 'off') || pred.fallTicks !== (server.fallTicks ?? 0)) return false;
+  if (pred.pass?.car !== server.pass?.car || pred.pass?.seat !== server.pass?.seat) return false;
+  if (pred.mode === 'sit') return true; // nothing of their own moves
   const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
   const nearV = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }, tol: number) =>
     Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= tol;

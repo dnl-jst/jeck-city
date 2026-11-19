@@ -1,8 +1,8 @@
 import {
-  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, MAX_REPLAY_STEPS, ownStateOf, predictionMatches, STATION_IDS, TICK_HZ, TUNING,
+  CORRECTION_BLEND_S, FixedStepper, HARD_SNAP_M, MAX_INPUTS_PER_PACKET, BIKE_ROOF, CAR_ROOF, headingPose, MAX_REPLAY_STEPS, onRoof, ownStateOf, predictionMatches, reanchor, STATION_IDS, toCarLocal, TICK_HZ, TUNING,
   type BikePose, type CarPose, type IgnitionSave, type InputPacket, type PlayerId, type PlayerInput, type PlayerSnapshot, type PropPose, type SimEvent,
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
-  type WorldSim,
+  type Weather, type WorldSim,
 } from '@nn/shared';
 import type { RenderOffset, Session } from '../session';
 import type { ServerClock } from './clock';
@@ -37,16 +37,23 @@ export type RemoteSample = {
 };
 
 /** Slow-state facts the renderer needs: names and character variants by slot, and per car its driver (slot) and lamp level. */
-export type Roster = { names: Map<number, string>; variants: Map<number, number>; cars: Map<number, RemoteCarInfo> };
+/** mapPos: every player's coarse position from the slow state (for the maps; snapshots only cover the interest radius). */
+export type Roster = {
+  names: Map<number, string>; variants: Map<number, number>; cars: Map<number, RemoteCarInfo>; mapPos: Map<number, { x: number; z: number }>;
+  /** Who sits in which car: car → slot per seat (seat 0 the driver; −1 or missing: free). The own player included. */
+  seats: Map<number, number[]>;
+};
 
 type Vec3 = { x: number; y: number; z: number };
 type Quat = { x: number; y: number; z: number; w: number };
 /** An unacknowledged input and the predicted state after its step (state: in full, for predictionMatches). */
 type Pending = {
   seq: number; input: PlayerInput; pos: Vec3; car: number | null; bike: number | null; ign: IgnitionSave | null; state: PlayerSnapshot;
+  /** On foot on top of a streamed car or bike: which one and its stand-in's pose after this step. */
+  roof: { kind: 'car' | 'bike'; id: number; pose: CarPose } | null;
 };
 /** Which vehicle the own player is in or on. */
-type Vehicle = { car: number | null; bike: number | null };
+type Vehicle = { car: number | null; bike: number | null; /** Riding along: 'car:seat'. */ pass: string | null };
 
 /** Unacknowledged inputs kept (2 s); older ones fall out (a gap that large is set hard anyway). */
 const RING = 120;
@@ -69,7 +76,8 @@ const poseOf = (p: CarPose | PropPose): CarPose => ({ x: p.x, y: p.y, z: p.z, qx
 const carKey = (p: CarPose): string => `${p.x},${p.y},${p.z},${p.qx},${p.qy},${p.qz},${p.qw}`;
 const bikeKey = (p: BikePose): string => `${p.x},${p.y},${p.z},${p.heading}`;
 const bikePoseOf = (p: BikePose): BikePose => ({ x: p.x, y: p.y, z: p.z, heading: p.heading });
-const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bike === b.bike;
+const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bike === b.bike && a.pass === b.pass;
+const passOf = (key: string): { car: number; seat: number } => { const [car, seat] = key.split(':').map(Number); return { car: car!, seat: seat! }; };
 
 /**
  * Online play: the local WorldSim is a prediction world. The own figure / car is simulated at once with every input
@@ -99,6 +107,12 @@ export class OnlineSession implements Session {
   private bell = false;
   private seq = 0;
   private pending: Pending[] = [];
+  /** Cars the server streams (followed as stand-ins in the prediction world). */
+  private streamedCars = new Set<number>();
+  /** Bikes the server streams (others' and rolling ones, followed as stand-ins). */
+  private streamedBikes = new Set<number>();
+  /** Others standing on the car the local player drives or the bike they ride: slot → place in its frame (onOwnRoof). */
+  private roofRiders = new Map<number, Vec3>();
   /** The newest acknowledged input (a later snapshot may acknowledge the same seq again). */
   private acked: Pending | null = null;
   private inbox: Snapshot[] = [];
@@ -119,7 +133,7 @@ export class OnlineSession implements Session {
   private readonly riderDraw = new CatchUp<SnapshotRider>('heading');
   private readonly bikeBuf = new SnapshotBuffer<SnapshotBike>(bikeOps());
   private sample: RemoteSample = { walkers: new Map(), cars: new Map(), riders: new Map(), bikes: new Map(), lamps: new Map() };
-  private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map() };
+  private readonly rosterNow: Roster = { names: new Map(), variants: new Map(), cars: new Map(), mapPos: new Map(), seats: new Map() };
   /** Resting car poses of the slow state last seen, by car ("x,y,z,qx,qy,qz,qw"; see placeRestingCars). */
   private readonly carRest = new Map<number, string>();
   /** Resting bike poses of the slow state last seen, by bike ("x,y,z,heading"; see placeRestingBikes). */
@@ -197,6 +211,12 @@ export class OnlineSession implements Session {
   /** Names and car occupancy from the slow state, as of this frame. */
   roster(): Roster {
     return this.rosterNow;
+  }
+
+  /** The city's weather as synced through the room state; null until it is known. */
+  weather(): Weather | null {
+    const w = this.link.state.weather;
+    return w?.known ? w : null;
   }
 
   stats(): NetStats {
@@ -298,6 +318,10 @@ export class OnlineSession implements Session {
   }
 
   private reconcile(s: Snapshot, ev: SimEvent[]): Vec3 | 'mode' {
+    // who stands on the own car's roof or the own bike, relative to it (vehicle and walkers of the same tick)
+    this.roofRiders.clear();
+    const own = s.own.car ?? (s.own.bike ? headingPose(s.own.bike) : null), ownSize = s.own.car ? CAR_ROOF : BIKE_ROOF;
+    if (own) for (const w of s.walkers) if (w.slot !== this.me && onRoof(own, w, ownSize)) this.roofRiders.set(w.slot, toCarLocal(w, own));
     const ack = s.ackSeq;
     let ackEntry = this.acked?.seq === ack ? this.acked : null;
     while (this.pending.length && this.pending[0]!.seq <= ack) {
@@ -306,6 +330,17 @@ export class OnlineSession implements Session {
       this.acked = e;
     }
     const server = ownStateOf(s.own);
+    // standing on a car someone else drives: the server carried us with that car where it is on the server, but here
+    // it is drawn (and stood in for) a little behind. So the server's position counts relative to the car: compared
+    // with the prediction on the car's stand-in pose at ackSeq, replayed from its pose now.
+    const roof = server.carId === null && (server.bikeId ?? null) === null && server.mode !== 'sit' ? this.carrierUnder(s, server.char) : null;
+    const standIn = roof ? this.standIn(roof.kind, roof.id) : null;
+    let roofAtAck: CarPose | null = null;
+    if (roof && standIn) {
+      const r = ackEntry?.roof;
+      roofAtAck = r && r.kind === roof.kind && r.id === roof.id ? r.pose : standIn;
+      server.char = { ...server.char, ...reanchor(server.char, roof.pose, roofAtAck) };
+    }
     if (ackEntry) {
       server.use = ackEntry.input.use;
       server.jump = ackEntry.input.jump;
@@ -313,7 +348,7 @@ export class OnlineSession implements Session {
     }
     let denied = false, mountDenied = false;
     if (this.enterSeq !== null && ack >= this.enterSeq) {
-      denied = server.mode !== 'drive';
+      denied = server.mode !== 'drive' && server.mode !== 'sit';
       this.enterSeq = null;
     }
     if (this.mountSeq !== null && ack >= this.mountSeq) {
@@ -336,6 +371,7 @@ export class OnlineSession implements Session {
     }
     this.reconciles[hard ? 'hard' : 'replayed']++;
 
+    if (roofAtAck && standIn) server.char = { ...server.char, ...reanchor(server.char, roofAtAck, standIn) };
     const before = this.ownPose();
     if (drop) {
       this.pending = [];
@@ -349,7 +385,8 @@ export class OnlineSession implements Session {
     this.onCorrection?.();
 
     if (!sameVehicle(before, after)) {
-      if (before.car !== null && before.car !== after.car) ev.push({ t: 'exit', id: this.me, car: before.car });
+      if (before.car !== null && before.car !== after.car) ev.push({ t: 'exit', id: this.me, car: before.car, seat: 0 });
+      if (before.pass !== null && before.pass !== after.pass) ev.push({ t: 'exit', id: this.me, ...passOf(before.pass) });
       if (before.bike !== null && before.bike !== after.bike) {
         // off the bike by the server's word: a car threw us off (lying, no control), or the prediction was wrong
         const fell = (server.fallTicks ?? 0) > 0;
@@ -357,7 +394,8 @@ export class OnlineSession implements Session {
       }
       if (denied) ev.push({ t: 'enterDenied', id: this.me });
       if (mountDenied) ev.push({ t: 'mountDenied', id: this.me });
-      if (after.car !== null && after.car !== before.car) ev.push({ t: 'enter', id: this.me, car: after.car });
+      if (after.car !== null && after.car !== before.car) ev.push({ t: 'enter', id: this.me, car: after.car, seat: 0 });
+      if (after.pass !== null && after.pass !== before.pass) ev.push({ t: 'enter', id: this.me, ...passOf(after.pass) });
       if (after.bike !== null && after.bike !== before.bike) ev.push({ t: 'mount', id: this.me, bike: after.bike });
       this.clearOffset();
       return 'mode';
@@ -398,14 +436,30 @@ export class OnlineSession implements Session {
     for (const w of walkers.values()) if (w.slot !== this.me) feet.set(w.slot, w);
     const poses = new Map<number, CarPose>();
     for (const c of cars.values()) poses.set(c.id, poseOf(c));
+    this.streamedCars = new Set(poses.keys());
     const drivers = new Map<number, PlayerId>();
-    const { names, variants, cars: info } = this.rosterNow;
+    const { names, variants, cars: info, mapPos, seats } = this.rosterNow;
     names.clear();
     variants.clear();
     info.clear();
+    mapPos.clear();
+    seats.clear();
+    const passengers = new Map<number, (PlayerId | null)[]>();
     state.players.forEach((p) => {
+      const seat = p.seat ?? -1;
+      if (p.carId >= 0 && seat >= 0) {
+        const of = seats.get(p.carId) ?? [];
+        of[seat] = p.slot;
+        seats.set(p.carId, of);
+        if (seat > 0 && p.slot !== this.me) {
+          const r = passengers.get(p.carId) ?? [];
+          r[seat] = p.slot;
+          passengers.set(p.carId, r);
+        }
+      }
       names.set(p.slot, p.name);
       variants.set(p.slot, p.variant ?? 0);
+      mapPos.set(p.slot, { x: p.mapX ?? 0, z: p.mapZ ?? 0 });
     });
     state.cars.forEach((c, key) => {
       if (c.driver < 0) return;
@@ -417,6 +471,7 @@ export class OnlineSession implements Session {
       if (c.driver !== this.me) drivers.set(Number(key), c.driver);
     });
     this.sim.setRemoteDrivers(drivers);
+    this.sim.setRemotePassengers(passengers);
     // a car no longer streamed rests where the server has written a new resting pose, else where it was last streamed
     // (a pose already seen is from before it moved; and the stream can skip a frame when the render tick steps back)
     this.sim.setProxies(feet, poses, (i) => {
@@ -432,6 +487,7 @@ export class OnlineSession implements Session {
     for (const b of bikes.values()) bikePoses.set(b.id, bikePoseOf(b));
     for (const r of riders.values()) if (r.slot !== this.me) bikePoses.set(r.bikeId, bikePoseOf(r));
     // as cars: only a resting pose not seen before (one seen while ridden or streamed is from before it moved)
+    this.streamedBikes = new Set(bikePoses.keys());
     this.sim.setBikeProxies(bikePoses, (i) => {
       const b = state.bikes?.get(String(i));
       return b && b.rider < 0 && this.bikeRest.get(i) !== bikeKey(b) ? bikePoseOf(b) : null;
@@ -517,15 +573,46 @@ export class OnlineSession implements Session {
   /** The own entity now: feet on foot, chassis centre and rotation in a car, the ground under the bike (and its heading) riding. */
   private ownPose(): Vehicle & { pos: Vec3; q: Quat | null; heading: number } {
     const p = this.sim.player(this.me);
-    if (p.carId === null) return { car: null, bike: p.bikeId, pos: p.pos, q: null, heading: p.bike?.heading ?? 0 };
+    const pass = p.pass ? `${p.pass.car}:${p.pass.seat}` : null;
+    if (p.carId === null) return { car: null, bike: p.bikeId, pass, pos: p.pos, q: null, heading: p.bike?.heading ?? 0 };
     const c = this.sim.cars.vehicle(p.carId)!.pose();
-    return { car: p.carId, bike: null, pos: { x: c.x, y: c.y, z: c.z }, q: { x: c.qx, y: c.qy, z: c.qz, w: c.qw }, heading: 0 };
+    return { car: p.carId, bike: null, pass: null, pos: { x: c.x, y: c.y, z: c.z }, q: { x: c.qx, y: c.qy, z: c.qz, w: c.qw }, heading: 0 };
   }
 
   /** What a pending input keeps of the state after its step. */
+  /** The streamed car or bike (in snapshot s) whose top the feet at p are on. */
+  private carrierUnder(s: Snapshot, p: Vec3): { kind: 'car' | 'bike'; id: number; pose: CarPose } | null {
+    for (const c of s.cars) if (onRoof(poseOf(c), p)) return { kind: 'car', id: c.id, pose: poseOf(c) };
+    for (const r of s.riders) if (r.slot !== this.me && onRoof(headingPose(r), p, BIKE_ROOF)) return { kind: 'bike', id: r.bikeId, pose: headingPose(r) };
+    for (const b of s.bikes) if (onRoof(headingPose(b), p, BIKE_ROOF)) return { kind: 'bike', id: b.id, pose: headingPose(b) };
+    return null;
+  }
+
+  /** The pose of the prediction world's stand-in for a streamed car or bike, or null if it has none. */
+  private standIn(kind: 'car' | 'bike', id: number): CarPose | null {
+    if (kind === 'car') return this.streamedCars.has(id) ? this.sim.cars.vehicle(id)?.pose() ?? null : null;
+    const b = this.streamedBikes.has(id) ? this.sim.bikes.poses[id] : undefined;
+    return b ? headingPose(b) : null;
+  }
+
+  onOwnRoof(slot: number): Vec3 | null {
+    return this.roofRiders.get(slot) ?? null;
+  }
+
   private ownSample(): Omit<Pending, 'seq' | 'input'> {
     const p = this.sim.player(this.me);
-    return { pos: p.pos, car: p.carId, bike: p.bikeId, ign: p.carId !== null ? this.sim.ignition(p.carId).save() : null, state: p };
+    let roof: Pending['roof'] = null;
+    if (p.carId === null && p.bikeId === null && !p.pass) {
+      for (const i of this.streamedCars) {
+        const pose = this.standIn('car', i);
+        if (pose && onRoof(pose, p.pos)) { roof = { kind: 'car', id: i, pose }; break; }
+      }
+      if (!roof) for (const i of this.streamedBikes) {
+        const pose = this.standIn('bike', i);
+        if (pose && onRoof(pose, p.pos, BIKE_ROOF)) { roof = { kind: 'bike', id: i, pose }; break; }
+      }
+    }
+    return { pos: p.pos, car: p.carId, bike: p.bikeId, ign: p.carId !== null ? this.sim.ignition(p.carId).save() : null, state: p, roof };
   }
 }
 
@@ -547,6 +634,24 @@ export function remoteList(
   for (const c of sample.cars.values()) {
     const driver = cars.get(c.id)?.driver ?? -1;
     if (driver >= 0) add(driver, c.x, c.z, 'drive');
+  }
+  return out;
+}
+
+/**
+ * Every other player for the maps: the streamed position where the snapshot has one (smooth, within the interest
+ * radius), else the coarse one of the slow state.
+ */
+export function mapPlayers(
+  sample: RemoteSample, roster: Pick<Roster, 'names' | 'cars' | 'mapPos'>, me: PlayerId,
+): { slot: number; name: string; x: number; z: number }[] {
+  const streamed = new Map<number, RemotePlayerInfo>();
+  for (const r of remoteList(sample, roster.names, roster.cars, me)) streamed.set(r.slot, r);
+  const out: { slot: number; name: string; x: number; z: number }[] = [];
+  for (const [slot, pos] of roster.mapPos) {
+    if (slot === me) continue;
+    const s = streamed.get(slot) ?? pos;
+    out.push({ slot, name: roster.names.get(slot) ?? '', x: s.x, z: s.z });
   }
   return out;
 }

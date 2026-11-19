@@ -15,8 +15,10 @@ export type CharacterVariant = (typeof CHARACTER_VARIANTS)[number];
  * WORLD space (no per-chunk offset, node transform is identity): coordinates stay below ~3 km, where
  * float32 is still sub-millimetre, and client and collision share one frame without bookkeeping.
  *
- * chunk_{ix}_{iz}.glb layout: up to 11 meshes named ground, buildings, road, sidewalk, curb, trackbed,
- * tram, green, squares, markings, parking (empty ones omitted), EXT_meshopt_compression. `buildings` carries
+ * chunk_{ix}_{iz}.glb layout: up to 14 meshes named ground, buildings, road, sidewalk, curb, trackbed,
+ * tram, green, squares, markings, parking, water (the river surface), bridge (bridge slabs, parapets and piers;
+ * uv = metres along / up), steel (the truss arches of railway bridges;
+ * uv = metres along / up) (empty ones omitted), EXT_meshopt_compression. `buildings` carries
  * POSITION, NORMAL, _FACADEUV (vec2), _KIND (0 wall / 1 roof), _SEED (buildingSeed / 2^32), _FLAGS (bit 0
  * Neusser Str., bit 1 backdrop), all float; the scene's extras.buildings lists { id, firstVertex, vertexCount }
  * per building (contiguous vertex ranges of the buildings mesh). Street meshes (trackbed = track bed
@@ -56,7 +58,7 @@ export type WorldManifest = {
    * (the side it is read from), width in m.
    */
   shops: { x: number; z: number; label: string; type: string; buildingId?: string; sign?: { x: number; y: number; z: number; heading: number; width: number } }[];
-  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen); parked[0] stands at the spawn. */
+  /** Parked cars: type = index in CAR_TYPES (missing in older manifests → 0, kleinwagen). */
   parked: { x: number; z: number; heading: number; color: number; type?: number }[];
   /** Car models (car_<type>.glb and its distance version car_<type>_lod.glb, nodes per data/models/cars/README.md). Missing in older manifests → []. */
   carModels: { type: CarType; file: string; lod: string; bytes: number }[];
@@ -72,10 +74,12 @@ export type WorldManifest = {
    */
   bikeRacks: { x: number; z: number; heading: number; kind: 0 | 1 }[];
   /**
-   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike, 5 soundjohn), color = frame
-   * colour; bikes[0] is the cargo bike at the spawn, the one soundjohn (sound box, radio) stands at Neusser Str. 381. Missing in older manifests → [].
+   * Rideable bikes: type = index in BIKE_TYPES (0 dutch, 1 road, 2 mtb, 3 longjohn, 4 trike, 5 soundjohn, 6 escooter),
+   * color = frame (fleet) colour; bikes[0] is the cargo bike at the spawn, the one soundjohn (sound box, radio) stands at
+   * Neusser Str. 381. down: lies on its side (knocked-over e-scooters; shown so until someone moves it). Missing in
+   * older manifests → [].
    */
-  bikes: { x: number; z: number; heading: number; type: number; color: number }[];
+  bikes: { x: number; z: number; heading: number; type: number; color: number; down?: boolean }[];
   /** Bike models (bike_<type>.glb, nodes per data/models/bikes/README.md). Missing in older manifests → []. */
   bikeModels: { type: BikeType; file: string; bytes: number }[];
   /** Rack hoop models by kind (rack_hoop.glb, rack_wall.glb). Missing in older manifests → []. */
@@ -186,7 +190,9 @@ export function parseManifest(json: unknown): WorldManifest {
     bikes: o.bikes === undefined ? [] : arr(o.bikes, 'bikes', (v, p) => {
       const b = nums(v, p, ['x', 'z', 'heading', 'type', 'color']);
       if (!Number.isInteger(b.type) || b.type < 0 || b.type >= BIKE_TYPE_COUNT) fail(`${p}.type`, `must be an integer 0..${BIKE_TYPE_COUNT - 1}`);
-      return b;
+      const down = (v as { down?: unknown }).down;
+      if (down !== undefined && typeof down !== 'boolean') fail(`${p}.down`, 'must be a boolean');
+      return down ? { ...b, down: true } : b;
     }),
     bikeModels: o.bikeModels === undefined ? [] : arr(o.bikeModels, 'bikeModels', (v, p) => {
       const b = obj(v, p);
