@@ -527,6 +527,23 @@ def lamp_pair(part, body, M, mat, u_face, x, z, outline, d_side=0.35, front=True
     return out
 
 
+def plate_node(coll, name, target, c, d, parent, off=0.012):
+    """An empty where the game draws a number plate: on `target` under the ray from c along d, lifted by off, its
+    local −Y along the surface normal (outwards), local Z up, local X to the right of someone reading the plate."""
+    d = V(d).normalized()
+    ok, loc, nrm, _ = target.ray_cast(V(c) - d * 2.5, d, distance=5.0)
+    if not ok:
+        print('PLATE_MISS', name)
+        return None
+    y = -nrm.normalized()
+    z = V((0, 0, 1)) - y * y.z
+    z.normalize()
+    x = y.cross(z)
+    ob = empty(coll, name, loc + nrm * off, parent)
+    ob.rotation_euler = Matrix((x, y, z)).transposed().to_euler()
+    return ob
+
+
 # ---------------------------------------------------------------- scene / export / review
 
 def clear_scene():

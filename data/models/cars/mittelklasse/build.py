@@ -8,7 +8,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from carparts import (V, Part, build_body, car_materials, decal, decal_object, empty, exhaust, lamp_pair, mirror,  # noqa: E402
+from carparts import (plate_node, V, Part, build_body, car_materials, decal, decal_object, empty, exhaust, lamp_pair, mirror,  # noqa: E402
                       poly_round, rrect, run, wheel, wipers)
 
 NAME = 'mittelklasse'
@@ -79,6 +79,8 @@ def build(coll):
         wheel(name, M, S, sx, coll, body, (sx * x, -su, S['r']))
     for name, c in (('light_fl', hl[0]), ('light_fr', hl[1]), ('tail_l', tl[0]), ('tail_r', tl[1])):
         empty(coll, name, c if c is not None else V((0, 0, 0)), body)
+    plate_node(coll, 'plate_f', body, (0, -F, 0.46), (0, 1, 0), body, off=0.015)
+    plate_node(coll, 'plate_r', body, (0, -B, 0.75), (0, -1, 0), body, off=0.011)
     return body, S
 
 

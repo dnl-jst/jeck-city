@@ -3,6 +3,7 @@ import { WATER_TIME } from './materials/street';
 import {
   BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
+  plateText,
 } from '@nn/shared';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
@@ -408,7 +409,7 @@ export class Game {
     this.cars.setOwn(car);
     this.figure.visible = false;
     this.driven.setPose(pose);
-    this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!);
+    this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!, plateText(car));
     this.follow.setDriving(true, headingOf(pose));
     this.mode = 'drive';
     this.ctx.hud.setHint(this.modeHint);

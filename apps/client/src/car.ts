@@ -4,8 +4,9 @@ import {
   Vector3, type Scene,
 } from 'three';
 import {
-  CAR_SPECS, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
+  CAR_SPECS, plateText, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
 } from '@nn/shared';
+import { Plates, platePoses } from './plates';
 
 type XZ = { x: number; z: number };
 
@@ -143,6 +144,9 @@ const WHEEL_NODES = ['wheel_fr', 'wheel_fl', 'wheel_rr', 'wheel_rl'] as const;
 /** How far the suspension may visibly move a wheel from its rest position (m). */
 const WHEEL_TRAVEL = 0.12;
 
+/** Whether textures can be painted (a browser; not the unit tests' plain Node). */
+const canDraw = (): boolean => typeof document !== 'undefined';
+
 /** One driveable copy of a car model: its own paint and lamp materials, wheel nodes, lamp positions. */
 type Rig = {
   root: Object3D;
@@ -152,6 +156,8 @@ type Rig = {
   wheels: { node: Object3D; rest: Vector3 }[];
   /** Lamp centres in the chassis frame: front left/right, rear left/right. */
   lamps: { fl: Vector3; fr: Vector3; rl: Vector3; rr: Vector3 };
+  /** The car's number plates (front, rear), lettered in show(); null for a model without plate nodes. */
+  plates: Plates | null;
 };
 
 function makeRig(model: Object3D, type: CarType): Rig {
@@ -181,10 +187,18 @@ function makeRig(model: Object3D, type: CarType): Rig {
     const e = root.getObjectByName(n);
     return e ? e.position.clone().add(new Vector3(0, -VEHICLE_REST_Y, 0)) : fallback;
   };
+  const poses = canDraw() ? platePoses(root) : [];
+  let plates: Plates | null = null;
+  if (poses.length > 0) {
+    plates = new Plates(poses.length);
+    plates.mesh.count = poses.length;
+    poses.forEach((m, k) => plates!.move(k, m));
+    root.add(plates.mesh);
+  }
   const sp = CAR_SPECS[type];
   const fz = sp.bodyZ + sp.length / 2, rz = sp.bodyZ - sp.length / 2;
   return {
-    root, paint, head, tail, wheels,
+    root, paint, head, tail, wheels, plates,
     lamps: {
       fl: lamp('light_fl', new Vector3(0.6, G + 0.75, fz)), fr: lamp('light_fr', new Vector3(-0.6, G + 0.75, fz)),
       rl: lamp('tail_l', new Vector3(0.7, G + 0.85, rz)), rr: lamp('tail_r', new Vector3(-0.7, G + 0.85, rz)),
@@ -264,7 +278,8 @@ export class DrivenCar {
     });
   }
 
-  show(type: CarType, color: number): void {
+  /** Shows the car as `type` in `color`, with `plate` on its number plates. */
+  show(type: CarType, color: number, plate = ''): void {
     let r = this.rigs.get(type);
     const model = this.models?.get(type)?.full;
     if (!r && model) {
@@ -277,6 +292,7 @@ export class DrivenCar {
     if (r) {
       this.group.add(r.root);
       for (const m of r.paint) m.color.setHex(color);
+      for (let k = 0; k < (r.plates?.capacity ?? 0); k++) r.plates!.text(k, plate);
       this.placeLamps(r.lamps);
     }
     this.group.visible = true;
@@ -371,6 +387,8 @@ export const needsCarRebuild = (last: XZ | null, x: number, z: number): boolean 
 
 /** Parked cars closer to the camera than this use the full model, the rest the distance version (m). */
 export const CAR_LOD_NEAR = 45;
+/** Lettered plates at once (two per car drawn with the full model; cars beyond that keep their blank plates). */
+const PLATE_CAPACITY = 512;
 
 /** Instanced meshes of one model (one per part); level 0 = full detail, 1 = distance version. */
 type Level = { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[]; used: number };
@@ -402,10 +420,15 @@ export class ParkedCars {
   private readonly one = new Vector3(1, 1, 1);
   private readonly zero = new Vector3(0, 0, 0);
   private readonly dirty = new Set<Level>();
+  /** Lettered number plates of the cars drawn with the full model: plate positions per type (chassis frame), the first plate instance of each car (−1: none). */
+  private plates: Plates | null = null;
+  private readonly platePose = new Map<CarType, Matrix4[]>();
+  private readonly plateSlot: Int32Array;
 
   constructor(scene: Scene, private readonly pool: CarPool, models?: CarModels) {
     const n = pool.count;
     this.slots = new Int32Array(n).fill(-1);
+    this.plateSlot = new Int32Array(n).fill(-1);
     this.level = new Uint8Array(n);
     this.drawn = new Array<CarPose | null>(n).fill(null);
     for (const [type, m] of models ?? []) {
@@ -426,6 +449,11 @@ export class ParkedCars {
         return { parts, meshes, paint, used: 0 };
       };
       this.levels.set(type, [make(m.full, 'full'), make(m.lod, 'lod')]);
+      if (canDraw()) this.platePose.set(type, platePoses(m.full).map((p) => MODEL_TO_CHASSIS.clone().multiply(p)));
+    }
+    if ([...this.platePose.values()].some((p) => p.length > 0)) {
+      this.plates = new Plates(PLATE_CAPACITY);
+      scene.add(this.plates.mesh);
     }
   }
 
@@ -480,6 +508,8 @@ export class ParkedCars {
     this.lastRebuild = { x, z };
     this.shown = visibleCars(this.pool.poses, x, z, this.radius, always);
     this.slots.fill(-1);
+    this.plateSlot.fill(-1);
+    let plates = 0;
     for (const lv of this.levels.values()) for (const l of lv) l.used = 0;
     const col = new Color();
     for (const i of this.shown) {
@@ -493,6 +523,11 @@ export class ParkedCars {
       this.slots[i] = k;
       this.level[i] = near ? 0 : 1;
       l.meshes.forEach((im, j) => { if (l.paint[j]) im.setColorAt(k, col.setHex(this.pool.colors[i]!)); });
+      const pp = near && this.plates ? this.platePose.get(this.pool.types[i]!) ?? [] : [];
+      if (pp.length > 0 && plates + pp.length <= this.plates!.capacity) {
+        this.plateSlot[i] = plates;
+        for (let j = 0; j < pp.length; j++) this.plates!.text(plates++, plateText(i));
+      }
       this.writeMatrix(i);
     }
     for (const lv of this.levels.values()) {
@@ -505,6 +540,7 @@ export class ParkedCars {
         }
       }
     }
+    if (this.plates) this.plates.mesh.count = plates;
     this.dirty.clear();
   }
 
@@ -517,6 +553,8 @@ export class ParkedCars {
     this.drawn[i] = s;
     this.base.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own || this.hidden.has(i) ? this.zero : this.one);
     l.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(this.base).multiply(l.parts[j]!.local)));
+    const ps = this.plateSlot[i]!;
+    if (ps >= 0) this.platePose.get(this.pool.types[i]!)!.forEach((pm, j) => this.plates!.move(ps + j, this.m.copy(this.base).multiply(pm)));
     this.dirty.add(l);
   }
 

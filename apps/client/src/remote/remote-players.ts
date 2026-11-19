@@ -2,6 +2,7 @@ import type { Camera, Object3D, Scene } from 'three';
 import {
   BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, BIKE_ROOF, fromCarLocal, headingPose, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
+  plateText,
 } from '@nn/shared';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
@@ -35,7 +36,7 @@ export interface ParkedHider {
 
 /** The parts of DrivenCar this uses (tests replace it, DrivenCar builds canvas textures). */
 export interface CarView {
-  show(type: CarType, color: number): void;
+  show(type: CarType, color: number, plate?: string): void;
   hide(): void;
   setPose(p: CarPose): void;
   setWheels(w: WheelSource, dt: number): void;
@@ -262,7 +263,7 @@ export class RemotePlayers {
       let d = this.driven.get(c.id);
       if (!d) {
         const view = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
-        view.show(this.opts.typeOf(c.id), this.opts.colorOf(c.id));
+        view.show(this.opts.typeOf(c.id), this.opts.colorOf(c.id), plateText(c.id));
         d = { view, label: null, seen: true };
         this.driven.set(c.id, d);
       }

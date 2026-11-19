@@ -42,6 +42,7 @@ Each run renders review stills to `shots/cars/<name>-*.png` and prints `CAR_REPO
 | `interior` | rebuilt models: everything inside (one mesh) |
 | `steering` | steering wheel, origin in the hub, local Z along the column; children `grip_l`, `grip_r` (empties on the rim) |
 | `seat_0` … `seat_n` | empties at the hip point of each seat: driver, front passenger, rear left, rear right |
+| `plate_f`, `plate_r` | empties where the game draws the lettered number plates (`apps/client/src/plates.ts`): local −Y outwards, Z up; the models' own plates stay blank |
 | material `paint` | body colour, recoloured per car |
 | material `glass` | window panes. Rebuilt models: clear (alphaMode BLEND; the client draws it without depth writes). Old models: opaque |
 | materials `lens`, `lens_red` | clear lamp covers (treated like clear glass) |

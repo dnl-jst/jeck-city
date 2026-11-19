@@ -13,7 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
 from carbody import V, build_lod_shell, build_shell, car_materials2, pair, recess, run2  # noqa: E402
 from carinterior import blob, build_interior, seat_manikins  # noqa: E402
-from carparts import empty, exhaust, lamp_pair, mirror, poly_round, rrect, wheel, wipers  # noqa: E402
+from carparts import empty, plate_node, exhaust, lamp_pair, mirror, poly_round, rrect, wheel, wipers  # noqa: E402
 
 NAME = 'kleinwagen'
 F, B = 2.075, -1.975  # u of the front and rear faces
@@ -153,6 +153,8 @@ def build(coll, lod=False):
     p.cyl(V((0.0, 1.3, 1.445)), V((0.0, 1.52, 1.56)), 0.005, M['trim'], seg=5)  # antenna at the rear of the roof
     if not lod:
         build_interior(sh, LAYOUT)
+    plate_node(coll, 'plate_f', skin, (0, -F, 0.47), (0, 1, 0), body, off=0.015)
+    plate_node(coll, 'plate_r', skin, (0, -B, 0.72), (0, -1, 0), body, off=0.011)
     sh.finish()
 
     ua, x = S['wb'] / 2, S['track'] / 2

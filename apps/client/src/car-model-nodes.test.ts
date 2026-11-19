@@ -54,3 +54,16 @@ describe('kleinwagen model', () => {
     expect(g.materials.find((m) => m.name === 'glass')?.alphaMode).toBe('BLEND');
   });
 });
+
+describe.each(['kleinwagen', 'mittelklasse', 'transporter', 'smart'])('%s model', (type) => {
+  it('has a node for each number plate, front ahead of the rear', () => {
+    const g = readModel(type);
+    const at = (name: string) => g.nodes.find((n) => n.name === name)?.translation;
+    const f = at('plate_f'), r = at('plate_r');
+    expect(f, 'plate_f').toBeDefined();
+    expect(r, 'plate_r').toBeDefined();
+    expect(f![2]).toBeGreaterThan(1); // glTF z = forward
+    expect(r![2]).toBeLessThan(-1);
+    expect(Math.abs(f![0])).toBeLessThan(0.01);
+  });
+});
