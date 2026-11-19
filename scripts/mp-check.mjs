@@ -62,6 +62,9 @@ async function join(browser, name) {
   url.searchParams.set('time', '14:00');
   url.searchParams.set('date', '2026-06-15');
   await page.goto(url.href);
+  // the intro: its full-screen start layer first (it starts the music), then the button into the lobby
+  const start = page.locator('.nn-intro-start');
+  if (await start.count()) await start.click();
   await page.locator('.nn-intro-go').click();
   await page.locator('.nn-lobby-input').fill(name);
   await page.keyboard.press('Enter');

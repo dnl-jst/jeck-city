@@ -1,11 +1,12 @@
 import {
   type BufferGeometry, Color, Group, type Material, type Object3D,
-  DataTexture, DataUtils, HalfFloatType, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
+  DataTexture, DataUtils, EquirectangularReflectionMapping, FrontSide, HalfFloatType, SRGBColorSpace, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
   Vector3, type Scene,
 } from 'three';
 import {
-  CAR_SPECS, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
+  CAR_SEATS, CAR_SPECS, plateText, type DoorName, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
 } from '@nn/shared';
+import { Plates, platePoses } from './plates';
 
 type XZ = { x: number; z: number };
 
@@ -35,9 +36,87 @@ function modelParts(model: Object3D): Part[] {
   return out;
 }
 
+/**
+ * Clear glass of the rebuilt models: window panes ('glass') and lamp covers ('lens…') that the glTF marks as blended.
+ * The old models' 'glass' is opaque and stays as it is.
+ */
+export function isClearGlass(m: Material): boolean {
+  return m.transparent && (m.name === 'glass' || m.name.startsWith('lens'));
+}
+
+/**
+ * The material a car mesh is drawn with: clear glass as a copy tuned for the game (no depth writes, so panes behind
+ * panes and the interior stay visible; single-sided; glossy), everything else as it is.
+ */
+export function carMaterial(m: Material): Material {
+  if (m instanceof MeshStandardMaterial && m.name === 'mirror') return mirrorMaterial(m);
+  if (!(m instanceof MeshStandardMaterial) || !isClearGlass(m)) return m;
+  const c = m.clone();
+  c.transparent = true;
+  c.depthWrite = false;
+  c.side = FrontSide;
+  c.roughness = 0.05;
+  c.metalness = 0;
+  c.envMapIntensity = 1.5;
+  return c;
+}
+
+/** How bright the mirrors' reflection is by day. */
+const MIRROR_DAY = 1.3;
+const mirrors = new Set<MeshStandardMaterial>();
+let mirrorEnv: DataTexture | null = null;
+let mirrorNight = 0;
+
+/**
+ * What the door mirrors reflect: a small panorama of sky, a band of facades at the horizon and the street below.
+ * Real reflections would mean rendering the city again for every mirror; this reads as a mirror from the outside.
+ */
+function mirrorEnvironment(): DataTexture {
+  if (mirrorEnv) return mirrorEnv;
+  const w = 64, h = 32, data = new Uint8Array(w * h * 4);
+  for (let j = 0; j < h; j++) {
+    const up = (j + 0.5) / h * 2 - 1; // −1 straight down … +1 straight up (texture rows start at the bottom)
+    const c = up > 0.22 ? [120 + 60 * (1 - up), 160 + 50 * (1 - up), 235] // sky, paler towards the horizon
+      : up > 0.02 ? [176, 164, 146] // facades
+        : [78 + 40 * (1 + up), 80 + 40 * (1 + up), 86 + 40 * (1 + up)]; // street
+    for (let i = 0; i < w; i++) data.set([c[0]!, c[1]!, c[2]!, 255], (j * w + i) * 4);
+  }
+  mirrorEnv = new DataTexture(data, w, h, RGBAFormat);
+  mirrorEnv.mapping = EquirectangularReflectionMapping;
+  mirrorEnv.colorSpace = SRGBColorSpace;
+  mirrorEnv.minFilter = mirrorEnv.magFilter = LinearFilter;
+  mirrorEnv.needsUpdate = true;
+  return mirrorEnv;
+}
+
+/** Mirror glass: fully reflective, showing mirrorEnvironment(). The material is shared by all cars of its type. */
+function mirrorMaterial(m: MeshStandardMaterial): MeshStandardMaterial {
+  if (!mirrors.has(m)) {
+    m.envMap = mirrorEnvironment();
+    m.metalness = 1;
+    m.roughness = 0.04;
+    mirrors.add(m);
+    m.envMapIntensity = MIRROR_DAY * (1 - 0.88 * mirrorNight);
+  }
+  return m;
+}
+
+/** night 0..1: the mirrors' reflection darkens with the sky. */
+export function setMirrorNight(night: number): void {
+  if (night === mirrorNight && mirrors.size > 0) return;
+  mirrorNight = night;
+  for (const m of mirrors) m.envMapIntensity = MIRROR_DAY * (1 - 0.88 * night);
+}
+
+/** Clear glass throws no shadow and is drawn after the opaque rest of the cars. */
+function glassMesh(mesh: Object3D): void {
+  mesh.castShadow = false;
+  mesh.renderOrder = 1;
+}
+
 /** Paint is white in the instanced copy: instanceColor carries each car's colour. */
 function instanceMaterial(m: Material): Material {
-  if (!(m instanceof MeshStandardMaterial) || m.name !== 'paint') return m;
+  if (!(m instanceof MeshStandardMaterial) || m.name !== 'paint') return carMaterial(m);
   const c = m.clone();
   c.color.set(0xffffff);
   return c;
@@ -110,8 +189,13 @@ export type WheelSource = { speed(): number; wheelSteering(w: number): number; w
 
 /** Wheel nodes in Vehicle wheel order (0 front right, 1 front left, 2 rear right, 3 rear left). */
 const WHEEL_NODES = ['wheel_fr', 'wheel_fl', 'wheel_rr', 'wheel_rl'] as const;
+/** The steering wheel turns this many times the front wheels' angle, up to STEERING_WHEEL_MAX (rad) either way. */
+const STEERING_RATIO = 6, STEERING_WHEEL_MAX = 2.2;
 /** How far the suspension may visibly move a wheel from its rest position (m). */
 const WHEEL_TRAVEL = 0.12;
+
+/** Whether textures can be painted (a browser; not the unit tests' plain Node). */
+const canDraw = (): boolean => typeof document !== 'undefined';
 
 /** One driveable copy of a car model: its own paint and lamp materials, wheel nodes, lamp positions. */
 type Rig = {
@@ -122,6 +206,12 @@ type Rig = {
   wheels: { node: Object3D; rest: Vector3 }[];
   /** Lamp centres in the chassis frame: front left/right, rear left/right. */
   lamps: { fl: Vector3; fr: Vector3; rl: Vector3; rr: Vector3 };
+  /** The car's number plates (front, rear), lettered in show(); null for a model without plate nodes. */
+  plates: Plates | null;
+  /** Seat nodes (hip points) in order, the steering wheel with its grip nodes, the doors by name; rest = closed / straight. */
+  seats: Object3D[];
+  steering: { node: Object3D; rest: Quaternion; grips: [Object3D, Object3D] | null } | null;
+  doors: Map<DoorName, { node: Object3D; rest: Quaternion; side: number; open: number }>;
 };
 
 function makeRig(model: Object3D, type: CarType): Rig {
@@ -137,8 +227,17 @@ function makeRig(model: Object3D, type: CarType): Rig {
       if (mat.name === 'paint') { const c = mat.clone(); paint.push(c); return c; }
       if (mat.name === 'lamp_front') { const c = mat.clone(); c.emissive.set(0xfff1d6); head.push(c); return c; }
       if (mat.name === 'lamp_rear') { const c = mat.clone(); c.emissive.set(0xff1a0a); tail.push(c); return c; }
-      return mat;
+      // the lamps' covers glow with them: a tinted cover over a glowing recess swallows most of the light
+      if (mat.name === 'lens' || mat.name === 'lens_red') {
+        const c = carMaterial(mat) as MeshStandardMaterial;
+        c.emissive.set(mat.name === 'lens' ? 0xfff1d6 : 0xff1a0a);
+        c.userData.gain = 0.6 / Math.max(0.2, c.opacity); // blended: its glow is scaled by its opacity
+        (mat.name === 'lens' ? head : tail).push(c);
+        return c;
+      }
+      return carMaterial(mat);
     };
+    if ([m.material].flat().some(isClearGlass)) glassMesh(m);
     m.material = Array.isArray(m.material) ? m.material.map(own) : own(m.material);
   });
   const wheels = WHEEL_NODES.map((n) => {
@@ -150,10 +249,31 @@ function makeRig(model: Object3D, type: CarType): Rig {
     const e = root.getObjectByName(n);
     return e ? e.position.clone().add(new Vector3(0, -VEHICLE_REST_Y, 0)) : fallback;
   };
+  const poses = canDraw() ? platePoses(root) : [];
+  let plates: Plates | null = null;
+  if (poses.length > 0) {
+    plates = new Plates(poses.length);
+    plates.mesh.count = poses.length;
+    poses.forEach((m, k) => plates!.move(k, m));
+    root.add(plates.mesh);
+  }
+  const seats: Object3D[] = [];
+  for (let i = 0; ; i++) {
+    const n = root.getObjectByName(`seat_${i}`);
+    if (!n) break;
+    seats.push(n);
+  }
+  const wheelNode = root.getObjectByName('steering'), gl = root.getObjectByName('grip_l'), gr = root.getObjectByName('grip_r');
+  const steering = wheelNode ? { node: wheelNode, rest: wheelNode.quaternion.clone(), grips: gl && gr ? [gl, gr] as [Object3D, Object3D] : null } : null;
+  const doors: Rig['doors'] = new Map();
+  for (const [name, d] of Object.entries(CAR_SEATS[type].doors)) {
+    const node = root.getObjectByName(name);
+    if (node) doors.set(name as DoorName, { node, rest: node.quaternion.clone(), side: Math.sign(d.hingeX), open: d.openAngle });
+  }
   const sp = CAR_SPECS[type];
   const fz = sp.bodyZ + sp.length / 2, rz = sp.bodyZ - sp.length / 2;
   return {
-    root, paint, head, tail, wheels,
+    root, paint, head, tail, wheels, plates, seats, steering, doors,
     lamps: {
       fl: lamp('light_fl', new Vector3(0.6, G + 0.75, fz)), fr: lamp('light_fr', new Vector3(-0.6, G + 0.75, fz)),
       rl: lamp('tail_l', new Vector3(0.7, G + 0.85, rz)), rr: lamp('tail_r', new Vector3(-0.7, G + 0.85, rz)),
@@ -182,6 +302,7 @@ export class DrivenCar {
   private readonly qSpin = new Quaternion();
   private readonly axisX = new Vector3(1, 0, 0);
   private readonly axisY = new Vector3(0, 1, 0);
+  private readonly axisZ = new Vector3(0, 0, 1);
 
   /**
    * beams: false = another player's car: no spotlights (only the emissive lamp materials), so the
@@ -233,7 +354,8 @@ export class DrivenCar {
     });
   }
 
-  show(type: CarType, color: number): void {
+  /** Shows the car as `type` in `color`, with `plate` on its number plates. */
+  show(type: CarType, color: number, plate = ''): void {
     let r = this.rigs.get(type);
     const model = this.models?.get(type)?.full;
     if (!r && model) {
@@ -246,6 +368,7 @@ export class DrivenCar {
     if (r) {
       this.group.add(r.root);
       for (const m of r.paint) m.color.setHex(color);
+      for (let k = 0; k < (r.plates?.capacity ?? 0); k++) r.plates!.text(k, plate);
       this.placeLamps(r.lamps);
     }
     this.group.visible = true;
@@ -266,10 +389,42 @@ export class DrivenCar {
     }
   }
 
+  /** The shown model's root (its frame: x left, y up, z forward, origin on the ground), to seat figures in; null without a model. */
+  get root(): Object3D | null {
+    return this.current?.root ?? null;
+  }
+
+  /** The hip point of seat i in the frame of root, or null. */
+  seat(i: number): Vector3 | null {
+    const n = this.current?.seats[i];
+    return n ? this.current!.root.worldToLocal(n.getWorldPosition(new Vector3())) : null;
+  }
+
+  /** Where the hands hold the steering wheel (left, right) in the frame of root, as the wheel is turned now; or null. */
+  grips(): [Vector3, Vector3] | null {
+    const r = this.current, g = r?.steering?.grips;
+    if (!r || !g) return null;
+    r.root.updateMatrixWorld(true);
+    return g.map((n) => r.root.worldToLocal(n.getWorldPosition(new Vector3()))) as [Vector3, Vector3];
+  }
+
+  /** Opens door `name` by k (0 shut … 1 fully open). */
+  setDoor(name: DoorName, k: number): void {
+    const d = this.current?.doors.get(name);
+    if (!d) return;
+    // hinged at the front: the rear edge of a left door swings out to the left
+    d.node.quaternion.copy(d.rest).multiply(this.qSteer.setFromAxisAngle(this.axisY, -d.side * d.open * Math.max(0, Math.min(1, k))));
+  }
+
   /** Wheels: spin with the speed (m/s), steer and follow each wheel's suspension; dt = frame time. */
   setWheels(v: WheelSource, dt: number): void {
     const r = this.current;
     if (!r) return;
+    if (r.steering) {
+      // the steering wheel turns with the front wheels, geared up; its node's local Z is the column
+      const turn = Math.max(-STEERING_WHEEL_MAX, Math.min(STEERING_WHEEL_MAX, v.wheelSteering(0) * STEERING_RATIO));
+      r.steering.node.quaternion.copy(r.steering.rest).multiply(this.qSteer.setFromAxisAngle(this.axisZ, turn));
+    }
     this.spin = (this.spin + (v.speed() * dt) / this.radius) % (Math.PI * 2);
     this.qSpin.setFromAxisAngle(this.axisX, this.spin);
     r.wheels.forEach(({ node, rest }, i) => {
@@ -285,8 +440,8 @@ export class DrivenCar {
     const brake = braking && power > 0.5;
     const r = this.current;
     if (r) {
-      for (const m of r.head) m.emissiveIntensity = (0.15 + 2.2 * night) * power;
-      for (const m of r.tail) m.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+      for (const m of r.head) m.emissiveIntensity = (0.15 + 2.2 * night) * power * ((m.userData.gain as number | undefined) ?? 1);
+      for (const m of r.tail) m.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power * ((m.userData.gain as number | undefined) ?? 1);
     }
     this.setBeams(this.shown && power > 0.5 ? night * power : 0);
     const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;
@@ -340,6 +495,8 @@ export const needsCarRebuild = (last: XZ | null, x: number, z: number): boolean 
 
 /** Parked cars closer to the camera than this use the full model, the rest the distance version (m). */
 export const CAR_LOD_NEAR = 45;
+/** Lettered plates at once (two per car drawn with the full model; cars beyond that keep their blank plates). */
+const PLATE_CAPACITY = 512;
 
 /** Instanced meshes of one model (one per part); level 0 = full detail, 1 = distance version. */
 type Level = { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[]; used: number };
@@ -371,10 +528,15 @@ export class ParkedCars {
   private readonly one = new Vector3(1, 1, 1);
   private readonly zero = new Vector3(0, 0, 0);
   private readonly dirty = new Set<Level>();
+  /** Lettered number plates of the cars drawn with the full model: plate positions per type (chassis frame), the first plate instance of each car (−1: none). */
+  private plates: Plates | null = null;
+  private readonly platePose = new Map<CarType, Matrix4[]>();
+  private readonly plateSlot: Int32Array;
 
   constructor(scene: Scene, private readonly pool: CarPool, models?: CarModels) {
     const n = pool.count;
     this.slots = new Int32Array(n).fill(-1);
+    this.plateSlot = new Int32Array(n).fill(-1);
     this.level = new Uint8Array(n);
     this.drawn = new Array<CarPose | null>(n).fill(null);
     for (const [type, m] of models ?? []) {
@@ -386,6 +548,7 @@ export class ParkedCars {
           im.name = `car_${type}_${tag}_${k}`;
           im.count = 0;
           im.castShadow = im.receiveShadow = true;
+          if (isClearGlass(part.material)) glassMesh(im);
           scene.add(im);
           return im;
         });
@@ -394,6 +557,11 @@ export class ParkedCars {
         return { parts, meshes, paint, used: 0 };
       };
       this.levels.set(type, [make(m.full, 'full'), make(m.lod, 'lod')]);
+      if (canDraw()) this.platePose.set(type, platePoses(m.full).map((p) => MODEL_TO_CHASSIS.clone().multiply(p)));
+    }
+    if ([...this.platePose.values()].some((p) => p.length > 0)) {
+      this.plates = new Plates(PLATE_CAPACITY);
+      scene.add(this.plates.mesh);
     }
   }
 
@@ -448,6 +616,8 @@ export class ParkedCars {
     this.lastRebuild = { x, z };
     this.shown = visibleCars(this.pool.poses, x, z, this.radius, always);
     this.slots.fill(-1);
+    this.plateSlot.fill(-1);
+    let plates = 0;
     for (const lv of this.levels.values()) for (const l of lv) l.used = 0;
     const col = new Color();
     for (const i of this.shown) {
@@ -461,6 +631,11 @@ export class ParkedCars {
       this.slots[i] = k;
       this.level[i] = near ? 0 : 1;
       l.meshes.forEach((im, j) => { if (l.paint[j]) im.setColorAt(k, col.setHex(this.pool.colors[i]!)); });
+      const pp = near && this.plates ? this.platePose.get(this.pool.types[i]!) ?? [] : [];
+      if (pp.length > 0 && plates + pp.length <= this.plates!.capacity) {
+        this.plateSlot[i] = plates;
+        for (let j = 0; j < pp.length; j++) this.plates!.text(plates++, plateText(i));
+      }
       this.writeMatrix(i);
     }
     for (const lv of this.levels.values()) {
@@ -473,6 +648,7 @@ export class ParkedCars {
         }
       }
     }
+    if (this.plates) this.plates.mesh.count = plates;
     this.dirty.clear();
   }
 
@@ -485,6 +661,8 @@ export class ParkedCars {
     this.drawn[i] = s;
     this.base.compose(this.p.set(s.x, s.y, s.z), this.q.set(s.qx, s.qy, s.qz, s.qw), i === this.own || this.hidden.has(i) ? this.zero : this.one);
     l.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(this.base).multiply(l.parts[j]!.local)));
+    const ps = this.plateSlot[i]!;
+    if (ps >= 0) this.platePose.get(this.pool.types[i]!)!.forEach((pm, j) => this.plates!.move(ps + j, this.m.copy(this.base).multiply(pm)));
     this.dirty.add(l);
   }
 

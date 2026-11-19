@@ -250,6 +250,11 @@ const mirror = (v: Vector3, s: number) => new Vector3(v.x * s, v.y, v.z);
  * legs and arms onto pedals and grips, a fall tips it over. Shown either as a primitive stand-in or, after
  * setModel(), as a skinned character model whose bones follow that skeleton.
  */
+/** Where a seated figure's hands rest on its thighs (left, right), for the hip point `seat`. */
+export function thighRest(seat: Vector3): [Vector3, Vector3] {
+  return [1, -1].map((s) => new Vector3(seat.x + s * 0.13, seat.y + 0.1, seat.z + 0.3)) as [Vector3, Vector3];
+}
+
 export class PlayerFigure {
   readonly group = new Group();
   /** Facing (heading convention, forward = (sin h, cos h)); turns smoothly towards the walking direction. */
@@ -585,6 +590,58 @@ export class PlayerFigure {
     }
     this.group.updateMatrixWorld(true);
     this.model?.apply();
+  }
+
+  /** The hips' height above the feet when standing (m). */
+  get hipHeight(): number {
+    return this.p.hip.y;
+  }
+
+  /**
+   * A whole-body pose by its ends, in the frame the figure hangs in (the caller parents `group`; e.g. a car model,
+   * facing +z): the hips at `hip`, the body turned by `yaw` about the vertical and leaning forward by `pitch`
+   * (negative: back), the ankles on `feet`, the palms on `hands` (two-bone IK each). handTurn: the hands turned about
+   * the forward axis (on a steering wheel); curl: how far the fingers close (0..1).
+   */
+  pose(hip: Vector3, yaw: number, pitch: number, feet: [Vector3, Vector3], hands: [Vector3, Vector3], handTurn = 0, curl = 0.2): void {
+    this.fallT = -1;
+    this.endRagdoll();
+    this.rise = null;
+    const p = this.p;
+    this.group.position.set(hip.x, hip.y - p.hip.y, hip.z);
+    this.group.rotation.set(0, yaw, 0);
+    this.body.position.set(0, 0, 0);
+    this.body.rotation.set(0, 0, 0);
+    this.torso.rotation.set(pitch, 0, 0);
+    this.headNode.rotation.set(-pitch * 0.85, 0, 0); // looking ahead, neither at the roof nor at the floor
+    // the leg solver works in the unturned figure: turn the targets back about the hips' vertical
+    const c = Math.cos(-yaw), sn = Math.sin(-yaw), base = this.group.position;
+    for (let i = 0; i < 2; i++) {
+      this.feet[i]!.rotation.set(0, 0, 0);
+      const dx = feet[i]!.x - base.x, dz = feet[i]!.z - base.z;
+      this.solveLeg(i, new Vector3(base.x + dx * c + dz * sn, feet[i]!.y, base.z - dx * sn + dz * c));
+    }
+    this.group.updateMatrixWorld(true);
+    const turn = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), handTurn);
+    const handRot = [0, 1].map((i) => turn.clone().multiply(gripRotation(i === 0 ? 1 : -1, this.fingerAxis(i))));
+    for (let i = 0; i < 2; i++) {
+      const wrist = hands[i]!.clone().add(GRIP_PALM).sub(this.segs(i).palm.applyQuaternion(handRot[i]!));
+      this.solveArm(i, this.group.parent ? this.group.parent.localToWorld(wrist) : wrist);
+      this.orientHand(i, handRot[i]!);
+      this.curlFingers(i, curl);
+    }
+    this.group.updateMatrixWorld(true);
+    this.model?.apply();
+  }
+
+  /**
+   * Sitting in a car (see pose): hips on `seat`, leaning back by `recline`, feet on the floor at `feet`, hands on the
+   * wheel at `grips` – or resting on the thighs without.
+   */
+  sit(seat: Vector3, feet: [Vector3, Vector3], grips: [Vector3, Vector3] | null, recline: number): void {
+    const hands = grips ?? thighRest(seat);
+    const across = hands[0].clone().sub(hands[1]);
+    this.pose(seat, 0, -recline, feet, hands, grips ? Math.atan2(across.y, across.x) : 0, grips ? 1 : 0.2);
   }
 
   /** How far (m) the lower of ball and heel of foot i is below its rest height (negative: above), body at 0. */

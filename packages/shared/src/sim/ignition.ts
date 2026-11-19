@@ -31,9 +31,10 @@ export class Ignition {
     return this.s;
   }
 
-  start(): void {
+  /** Starts the sequence; `delay` ticks pass first (the figure walks to the door and gets in). */
+  start(delay = 0): void {
     this.s = 'starting';
-    this.t = 0;
+    this.t = -Math.max(0, Math.round(delay));
     this.next = 0;
   }
 

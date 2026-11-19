@@ -10,7 +10,7 @@ import type { SimEvent, WorldSim } from './world-sim';
 const WALK_MIN_SPEED = 0.3;
 
 const ENGINE = { off: 0, starting: 1, running: 2 } as const;
-const MODE = { walk: 0, drive: 1, down: 2, ride: 3 } as const;
+const MODE = { walk: 0, drive: 1, down: 2, ride: 3, sit: 4 } as const;
 
 type Entry<T> = { key: string; x: number; z: number; v: T };
 
@@ -35,7 +35,7 @@ export function snapshotRound(sim: WorldSim, events: SimEvent[], slotOf: (id: Pl
   const walkers: SnapshotRound['walkers'] = [];
   for (const other of sim.players()) {
     const p = sim.player(other);
-    if (p.mode === 'drive' || p.mode === 'ride') continue; // represented by the car or the rider entry
+    if (p.mode === 'drive' || p.mode === 'ride' || p.mode === 'sit') continue; // represented by the car or the rider entry
     const slot = slotOf(other);
     const speed = Math.hypot(p.vel.x, p.vel.z);
     const state: WalkerState = p.falling ? 3 : p.mode === 'down' ? 2 : speed > WALK_MIN_SPEED ? 1 : 0;
@@ -63,7 +63,7 @@ export function snapshotRound(sim: WorldSim, events: SimEvent[], slotOf: (id: Pl
 
   const cars: SnapshotRound['cars'] = [];
   const carIds = new Set(sim.cars.awake());
-  sim.cars.driver.forEach((d, i) => { if (d !== null) carIds.add(i); });
+  sim.cars.driver.forEach((_, i) => { if (sim.cars.occupied(i)) carIds.add(i); });
   for (const i of [...carIds].sort((a, b) => a - b)) {
     const v = sim.cars.vehicle(i);
     if (!v) continue;
@@ -126,7 +126,7 @@ export function snapshotFor(round: SnapshotRound, sim: WorldSim, id: PlayerId, i
   }
 
   const own: SnapshotOwn = {
-    mode: MODE[me.mode], engine: ENGINE[me.engine], carId: me.carId ?? 0, char: me.char, car: me.car,
+    mode: MODE[me.mode], engine: ENGINE[me.engine], carId: me.carId ?? me.pass?.car ?? 0, seat: me.pass?.seat ?? 0, char: me.char, car: me.car,
     bikeId: me.bikeId ?? 0, fallTicks: me.fallTicks, bike: me.bike,
   };
   // (own entries never got into `inside`)

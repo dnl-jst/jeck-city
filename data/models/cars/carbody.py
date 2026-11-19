@@ -1,0 +1,670 @@
+"""Car shell with real window openings, clear glass and doors of their own (run inside Blender, headless is fine).
+
+Builds on the loft of carparts.py (frame and tables as described there and in README.md): the lofted, subdivided skin
+is split into the body, one object per door and the glass panes; body and doors get a wall thickness, so every opening
+has a reveal and nothing behind a pane is seen from its back. The distance model keeps the closed skin with opaque
+glass.
+"""
+import math
+import os
+import sys
+
+import bmesh
+import bpy
+from mathutils import Vector
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import carparts  # noqa: E402
+from carparts import Part, apply_modifiers, frame_of, car_materials, clear_scene, decal, decal_object, export_car, grid, make_lod  # noqa: E402
+from nnmodel import material  # noqa: E402
+
+V = Vector
+
+WALL = 0.03  # wall thickness of body and doors (m)
+GAP = 0.005  # a door's edge stands this far back from its opening (m)
+LAMP_DEPTH = 0.024  # lamp and grille recesses stay inside the wall, so they keep their back
+GLASS_INSET = 0.008  # the panes sit this far inside the outer skin (m)
+TAG_BASES = ('paint', 'glass', 'pillar', 'trim', 'tridion')  # materials a door's skin may carry
+DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body); S['door_segs'] overrides
+
+
+# ---------------------------------------------------------------- materials
+
+def car_materials2(paint=(0.55, 0.06, 0.05)):
+    """car_materials() with clear glass ('glass', exported as alphaMode BLEND) and the interior set."""
+    m = car_materials(paint)
+    m['glass_dark'] = material('glass_dark', (0.07, 0.09, 0.1), rough=0.05, metal=0.2)  # the distance model's opaque glass
+    m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.32, rough=0.05)
+    m['lens'] = clear('lens', (0.93, 0.95, 1.0), 0.32, rough=0.03)  # clear lamp covers
+    m['lens_red'] = clear('lens_red', (0.75, 0.03, 0.02), 0.6, rough=0.05)  # tail lamp covers
+    m['mirror'] = material('mirror', (0.75, 0.78, 0.8), rough=0.04, metal=1.0)  # mirror glass; the game gives it a reflection
+    m['pillar'] = material('pillar', (0.015, 0.015, 0.018), rough=0.12)  # gloss black window pillars
+    m['interior'] = material('interior', (0.07, 0.07, 0.075), rough=0.8)
+    m['interior_trim'] = material('interior_trim', (0.15, 0.15, 0.155), rough=0.6)
+    m['seat'] = material('seat', (0.3, 0.3, 0.32), rough=0.9)
+    m['rubber'] = material('rubber', (0.02, 0.02, 0.02), rough=0.7)
+    # the game has no environment map: fully metallic rims would render black
+    m['rim'] = material('rim', (0.72, 0.73, 0.75), rough=0.35, metal=0.5)
+    m['rim_dark'] = material('rim_dark', (0.18, 0.18, 0.19), rough=0.5, metal=0.4)
+    return m
+
+
+def clear(name, color, alpha, rough):
+    m = material(name, color, rough=rough, metal=0.0)
+    m.node_tree.nodes['Principled BSDF'].inputs['Alpha'].default_value = alpha
+    m.surface_render_method = 'BLENDED'
+    m.use_backface_culling = True  # glTF: single-sided, so the far panes do not draw over the interior
+    m.diffuse_color = (*m.diffuse_color[:3], alpha)
+    return m
+
+
+# ---------------------------------------------------------------- mesh helpers
+
+def subset(me, name, keep):
+    """A new mesh of the faces of me for which keep(face, material name) holds (same material slots)."""
+    names = [m.name for m in me.materials]
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    dead = [f for f in bm.faces if not keep(f, names[f.material_index])]
+    bmesh.ops.delete(bm, geom=dead, context='FACES')
+    out = bpy.data.meshes.new(name)
+    bm.to_mesh(out)
+    bm.free()
+    for m in me.materials:
+        out.materials.append(m)
+    return out
+
+
+def slot(me, mat):
+    names = [m.name for m in me.materials]
+    if mat.name not in names:
+        me.materials.append(mat)
+        return len(names)
+    return names.index(mat.name)
+
+
+def boundary_frames(bm):
+    """For every vertex on the open boundary of bm: its inward direction along the surface. Uses the smooth vertex
+    normals and the neighbouring faces' centre, not the single face at the edge: the Boolean leaves slivers along the
+    wheel arches whose own normals point anywhere."""
+    acc = {}
+    for e in bm.edges:
+        if len(e.link_faces) != 1:
+            continue
+        a, b = e.verts
+        n = a.normal + b.normal
+        inward = n.cross(b.co - a.co)
+        if inward.length < 1e-9:
+            continue
+        inward.normalize()
+        faces = {f for v in (a, b) for f in v.link_faces}
+        centre = sum((f.calc_center_median() * f.calc_area() for f in faces), V((0, 0, 0))) / max(sum(f.calc_area() for f in faces), 1e-12)
+        if inward.dot(centre - (a.co + b.co) / 2) < 0:
+            inward = -inward
+        for v in (a, b):
+            acc[v] = acc.get(v, V((0, 0, 0))) + inward
+    return {v: n.normalized() for v, n in acc.items() if n.length > 1e-9}
+
+
+def shrink_boundary(bm, d):
+    """Moves the open boundary of bm inwards by d along the surface."""
+    for v, inward in boundary_frames(bm).items():
+        v.co += inward * d
+
+
+def add_seal(seals, me, S, depth=WALL + 0.004, half=0.022):
+    """Adds the door seal for the door skin `me` to the bmesh `seals`: a band behind the door's edge all round (just
+    behind the wall, reaching `half` to either side of the gap), so nothing shows through the gap of a closed door.
+    Left out along the wheel arches, where it would stand in the wheel housing."""
+    bm = bmesh.new()
+    bm.from_mesh(me)
+    bm.normal_update()
+    frames = boundary_frames(bm)
+    reach = S['r'] + S.get('arch_gap', 0.035) + 0.06
+    made = {}
+
+    def pt(v, k):
+        if (v, k) not in made:
+            made[(v, k)] = seals.verts.new(v.co - v.normal * depth + frames[v] * (k * half))
+        return made[(v, k)]
+
+    for e in bm.edges:
+        a, b = e.verts
+        if len(e.link_faces) != 1 or a not in frames or b not in frames:
+            continue
+        if any(math.hypot(v.co.y + ua, v.co.z - S['r']) < reach for v in (a, b) for ua in (S['wb'] / 2, -S['wb'] / 2)):
+            continue  # either end at a wheel arch: the band would stick out into the housing
+        seals.faces.new([pt(a, -1), pt(b, -1), pt(b, 1), pt(a, 1)])
+    bm.free()
+
+
+def piece(me, name, coll, M, gap=0.0, cutters=(), keep_out=(), side=0, relief=()):
+    """One part of the car from its skin faces: panes set back, the rest given a wall (inside 'interior_trim', edges
+    'rubber'), `cutters` subtracted from the wall (their faces line the recesses). Returns the object (at the origin)."""
+    for tag in [m.name for m in me.materials if '@' in m.name]:  # door tags back to the real materials
+        base = slot(me, M[tag.split('@')[0]])
+        t = [m.name for m in me.materials].index(tag)
+        for p in me.polygons:
+            if p.material_index == t:
+                p.material_index = base
+    i_trim, i_rubber = slot(me, M['interior_trim']), slot(me, M['rubber'])
+    if gap or relief:
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        if relief:  # (y, z, radius) of arcs the skin must stay outside of
+            for v in bm.verts:
+                for cy, cz, rad in relief:
+                    d = V((0, v.co.y - cy, v.co.z - cz))
+                    if 1e-6 < d.length < rad:
+                        v.co += d.normalized() * (rad - d.length)
+            bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.0008)
+            bmesh.ops.dissolve_degenerate(bm, edges=bm.edges, dist=0.0008)
+        bm.normal_update()
+        if gap:
+            shrink_boundary(bm, gap)
+        bm.to_mesh(me)
+        bm.free()
+    panes = subset(me, name + '_glass', lambda f, m: m == 'glass')
+    wall = subset(me, name, lambda f, m: m != 'glass')
+    bpy.data.meshes.remove(me)
+    ob = bpy.data.objects.new(name, wall)
+    coll.objects.link(ob)
+    n, nv = len(wall.polygons), len(wall.vertices)
+    so = ob.modifiers.new('wall', 'SOLIDIFY')
+    so.thickness = WALL
+    so.offset = -1
+    so.use_rim = True
+    so.use_even_offset = False
+    apply_modifiers(ob)
+    wall = ob.data
+    assert len(wall.polygons) >= 2 * n, 'solidify: unexpected face order'
+    bm = bmesh.new()
+    bm.from_mesh(wall)
+    bm.faces.ensure_lookup_table()
+    for f in bm.faces[n:2 * n]:
+        f.material_index = i_trim
+    for f in bm.faces[2 * n:]:
+        f.material_index = i_rubber
+        f.smooth = False
+        for e in f.edges:
+            e.smooth = False
+    # the wall's inner side must not reach into a wheel housing (keep_out: (y, z, radius) of each arch)
+    bm.verts.ensure_lookup_table()
+    if side and len(bm.verts) >= 2 * nv:
+        # a side panel (side = ±1: left / right): its inner side lies towards the car's middle. The slivers the
+        # Boolean leaves along the wheel arches have normals pointing inwards, which puts their inner vertices
+        # outside the skin: mirror those back
+        for i in range(nv):
+            outer, inner = bm.verts[i], bm.verts[nv + i]
+            off = inner.co - outer.co
+            if off.x * side > 0:
+                inner.co = outer.co - off
+    for v in bm.verts[nv:]:  # solidify appends the inner side's vertices after the skin's
+        for cy, cz, rad in keep_out:
+            d = V((0, v.co.y - cy, v.co.z - cz))
+            if 1e-6 < d.length < rad:
+                v.co += d.normalized() * (rad - d.length)
+    bm.to_mesh(wall)
+    bm.free()
+    if cutters:
+        cc = bpy.data.collections.new('CUTTERS')
+        bpy.context.scene.collection.children.link(cc)
+        for c in cutters:
+            cc.objects.link(c)
+        bpy.context.view_layer.update()
+        bo = ob.modifiers.new('cut', 'BOOLEAN')
+        bo.operation, bo.operand_type, bo.collection = 'DIFFERENCE', 'COLLECTION', cc
+        bo.solver, bo.material_mode = 'EXACT', 'TRANSFER'
+        apply_modifiers(ob)
+        for c in cutters:
+            bpy.data.objects.remove(c, do_unlink=True)
+        bpy.data.collections.remove(cc)
+        wall = ob.data
+    bm = bmesh.new()
+    bm.from_mesh(wall)
+    # the panes, set back from the skin
+    gm = bmesh.new()
+    gm.from_mesh(panes)
+    gm.normal_update()
+    for v in gm.verts:
+        v.co -= v.normal * GLASS_INSET
+    gm.to_mesh(panes)
+    gm.free()
+    bm.from_mesh(panes)
+    bm.to_mesh(wall)
+    bm.free()
+    bpy.data.meshes.remove(panes)
+    return ob
+
+
+def set_origin(ob, at):
+    """Moves the object's origin to `at` (world) without moving its geometry."""
+    at = V(at)
+    for v in ob.data.vertices:
+        v.co -= at
+    ob.location = at
+
+
+# ---------------------------------------------------------------- shell
+
+class Shell:
+    """The finished shell: body, doors, and where things stuck onto the panels go.
+
+    `skin` is the closed, undivided skin, the target for the decal ray casts (removed by finish()). Decals and details
+    land in a Part per target (the body or the door their position lies on), so they swing with their door.
+    """
+
+    def __init__(self, S, M, coll, body, doors, specs, skin):
+        self.S, self.M, self.coll = S, M, coll
+        self.body, self.doors, self.specs, self.skin = body, doors, specs, skin
+        self.parts = {}
+
+    def target(self, u, x, z=None):
+        """The door under the point (u, x, z), or 'body' (also below a door's lower edge, when z is given)."""
+        for name, d in self.specs.items():
+            if name in self.doors and d['u'][0] <= u <= d['u'][1] and x * d['side'] > 0.3:
+                low = carparts.ring(self.S, u)[min(self.S.get('door_segs', DOOR_SEGS))][1]
+                if z is None or z >= low:
+                    return name
+        return 'body'
+
+    def part(self, kind, at=None):
+        """The Part for `kind` ('decals' or 'details') on the target under `at` (Blender coordinates; None = body)."""
+        t = 'body' if at is None else self.target(-at[1], at[0], at[2])
+        key = (t, kind)
+        if key not in self.parts:
+            self.parts[key] = Part(kind if t == 'body' else f'{t}_{kind}')
+        return self.parts[key]
+
+    def decal(self, mat, c, d, outline, **kw):
+        return decal(self.part('decals', c), self.skin, self.M[mat], c, d, outline, **kw)
+
+    def surface(self, c, d):
+        """Where the ray from c − 2.5 d along d meets the skin: (point, normal), or (None, None)."""
+        d = V(d).normalized()
+        ok, loc, nrm, _ = self.skin.ray_cast(V(c) - d * 2.5, d, distance=5.0)
+        return (loc, nrm) if ok else (None, None)
+
+    def finish(self):
+        for (t, kind), p in self.parts.items():
+            parent = self.body if t == 'body' else self.doors[t]
+            ob = decal_object(p, self.coll, parent) if kind == 'decals' else p.to_object(self.coll)
+            ob.parent = parent
+            ob.location = -parent.location
+        bpy.data.objects.remove(self.skin, do_unlink=True)
+        self.skin = None
+
+
+def recess(skin, mat, c, d, outline, depth=0.06, up=V((0, 0, 1))):
+    """A cutter for build_shell's `cuts`: the prism of `outline` (as for decal: 2D points round c in the plane ⟂ d)
+    from just outside the skin to `depth` behind it, following the skin. Its faces (material mat) line the recess."""
+    d, e1, e2 = frame_of(d, up)
+    c = V(c)
+    bm = bmesh.new()
+    front, back = [], []
+    for px, py in outline:
+        ok, loc, _, _ = skin.ray_cast(c + e1 * px + e2 * py - d * 2.5, d, distance=5.0)
+        if not ok:
+            bm.free()
+            print('RECESS_MISS', tuple(round(x, 2) for x in c), mat.name)
+            return None
+        front.append(bm.verts.new(loc - d * 0.05))
+        back.append(bm.verts.new(loc + d * depth))
+    n = len(outline)
+    for j in range(n):
+        k = (j + 1) % n
+        bm.faces.new([front[j], front[k], back[k], back[j]])
+    bm.faces.new(front)
+    bm.faces.new(back)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new('cutter')
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(mat)
+    return bpy.data.objects.new('cutter', me)
+
+
+def pair(front, u_face, x, z, outline, d_side=0.35):
+    """Two mirrored placements on the front (rays towards +Y) or rear face: yields (side, centre, direction, outline)."""
+    for s in (1, -1):
+        d = V((-s * d_side, 1 if front else -1, 0))
+        ol = [(-s * px if front else s * px, py) for px, py in outline]
+        if (front and s == 1) or (not front and s == -1):
+            ol = list(reversed(ol))
+        yield s, V((s * x, -u_face, z)), d, ol
+
+
+def mirror2(part, M, at, side, mat='paint'):
+    """Door mirror: an egg-shaped housing on a short arm, its back cut flat, with an oval mirror glass set into it
+    (material 'mirror'). at: where the foot meets the door; side: +1 left."""
+    at = V(at)
+    back = 0.014  # the housing is cut flat this far behind its middle; the glass sits just proud of the cut
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=20, v_segments=12, radius=1.0)
+    for v in bm.verts:
+        v.co = V((v.co.x * 0.1, min(v.co.y * 0.07, back), v.co.z * 0.065))
+    vmap = {v: part.bm.verts.new(at + V((side * (0.11 + v.co.x), v.co.y, v.co.z))) for v in bm.verts}
+    for f in bm.faces:
+        part._face([vmap[v] for v in f.verts], M[mat])
+    bm.free()
+    # a short round arm from the door into the housing, ahead of the glass (a boxy foot shows as a black wedge)
+    part.tube([at + V((-side * 0.02, -0.012, -0.012)), at + V((side * 0.07, -0.012, -0.005))], 0.02, M[mat], seg=10)
+    # the glass: an oval a little smaller than the cut, slightly domed like a real door mirror (a flat one would
+    # reflect a single colour of the game's small reflection panorama)
+    k = math.sqrt(1 - (back / 0.07) ** 2) * 0.88
+    n, rings = 24, (0.0, 0.5, 1.0)
+    grid = []
+    for t in rings:
+        y = back + 0.002 + 0.012 * (1 - t * t)
+        grid.append([part.bm.verts.new(at + V((side * 0.11 + 0.1 * k * t * math.cos(2 * math.pi * i / n), y, 0.065 * k * t * math.sin(2 * math.pi * i / n))))
+                     for i in range(n if t else 1)])
+    for i in range(n):
+        j = (i + 1) % n
+        for vs in ([grid[0][0], grid[1][i], grid[1][j]], [grid[1][i], grid[2][i], grid[2][j], grid[1][j]]):
+            f = part._face(vs, M['mirror'], True)
+            f.normal_update()
+            if f.normal.y < 0:  # faces backwards, towards whoever looks into it
+                f.normal_flip()
+
+
+def tagged(S, M, specs):
+    """S and M for a skin whose door faces carry '<material>@<door group>' materials."""
+    groups = sorted({d['u'] for d in specs.values()})
+    S = dict(S)
+    S['extra'] = list(S.get('extra', [])) + [u for g in groups for u in g]
+    M = dict(M)
+    for i in range(len(groups)):
+        for base in (b for b in TAG_BASES if b in M):
+            M[f'{base}@{i}'] = material(f'{base}@{i}', (0.5, 0.5, 0.5))
+    plain = carparts.face_material
+
+    def tag(S_, u, seg):
+        name = plain(S_, u, seg)
+        if seg in S.get('door_segs', DOOR_SEGS) and name in TAG_BASES:
+            for i, (u0, u1) in enumerate(groups):
+                if u0 <= u <= u1:
+                    return f'{name}@{i}'
+        return name
+    return S, M, groups, tag
+
+
+def build_shell(S, M, coll, doors, cuts=None):
+    """doors: {'door_fl': {'u': (rear_u, hinge_u), 'side': +1, 'hinge_x': 0.86}, ...} → Shell (body at the origin,
+    doors as its children with their origin on the hinge axis). cuts(skin) may return cutter objects (see recess) that
+    are subtracted from the body's wall."""
+    S2, M2, groups, tag = tagged(S, M, doors)
+    plain = carparts.face_material
+    carparts.face_material = tag
+    try:
+        skin = carparts.build_body(S2, M2, coll)
+    finally:
+        carparts.face_material = plain
+    skin.name = 'skin'
+    src = skin.data
+    arches = [(-ua, S['r'] + S.get('arch_lift', 0.012), S['r'] + S.get('arch_gap', 0.035) + 0.02) for ua in (S['wb'] / 2, -S['wb'] / 2)]
+    out = {}
+    seals = bmesh.new()
+    for name, d in doors.items():
+        g = groups.index(d['u'])
+        me = subset(src, name, lambda f, m, g=g, s=d['side']: m.endswith(f'@{g}') and f.calc_center_median().x * s > 0)
+        add_seal(seals, me, S)
+        # where a door spans a wheel arch (or asks for it with 'relief'), its edge is pulled back onto a clean arc a
+        # little wider than the arch:
+        # the Boolean that cut the arch into the skin leaves slivers along its edge (the arch lip covers the difference)
+        relief = [(cy, cz, rad - 0.008) for cy, cz, rad in arches
+                  if d['u'][0] < -cy < d['u'][1] or (d.get('relief') and d['u'][0] - rad < -cy < d['u'][1] + rad)]
+        ob = piece(me, name, coll, M, gap=GAP, keep_out=arches, side=d['side'], relief=relief)
+        set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
+        out[name] = ob
+    body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M, cutters=cuts(skin) if cuts else ())
+    for ob in out.values():
+        ob.parent = body
+    sme = bpy.data.meshes.new('seals')
+    seals.to_mesh(sme)
+    seals.free()
+    sme.materials.append(M['rubber'])
+    so = bpy.data.objects.new('seals', sme)
+    coll.objects.link(so)
+    so.parent = body
+    # the ray target keeps the plain materials
+    for i, m in enumerate(src.materials):
+        if '@' in m.name:
+            src.materials[i] = M[m.name.split('@')[0]]
+    skin.hide_render = True
+    return Shell(S, M, coll, body, out, doors, skin)
+
+
+def build_lod_shell(S, M, coll):
+    """The distance model's shell: the closed skin with opaque glass; everything lands on the body."""
+    body = carparts.build_body(S, {**M, 'glass': M['glass_dark']}, coll)
+    skin = body.copy()
+    skin.data = body.data.copy()
+    skin.name = 'skin'
+    coll.objects.link(skin)
+    skin.hide_render = True
+    return Shell(S, M, coll, body, {}, {}, skin)
+
+
+# ---------------------------------------------------------------- parts every car has
+
+def arch_lip(sh, s, ua, mat='paint'):
+    """A rolled lip round the wheel arch on side s at axle u = ua, split between the body and the door it crosses."""
+    S = sh.S
+    cz, R = S['r'] + 0.012, S['r'] + S.get('arch_gap', 0.035) + 0.014
+    runs, last = [], None
+    for i in range(33):
+        a = math.radians(8 + 164 * i / 32)
+        dy, dz = math.cos(a), math.sin(a)
+        loc, _ = sh.surface((s, -ua + (R + 0.02) * dy, cz + (R + 0.02) * dz), (-s, 0, 0))
+        if loc is None:
+            last = None
+            continue
+        pt = V((loc.x - s * 0.006, -ua + R * dy, cz + R * dz))
+        t = sh.target(-pt.y, pt.x, pt.z)
+        if t != last:
+            runs.append((pt, []))
+            last = t
+        runs[-1][1].append(pt)
+    for at, pts in runs:
+        if len(pts) > 1:
+            sh.part('details', at).tube(pts, 0.016, sh.M[mat], seg=8)
+
+
+def handle(sh, s, u, z, mat='paint'):
+    """A door handle on side s: a grip bar over a dark recess, on whatever door lies under it."""
+    at = (s, -u, z)
+    sh.decal('dark', at, (-s, 0, 0), carparts.rrect(0.17, 0.05, 0.02), off=0.002)
+    loc, n = sh.surface(at, (-s, 0, 0))
+    p = sh.part('details', at)
+    c = loc + n * 0.016
+    p.tube([c + V((0, -0.075, 0)), c + V((0, 0.075, 0))], 0.012, sh.M[mat], seg=8)
+
+
+def shark_fin(part, M, at, mat='paint', length=0.17, height=0.065, width=0.05):
+    """A roof antenna fin at `at` (its foot's middle): low at the front, rising to a rounded tip at the rear."""
+    from carinterior import blob
+
+    def shape(co):
+        t = min(1.0, max(0.0, co.y / length + 0.5))  # 0 front … 1 rear
+        h = min(1.0, max(0.0, co.z / height + 0.5))  # 0 foot … 1 top
+        rise = 0.18 + 0.82 * math.sin(min(1.0, t * 1.15) * math.pi / 2) ** 1.5
+        return V((co.x * (1 - 0.75 * h) * (0.55 + 0.45 * math.sin(t * math.pi)), co.y + 0.02 * h, (co.z + height / 2) * rise - height / 2))
+    blob(part, V(at) + V((0, 0, height / 2 - 0.004)), (width, length, height), M[mat], r=0.012, seg=3, shape=shape)
+
+
+def window_cut(skin, M, c, d, outline):
+    """A cutter (for build_shell's `cuts`) that opens a window right through the wall; glaze it with
+    sh.decal('glass', c, d, outline, off=0.0)."""
+    return recess(skin, M['rubber'], c, d, outline, depth=WALL + 0.05)
+
+
+def wheels_and_lamps(sh, coll, hl, tl, wheel=None):
+    """The four wheel nodes and the lamp empties (hl / tl: front and rear lamp centres, left first)."""
+    S, M = sh.S, sh.M
+    ua, x = S['wb'] / 2, S['track'] / 2
+    for name, (sx, su) in {'wheel_fl': (1, ua), 'wheel_fr': (-1, ua), 'wheel_rl': (1, -ua), 'wheel_rr': (-1, -ua)}.items():
+        (wheel or carparts.wheel)(name, M, S, sx, coll, sh.body, (sx * x, -su, S['r']))
+    for name, c in (('light_fl', hl[0]), ('light_fr', hl[1]), ('tail_l', tl[0]), ('tail_r', tl[1])):
+        carparts.empty(coll, name, c if c is not None else V((0, 0, 0)), sh.body)
+
+
+def lamp_units(sh, front, u_face, x, z, outline, d_side, inner):
+    """Two recessed lamps behind clear covers; returns their centres (left first). The recesses themselves come from
+    lamp_cuts() with the same arguments. inner(part, side, centre, direction) adds what sits in the recess."""
+    out = []
+    p = sh.part('details')
+    for s, c, d, ol in pair(front, u_face, x, z, outline, d_side):
+        out.append(sh.decal('lens' if front else 'lens_red', c, d, ol, off=0.0005))
+        # the reflector: a plate of the lamp material at the back of the recess (the wall is not everywhere thick
+        # enough to leave the recess a back of its own; without it one looks into the body)
+        sh.decal('lamp_front' if front else 'lamp_rear', c, d, ol, off=-(LAMP_DEPTH - 0.003))
+        inner(p, s, c, d.normalized())
+    return out
+
+
+def lamp_cuts(skin, M, front, u_face, x, z, outline, d_side):
+    return [recess(skin, M['lamp_front' if front else 'lamp_rear'], c, d, ol, LAMP_DEPTH) for _, c, d, ol in pair(front, u_face, x, z, outline, d_side)]
+
+
+def projector(sh, p, c, n, r=0.036):
+    """A round headlamp unit in a recess: chrome ring, glowing centre."""
+    loc, _ = sh.surface(c, n)
+    if loc is None:
+        return
+    p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.007, r, sh.M['chrome'], seg=20)
+    p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.004, r * 0.75, sh.M['lamp_front'], seg=20)
+
+
+def bulb(sh, p, c, n, mat, r=0.026):
+    loc, _ = sh.surface(c, n)
+    if loc is not None:
+        p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.006, r, sh.M[mat], seg=16)
+
+
+# ---------------------------------------------------------------- report / review / run
+
+BASE_NODES = {'body', 'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr', 'light_fl', 'light_fr', 'tail_l', 'tail_r'}
+
+
+def report2(root, need):
+    bpy.context.view_layer.update()
+    lo, hi = V((1e9,) * 3), V((-1e9,) * 3)
+    tris = glass = 0
+    obs = [root, *root.children_recursive]
+    for o in obs:
+        if o.type != 'MESH':
+            continue
+        names = [m.name for m in o.data.materials]
+        for p in o.data.polygons:
+            t = len(p.vertices) - 2
+            tris += t
+            if names and names[p.material_index] == 'glass':
+                glass += t
+        for c in o.bound_box:
+            w = o.matrix_world @ V(c)
+            lo = V((min(lo.x, w.x), min(lo.y, w.y), min(lo.z, w.z)))
+            hi = V((max(hi.x, w.x), max(hi.y, w.y), max(hi.z, w.z)))
+    names = {o.name for o in obs}
+    seats = [[round(c, 3) for c in (o.matrix_world.translation.x, -o.matrix_world.translation.y, o.matrix_world.translation.z)]
+             for o in sorted((o for o in obs if o.name.startswith('seat_')), key=lambda o: o.name)]
+    return {'missing': sorted(set(need) - names), 'length': round(hi.y - lo.y, 3), 'width': round(hi.x - lo.x, 3),
+            'height': round(hi.z - lo.z, 3), 'bottom': round(lo.z, 4), 'tris': tris, 'glass_tris': glass, 'seats': seats}
+
+
+def swing(doors, specs, k):
+    """Opens every door by k × its open angle (left doors swing towards +X)."""
+    for name, ob in doors.items():
+        ob.rotation_euler.z = -specs[name]['side'] * specs[name].get('open', 1.13) * k
+
+
+def setup_render():
+    scene = bpy.context.scene
+    scene.render.resolution_x, scene.render.resolution_y = 1400, 900
+    try:
+        scene.render.engine = 'BLENDER_EEVEE'
+        world = bpy.data.worlds.new('review')
+        world.use_nodes = True
+        world.node_tree.nodes['Background'].inputs['Color'].default_value = (0.62, 0.68, 0.76, 1)
+        world.node_tree.nodes['Background'].inputs['Strength'].default_value = 0.9
+        scene.world = world
+        sun = bpy.data.objects.new('ReviewSun', bpy.data.lights.new('ReviewSun', 'SUN'))
+        sun.data.energy = 3.5
+        sun.data.angle = 0.15
+        sun.rotation_euler = (math.radians(52), 0, math.radians(-38))
+        scene.collection.objects.link(sun)
+        me = bpy.data.meshes.new('ReviewGround')
+        me.from_pydata([(-30, -30, 0), (30, -30, 0), (30, 30, 0), (-30, 30, 0)], [], [(0, 1, 2, 3)])
+        me.materials.append(material('review_ground', (0.32, 0.32, 0.33), rough=0.9))
+        scene.collection.objects.link(bpy.data.objects.new('ReviewGround', me))
+        scene.view_settings.view_transform = 'Standard'
+    except TypeError:
+        scene.render.engine = 'BLENDER_WORKBENCH'
+        sh = scene.display.shading
+        sh.light, sh.color_type, sh.show_shadows, sh.show_cavity = 'STUDIO', 'MATERIAL', False, True
+    cam = bpy.data.objects.new('ReviewCam', bpy.data.cameras.new('ReviewCam'))
+    scene.collection.objects.link(cam)
+    scene.camera = cam
+    cam.data.lens = 50
+    return cam
+
+
+def shoot(cam, path, pos, look, lens=50, ortho=None, clip=0.1):
+    """One still. ortho: orthographic scale (m) instead of the lens; clip: near clipping distance (cuts the car open)."""
+    cam.data.type = 'ORTHO' if ortho else 'PERSP'
+    if ortho:
+        cam.data.ortho_scale = ortho
+    cam.data.clip_start = clip
+    cam.data.lens = lens
+    cam.location = pos
+    cam.rotation_euler = (V(look) - V(pos)).to_track_quat('-Z', 'Y').to_euler()
+    bpy.context.scene.render.filepath = path
+    bpy.ops.render.render(write_still=True)
+    return path
+
+
+def render2(name, out_dir, L, shell, extra=None):
+    """Review stills: the four views and their grid as before, plus 'open' (doors open) and 'through' (eye level,
+    looking through the glass). extra(shot, shell) may add more; shot(tag, pos, look, lens=50, ortho=, clip=) writes one."""
+    cam = setup_render()
+    os.makedirs(out_dir, exist_ok=True)
+    k = max(L, 3.9) / 4.2
+
+    def shot(tag, pos, look, lens=50, **kw):
+        return shoot(cam, os.path.join(out_dir, f'{name}-{tag}.png'), V(pos), look, lens, **kw)
+
+    paths = [shot('34', V((-3.6, -4.6, 1.7)) * k, (0, 0, 0.6)), shot('side', V((-7.0, 0, 0.9)) * k, (0, 0, 0.7)),
+             shot('rear', V((3.2, 4.8, 1.8)) * k, (0, 0, 0.6)), shot('front', V((0.0, -6.5, 0.9)) * k, (0, 0, 0.7))]
+    grid(paths, os.path.join(out_dir, f'{name}-grid.png'))
+    paths.append(shot('through', (3.0, 0.2, 1.6), (0, 0.1, 1.0), lens=32))
+    swing(shell.doors, shell.specs, 1)
+    paths.append(shot('open', V((4.2, -4.2, 2.3)) * k, (0, 0, 0.6), lens=40))
+    swing(shell.doors, shell.specs, 0)
+    if extra:
+        paths += extra(shot, shell) or []
+    return paths
+
+
+def run2(name, here, build, extra_shots=None):
+    """build(coll, lod) → (root, S, shell). Writes <name>.blend, <name>.glb, the review stills and <name>_lod.glb."""
+    clear_scene()
+    coll = bpy.data.collections.new('CAR_' + name.upper())
+    bpy.context.scene.collection.children.link(coll)
+    root, S, shell = build(coll, False)
+    need = BASE_NODES | set(shell.doors)
+    rep = report2(root, need)
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(here, f'{name}.blend'))
+    export_car(os.path.join(here, f'{name}.glb'), root)
+    repo = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
+    rep['shots'] = render2(name, os.path.join(repo, 'shots', 'cars'), rep['length'], shell, extra_shots)
+    clear_scene()
+    for o in list(bpy.data.objects):
+        bpy.data.objects.remove(o, do_unlink=True)
+    coll = bpy.data.collections.new('CAR_' + name.upper() + '_LOD')
+    bpy.context.scene.collection.children.link(coll)
+    root, S, shell = build(coll, True)
+    rep['lod_missing'] = report2(root, BASE_NODES)['missing']
+    rep['lod_tris'] = make_lod(root, ratio=0.25)
+    export_car(os.path.join(here, f'{name}_lod.glb'), root)
+    print('CAR_REPORT', name, rep)
+    return rep

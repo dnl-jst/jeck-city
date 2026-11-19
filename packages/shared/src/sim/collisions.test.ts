@@ -130,6 +130,7 @@ describe('people and cars', () => {
     expect(sim.cars.driver[0]).toBeNull();
     sim.step(new Map()); // E released
     for (let t = 0; t < 70; t++) sim.step(new Map());
-    expect(sim.step(new Map([[1, { ...N, use: true }]]))).toContainEqual({ t: 'enter', id: 1, car: 0 });
+    // (whichever seat is behind the door they lie at)
+    expect(sim.step(new Map([[1, { ...N, use: true }]]))).toContainEqual(expect.objectContaining({ t: 'enter', id: 1, car: 0 }));
   }, 30_000);
 });

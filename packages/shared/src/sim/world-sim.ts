@@ -1,5 +1,6 @@
 import { heightAt } from '../assets/terrain';
 import type { BikeState, RiddenBike } from '../physics/bike';
+import { CAR_SEATS } from '../physics/carseats';
 import { CAR_SPECS } from '../physics/cartypes';
 import { Character, type CharacterState } from '../physics/character';
 import { BikeRacks, dismountSpot, ParkedBikes, type BikePose } from '../physics/parkedbikes';
@@ -11,6 +12,7 @@ import { createPhysicsWorld, timeSlicer, type PhysicsWorld } from '../physics/wo
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import { ENTER_MAX_DIST, TICK_HZ, type StationId } from '../net/constants';
 import type { WorldAssets } from './assets';
+import { approachPoint, boardingPath, boardSeconds, DRIVER_SEAT, pickSeat, toCarPoint } from './boarding';
 import { CarPool, type PlayerId } from './cars';
 import { carHitsPeople, separatePeople } from './collisions';
 import { Ignition, type IgnitionEvent, type IgnitionState } from './ignition';
@@ -25,12 +27,12 @@ type Vec3 = { x: number; y: number; z: number };
 type XZ = { x: number; z: number };
 
 export type SimEvent =
-  | { t: 'enter'; id: PlayerId; car: number }
+  | { t: 'enter'; id: PlayerId; car: number; seat: number }
   /** E on foot next to a car someone else drives (and no free car in reach). */
   | { t: 'enterDenied'; id: PlayerId }
   /** E on foot next to a bike someone else rides (and nothing free in reach). */
   | { t: 'mountDenied'; id: PlayerId }
-  | { t: 'exit'; id: PlayerId; car: number }
+  | { t: 'exit'; id: PlayerId; car: number; seat: number }
   | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' }
   | { t: 'mount'; id: PlayerId; bike: number }
   /**
@@ -54,13 +56,16 @@ export type SimEvent =
  * (fallTicks: ticks left). pedalling: riding with the pedal input forward.
  */
 export type PlayerSnapshot = {
-  mode: 'walk' | 'drive' | 'down' | 'ride';
+  /** 'sit': riding along in a car as a passenger (`pass`; pos = the car's). carId is only the car driven. */
+  mode: 'walk' | 'drive' | 'down' | 'ride' | 'sit';
   pos: Vec3;
   vel: Vec3;
   /** The camera's yaw (the input's), and the way the body faces (turns towards where it walks; what others see). */
   yaw: number;
   facing: number;
   carId: number | null;
+  /** The car and seat (≥ 1) ridden along in, or null. */
+  pass: { car: number; seat: number } | null;
   char: CharacterState;
   car: VehicleState | null;
   engine: IgnitionState;
@@ -72,7 +77,8 @@ export type PlayerSnapshot = {
 };
 
 type Player = {
-  char: Character; car: number | null; yaw: number; use: boolean; jump: boolean;
+  /** car: the car driven. pass: the car and seat ridden along in as a passenger. Never both. */
+  char: Character; car: number | null; pass: { car: number; seat: number } | null; yaw: number; use: boolean; jump: boolean;
   /** The bike ridden (id in ParkedBikes) and its controller, or null. */
   bike: number | null; ridden: RiddenBike | null;
   /** Where the figure faces (heading; follows the walking direction): E picks the car or bike in front. */
@@ -175,7 +181,7 @@ export class WorldSim {
     }
     const char = new Character(this.pw, { x: p.x, y: p.y + DROP, z: p.z });
     this.list.set(id, {
-      char, car: null, yaw: manifest.spawn.heading, use: false, jump: false, bike: null, ridden: null, facing: manifest.spawn.heading, fallTicks: 0,
+      char, car: null, pass: null, yaw: manifest.spawn.heading, use: false, jump: false, bike: null, ridden: null, facing: manifest.spawn.heading, fallTicks: 0,
       pedalling: false, bellTick: -Infinity,
     });
   }
@@ -185,6 +191,7 @@ export class WorldSim {
     const pl = this.list.get(id);
     if (!pl) return;
     if (pl.car !== null) this.leaveCar(pl.car);
+    if (pl.pass) this.cars.stand(pl.pass.car, pl.pass.seat);
     if (pl.bike !== null) this.bikes.dismount(pl.bike, pl.ridden!); // the bike rolls out where it is
     pl.char.dispose();
     this.list.delete(id);
@@ -255,7 +262,7 @@ export class WorldSim {
     this.pw.step();
     this.cars.sync();
     this.bikes.sync();
-    for (const pl of this.list.values()) if (pl.car === null && pl.bike === null) this.turnFacing(pl);
+    for (const pl of this.list.values()) if (pl.car === null && pl.bike === null && !pl.pass) this.turnFacing(pl);
     for (const i of this.props.takeFallen()) ev.push({ t: 'lamp', i });
     this.tick++;
     return ev;
@@ -291,6 +298,22 @@ export class WorldSim {
       const who = riders.get(i) ?? null;
       if (r[i] !== who) r[i] = who;
     }
+  }
+
+  /**
+   * Client prediction: who else rides along in which car (car → player per seat, seat 0 unused), from the server's
+   * slow state. Those seats count as taken when getting in. Seats local players sit on are never touched.
+   */
+  setRemotePassengers(riders: ReadonlyMap<number, readonly (PlayerId | null)[]>): void {
+    this.cars.riders.forEach((seats, i) => {
+      const from = riders.get(i);
+      for (let s = 1; s < seats.length; s++) {
+        const here = seats[s];
+        if (here !== null && here !== undefined && this.list.get(here)?.pass?.car === i) continue;
+        const who = from?.[s] ?? null;
+        if (here !== who) seats[s] = who;
+      }
+    });
   }
 
   /**
@@ -342,24 +365,32 @@ export class WorldSim {
     const pl = this.list.get(id);
     if (!pl) throw new Error(`no player ${id}`);
     const char = pl.char.saveState();
+    if (pl.pass) {
+      // riding along: where the car is (its physics car, or its resting pose)
+      const v = this.cars.vehicle(pl.pass.car)?.saveState(), at = v ?? this.cars.poses[pl.pass.car]!;
+      return {
+        mode: 'sit', pos: { x: at.x, y: at.y, z: at.z }, vel: v ? { x: v.vx, y: v.vy, z: v.vz } : { x: 0, y: 0, z: 0 }, yaw: pl.yaw, facing: pl.facing,
+        carId: null, pass: { ...pl.pass }, char, car: null, engine: 'off', bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
+      };
+    }
     if (pl.car !== null) {
       const v = this.cars.vehicle(pl.car)!;
       const car = v.saveState();
       return {
         mode: 'drive', pos: { x: car.x, y: car.y, z: car.z }, vel: { x: car.vx, y: car.vy, z: car.vz }, yaw: pl.yaw, facing: pl.facing,
-        carId: pl.car, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
+        carId: pl.car, pass: null, char, car, engine: this.ignitions[pl.car]!.state, bikeId: null, bike: null, falling: false, fallTicks: 0, pedalling: false,
       };
     }
     if (pl.bike !== null) {
       const b = pl.ridden!.state();
       return {
         mode: 'ride', pos: { x: b.x, y: b.y, z: b.z }, vel: { x: Math.sin(b.heading) * b.speed, y: b.vy, z: Math.cos(b.heading) * b.speed },
-        yaw: pl.yaw, facing: pl.facing, carId: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
+        yaw: pl.yaw, facing: pl.facing, carId: null, pass: null, char, car: null, engine: 'off', bikeId: pl.bike, bike: b, falling: false, fallTicks: 0, pedalling: pl.pedalling,
       };
     }
     return {
       mode: pl.char.isDown() ? 'down' : 'walk', pos: pl.char.position(), vel: pl.char.velocity(), yaw: pl.yaw, facing: pl.facing,
-      carId: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0, fallTicks: pl.fallTicks, pedalling: false,
+      carId: null, pass: null, char, car: null, engine: 'off', bikeId: null, bike: null, falling: pl.fallTicks > 0, fallTicks: pl.fallTicks, pedalling: false,
     };
   }
 
@@ -371,7 +402,7 @@ export class WorldSim {
   /** Players on foot (not in a car) in id order, with their characters: what collisions.ts works on. */
   onFoot(): { id: PlayerId; char: Character }[] {
     const out: { id: PlayerId; char: Character }[] = [];
-    for (const [id, pl] of this.list) if (pl.car === null && pl.bike === null) out.push({ id, char: pl.char });
+    for (const [id, pl] of this.list) if (pl.car === null && pl.bike === null && !pl.pass) out.push({ id, char: pl.char });
     return out.sort((a, b) => a.id - b.id);
   }
 
@@ -397,6 +428,7 @@ export class WorldSim {
 
   private whereIs(pl: Player): XZ {
     if (pl.car !== null) return this.cars.poses[pl.car]!;
+    if (pl.pass) return this.cars.poses[pl.pass.car]!;
     if (pl.ridden) return pl.ridden.state();
     return pl.char.position();
   }
@@ -431,7 +463,7 @@ export class WorldSim {
    */
   private spawnTaken(x: number, z: number): boolean {
     for (const pl of this.list.values()) {
-      const p = pl.car !== null ? null : this.whereIs(pl);
+      const p = pl.car !== null || pl.pass ? null : this.whereIs(pl);
       if (p && Math.hypot(p.x - x, p.z - z) < SPAWN_PERSON_GAP) return true;
     }
     const r = TUNING.character.radius + 0.1;
@@ -449,7 +481,7 @@ export class WorldSim {
   /** E acts on its rising edge (held for several ticks = one action); not while lying after a bike crash. */
   private useEdge(id: PlayerId, pl: Player, input: PlayerInput, ev: SimEvent[]): void {
     if (input.use && !pl.use && pl.fallTicks === 0) {
-      if (pl.car !== null) this.getOut(id, pl, ev);
+      if (pl.car !== null || pl.pass) this.getOut(id, pl, ev);
       else if (pl.bike !== null) this.getOffBike(id, pl, ev);
       else this.getIn(id, pl, ev);
     }
@@ -479,6 +511,8 @@ export class WorldSim {
         const h = pl.ridden!.state().heading, v = r.crashSpeed;
         this.crash(id, pl, ev, { x: Math.sin(h) * v, y: TUNING.bike.crashUp, z: Math.cos(h) * v }, true);
       }
+    } else if (pl.pass) {
+      // riding along: nothing to control
     } else if (pl.car === null) {
       pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
@@ -519,6 +553,17 @@ export class WorldSim {
       this.leaveCar(pl.car);
       pl.car = null;
       pl.char.setEnabled(true);
+    }
+    const riding = s.mode === 'sit' && s.pass ? { ...s.pass } : null;
+    if (pl.pass && (pl.pass.car !== riding?.car || pl.pass.seat !== riding.seat)) {
+      this.cars.stand(pl.pass.car, pl.pass.seat);
+      pl.pass = null;
+      pl.char.setEnabled(true);
+    }
+    if (riding && !pl.pass) {
+      this.cars.sit(riding.car, riding.seat, id);
+      pl.pass = riding;
+      pl.char.setEnabled(false);
     }
     pl.fallTicks = s.fallTicks ?? 0;
     pl.pedalling = false;
@@ -562,7 +607,7 @@ export class WorldSim {
       let taken: XZ | null = null, takenD = ENTER_MAX_DIST;
       for (const c of candidates) {
         const d = Math.hypot(c.x - pos.x, c.z - pos.z);
-        if (c.occupied && d <= takenD) [taken, takenD] = [c, d];
+        if (c.full && d <= takenD) [taken, takenD] = [c, d];
       }
       const ridden = this.bikes.nearestRidden(pos);
       const which = pickVehicle(pos, pl.facing, taken, ridden === null ? null : this.bikes.poses[ridden]!);
@@ -570,34 +615,57 @@ export class WorldSim {
       else if (which === 'bike') ev.push({ t: 'mountDenied', id });
       return;
     }
-    this.cars.enter(car, id);
-    pl.car = car;
+    // the seat behind the door they stand at; if it is taken, the free seat with the shortest walk round the car
+    const at = this.cars.poses[car]!, type = this.cars.types[car]!;
+    const from = toCarPoint({ x: at.x, z: at.z, heading: headingOf(at) }, pos.x, pos.z);
+    const seat = pickSeat(CAR_SPECS[type], CAR_SEATS[type], this.cars.taken(car), from);
+    const moving = this.cars.vehicle(car);
+    if (seat === null || (moving && !canGetOut(moving.speed()))) {
+      ev.push({ t: 'enterDenied', id }); // full, or rolling too fast to get in
+      return;
+    }
     pl.jump = false;
     pl.char.setEnabled(false);
-    this.ignitions[car]!.start();
-    ev.push({ t: 'enter', id, car });
+    if (seat === DRIVER_SEAT) {
+      this.cars.enter(car, id);
+      pl.car = car;
+      // the engine waits until the figure has walked to the door and sits (the clients show that; here the player is in already)
+      this.ignitions[car]!.start(boardSeconds(boardingPath(CAR_SPECS[type], CAR_SEATS[type], seat, from)) * TICK_HZ);
+    } else {
+      this.cars.sit(car, seat, id);
+      pl.pass = { car, seat };
+    }
+    ev.push({ t: 'enter', id, car, seat });
   }
 
   private getOut(id: PlayerId, pl: Player, ev: SimEvent[]): void {
-    const i = pl.car!;
-    const v = this.cars.vehicle(i)!;
-    if (!canGetOut(v.speed())) {
+    const i = pl.car ?? pl.pass!.car, seat = pl.pass?.seat ?? DRIVER_SEAT;
+    const v = this.cars.vehicle(i);
+    if (v && !canGetOut(v.speed())) {
       ev.push({ t: 'exitDenied', id, reason: 'speed' });
       return;
     }
-    const pose = v.pose();
-    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) }, (x, z) => exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), v.spec.length);
+    // out on the own seat's side, behind its door
+    const pose = v?.pose() ?? this.cars.poses[i]!, type = this.cars.types[i]!, at = CAR_SEATS[type].seats[seat]!;
+    const spot = exitSpot({ x: pose.x, z: pose.z, heading: headingOf(pose) },
+      (x, z) => !v || exitFree(this.pw, this.a.terrain, v.chassis, pose, x, z), CAR_SPECS[type].length,
+      approachPoint(CAR_SEATS[type], seat).u, Math.sign(at.x)); // (where they end up after shutting the door behind them)
     if (!spot) {
       ev.push({ t: 'exitDenied', id, reason: 'blocked' });
       return;
     }
-    this.leaveCar(i);
-    pl.car = null;
+    if (pl.pass) {
+      this.cars.stand(i, seat);
+      pl.pass = null;
+    } else {
+      this.leaveCar(i);
+      pl.car = null;
+    }
     pl.char.setEnabled(true);
     const y = surfaceY(this.pw, spot.x, spot.z, pose.y + 1) ?? heightAt(this.a.terrain, spot.x, spot.z);
     pl.char.teleport({ x: spot.x, y: y + DROP, z: spot.z });
     pl.facing = headingOf(pose);
-    ev.push({ t: 'exit', id, car: i });
+    ev.push({ t: 'exit', id, car: i, seat });
   }
 
   private mountBike(id: PlayerId, pl: Player, bike: number, ev: SimEvent[]): void {

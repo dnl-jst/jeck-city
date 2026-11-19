@@ -5,6 +5,7 @@ import { describe, expect, test, vi } from 'vitest';
 import { decodeCollision, type CollisionAsset } from '../assets/collision';
 import { decodeTerrain, heightAt, type TerrainGrid } from '../assets/terrain';
 import { Character, type CharacterInput } from './character';
+import { headingOf } from '../sim/rules';
 import { FixedStepper } from './step';
 import { TUNING } from './tuning';
 import { Vehicle, VEHICLE_REST_Y, type VehicleInput } from './vehicle';
@@ -51,6 +52,9 @@ function runChar(pw: PhysicsWorld, c: Character, input: CharacterInput, seconds:
     pw.step();
   }
 }
+
+/** b − a, wrapped to −π..π. */
+const angleDelta = (a: number, b: number): number => Math.atan2(Math.sin(b - a), Math.cos(b - a));
 
 function runCar(pw: PhysicsWorld, car: Vehicle, input: VehicleInput, seconds: number, each?: () => void) {
   for (let i = 0; i < Math.round(seconds * 60); i++) {
@@ -422,22 +426,66 @@ describe('vehicle', () => {
     expect(car.pose().z).toBeLessThan(-10);
   });
 
-  test('braking from top speed stops within 13 m, both via brake and via reverse throttle', async () => {
-    for (const input of [{ throttle: 0, steer: 0, brake: true }, { throttle: -1, steer: 0, brake: false }]) {
-      const pw = await createPhysicsWorld(miniScene());
-      const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI }); // heading north (−z)
-      car.setOccupied(true);
-      runCar(pw, car, full, 10);
-      const z0 = car.pose().z;
-      let steps = 0;
-      while (car.speed() > 0.3 && steps < 300) {
-        car.applyInput(input);
-        pw.step();
-        steps++;
-      }
-      expect(z0 - car.pose().z).toBeLessThan(13);
-      expect(car.wheelsInContact()).toBe(4); // no nose-dive flip
+  /** From top speed heading north: holds `input` until the car stands (or 6 s); returns the distance covered. */
+  const stopWith = async (input: VehicleInput): Promise<{ dist: number; car: Vehicle }> => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI }); // heading north (−z)
+    car.setOccupied(true);
+    runCar(pw, car, full, 10);
+    const z0 = car.pose().z;
+    let steps = 0;
+    while (car.speed() > 0.3 && steps < 360) {
+      car.applyInput(input);
+      pw.step();
+      steps++;
     }
+    return { dist: z0 - car.pose().z, car };
+  };
+
+  test('braking from top speed (reverse throttle) stops within 13 m', async () => {
+    const { dist, car } = await stopWith({ throttle: -1, steer: 0, brake: false });
+    expect(dist).toBeLessThan(13);
+    expect(car.wheelsInContact()).toBe(4); // no nose-dive flip
+  });
+
+  test('the handbrake works on the rear wheels only: it stops the car, but takes clearly longer than the brakes', async () => {
+    const foot = await stopWith({ throttle: -1, steer: 0, brake: false });
+    const hand = await stopWith({ throttle: 0, steer: 0, brake: true });
+    expect(hand.car.speed()).toBeLessThan(0.3); // it does stop
+    expect(hand.dist).toBeGreaterThan(foot.dist * 1.6);
+    expect(hand.dist).toBeLessThan(45);
+    expect(hand.car.wheelsInContact()).toBe(4);
+  });
+
+  test('the handbrake in a bend lets the tail swing out: the car turns much further than by steering alone, sliding sideways', async () => {
+    const turn = async (brake: boolean) => {
+      const pw = await createPhysicsWorld(miniScene());
+      const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI });
+      car.setOccupied(true);
+      runCar(pw, car, full, 6); // ~50 km/h
+      let slip = 0;
+      runCar(pw, car, { throttle: 0, steer: 1, brake }, 1.2, () => {
+        // angle between where the car points and where it moves
+        const h = headingOf(car.pose()), v = car.chassis.linvel();
+        if (Math.hypot(v.x, v.z) > 3) slip = Math.max(slip, Math.abs(angleDelta(h, Math.atan2(v.x, v.z))));
+      });
+      return { turned: Math.abs(angleDelta(Math.PI, headingOf(car.pose()))), slip, car };
+    };
+    const steer = await turn(false), hand = await turn(true);
+    expect(hand.turned).toBeGreaterThan(steer.turned * 1.5);
+    expect(hand.slip).toBeGreaterThan(0.3); // > 17°: a slide
+    expect(steer.slip).toBeLessThan(0.2); // steering alone: it goes where it points
+    expect(hand.car.wheelsInContact()).toBeGreaterThanOrEqual(3); // it does not roll over
+  });
+
+  test('the handbrake holds a standing car on a throttle that is not given, and lets it go again', async () => {
+    const pw = await createPhysicsWorld(miniScene());
+    const car = new Vehicle(pw, { x: -150, z: 0, heading: Math.PI });
+    car.setOccupied(true);
+    runCar(pw, car, { throttle: 0, steer: 0, brake: true }, 2);
+    expect(Math.abs(car.speed())).toBeLessThan(0.15);
+    runCar(pw, car, full, 3);
+    expect(car.speed() * KMH).toBeGreaterThan(20);
   });
 
   test('steer > 0 turns right', async () => {

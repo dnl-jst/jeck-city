@@ -2,8 +2,13 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { NEUTRAL_INPUT, type PlayerInput } from '../net/codec';
 import type { WorldAssets } from './assets';
 import { fixtureAssets, haveRealAssets, realAssets, WHOLE_CITY_TIMEOUT } from './fixture.test-util';
+import { CAR_SEATS } from '../physics/carseats';
+import { fromCarPoint, standPoint, toCarPoint } from './boarding';
 import { headingOf, type CarPose } from './rules';
 import { WorldSim, type SimEvent } from './world-sim';
+
+/** Ticks after pressing E by which the engine runs: the walk to the door, getting in, door, starter. */
+const STARTED = 360;
 
 const N = NEUTRAL_INPUT(0);
 const USE: PlayerInput = { ...N, use: true };
@@ -79,18 +84,18 @@ for (const [name, assets, skip] of worlds) {
     test('enter and exit', async () => {
       const { sim, car } = await nextToCar();
       let ev = sim.step(new Map([[1, USE]]));
-      expect(ev).toContainEqual({ t: 'enter', id: 1, car });
+      expect(ev).toContainEqual({ t: 'enter', id: 1, car, seat: 0 });
       expect(sim.player(1).mode).toBe('drive');
       expect(sim.player(1).carId).toBe(car);
       expect(sim.cars.driver[car]).toBe(1);
       // E held: still one action
       ev = run(sim, 5, () => new Map([[1, USE]]));
       expect(sim.player(1).mode).toBe('drive');
-      ev.push(...run(sim, 84));
+      ev.push(...run(sim, STARTED));
       expect(ev.filter((e) => e.t === 'ignition').map((e) => e.t === 'ignition' && e.e)).toEqual(['doorClose', 'crank', 'running']);
       expect(sim.player(1).engine).toBe('running');
       ev = sim.step(new Map([[1, USE]]));
-      expect(ev).toContainEqual({ t: 'exit', id: 1, car });
+      expect(ev).toContainEqual({ t: 'exit', id: 1, car, seat: 0 });
       expect(sim.player(1).mode).toBe('walk');
       expect(sim.cars.driver[car]).toBeNull();
       expect(sim.ignition(car).state).toBe('off');
@@ -116,19 +121,18 @@ for (const [name, assets, skip] of worlds) {
       sim.addPlayer(1, leftOf(sim.cars.poses[car]!, 2.5));
       sim.addPlayer(2, leftOf(sim.cars.poses[car]!, 2, 1.2));
       run(sim, 10);
-      // player 2 arrived first
+      // player 2 arrived first and stands at the driver's door: the driver; player 1 gets another seat, or none in a full car
       const ev = sim.step(new Map([[2, USE], [1, USE]]));
-      expect(ev).toContainEqual({ t: 'enter', id: 2, car });
-      expect(ev).toContainEqual({ t: 'enterDenied', id: 1 });
+      expect(ev).toContainEqual({ t: 'enter', id: 2, car, seat: 0 });
       expect(sim.player(2).mode).toBe('drive');
-      expect(sim.player(1).mode).toBe('walk');
       expect(sim.cars.driver[car]).toBe(2);
+      expect(sim.player(1).mode).not.toBe('drive');
     }, WHOLE_CITY_TIMEOUT);
 
     test('driver leaves → car free, engine off', async () => {
       const { sim, car } = await nextToCar();
       sim.step(new Map([[1, USE]]));
-      run(sim, 90);
+      run(sim, STARTED);
       sim.setRadio(1, 'einslive');
       expect(sim.cars.radio[car]).toBe('einslive');
       sim.removePlayer(1);
@@ -138,13 +142,73 @@ for (const [name, assets, skip] of worlds) {
       expect(sim.ignition(car).state).toBe('off');
       sim.addPlayer(3, leftOf(sim.cars.poses[car]!, 2.5));
       run(sim, 10);
-      expect(sim.step(new Map([[3, USE]]))).toContainEqual({ t: 'enter', id: 3, car });
+      expect(sim.step(new Map([[3, USE]]))).toContainEqual({ t: 'enter', id: 3, car, seat: 0 });
+    }, WHOLE_CITY_TIMEOUT);
+
+    /** Where one stands to get into seat `seat` of `car` (world). */
+    const doorOf = (sim: WorldSim, car: number, seat: number) => {
+      const c = sim.cars.poses[car]!;
+      return fromCarPoint({ x: c.x, z: c.z, heading: headingOf(c) }, standPoint(CAR_SEATS[sim.cars.types[car]!], seat));
+    };
+
+    test('passengers: a seat by the door one stands at, riding along, staying when the driver leaves, out on their side', async () => {
+      const a = await assets();
+      const sim = await create(a);
+      const car = pickCar(a);
+      sim.addPlayer(1, doorOf(sim, car, 1));
+      sim.addPlayer(2, doorOf(sim, car, 0));
+      run(sim, 10);
+      // the passenger gets in first: nobody drives, the engine stays off
+      expect(sim.step(new Map([[1, USE]]))).toContainEqual({ t: 'enter', id: 1, car, seat: 1 });
+      expect(sim.player(1)).toMatchObject({ mode: 'sit', carId: null, pass: { car, seat: 1 } });
+      expect(sim.cars.driver[car]).toBeNull();
+      run(sim, 200, () => new Map([[1, GAS]]));
+      expect(sim.ignition(car).state).toBe('off');
+      expect(dist(sim.cars.poses[car]!, a.manifest.parked[car]!)).toBeLessThan(0.1); // a passenger's throttle does nothing
+      // the driver gets in and drives: the passenger rides along
+      expect(sim.step(new Map([[2, USE]]))).toContainEqual({ t: 'enter', id: 2, car, seat: 0 });
+      run(sim, STARTED);
+      run(sim, 150, () => new Map([[2, GAS]]));
+      const there = sim.cars.vehicle(car)!.pose();
+      expect(dist(there, a.manifest.parked[car]!)).toBeGreaterThan(3);
+      expect(dist(sim.player(1).pos, there)).toBeLessThan(0.01);
+      // no getting out at speed, for the passenger either
+      expect(sim.step(new Map([[1, USE], [2, GAS]]))).toContainEqual({ t: 'exitDenied', id: 1, reason: 'speed' });
+      run(sim, 400, () => new Map([[2, { ...N, brake: true }]]));
+      // the driver leaves: the passenger stays, the car counts as used
+      expect(sim.step(new Map([[2, USE]]))).toContainEqual({ t: 'exit', id: 2, car, seat: 0 });
+      run(sim, 5);
+      expect(sim.cars.driver[car]).toBeNull();
+      expect(sim.cars.occupied(car)).toBe(true);
+      expect(sim.player(1).mode).toBe('sit');
+      // the passenger gets out on the right
+      expect(sim.step(new Map([[1, USE]]))).toContainEqual({ t: 'exit', id: 1, car, seat: 1 });
+      const c = sim.cars.poses[car]!;
+      expect(toCarPoint({ x: c.x, z: c.z, heading: headingOf(c) }, sim.player(1).pos.x, sim.player(1).pos.z).x).toBeLessThan(-1);
+      expect(sim.player(1).mode).toBe('walk');
+      expect(sim.cars.occupied(car)).toBe(false);
+    }, WHOLE_CITY_TIMEOUT);
+
+    test('passengers: a full car takes nobody else; a seat is free again when its player leaves the game', async () => {
+      const a = await assets();
+      const sim = await create(a);
+      const car = pickCar(a);
+      const n = CAR_SEATS[sim.cars.types[car]!].seats.length;
+      for (let s = 0; s < n; s++) sim.addPlayer(s + 1, doorOf(sim, car, s));
+      run(sim, 10);
+      for (let s = 0; s < n; s++) expect(sim.step(new Map([[s + 1, USE]]))).toContainEqual({ t: 'enter', id: s + 1, car, seat: s });
+      sim.addPlayer(9, leftOf(sim.cars.poses[car]!, 2.4));
+      run(sim, 10);
+      expect(sim.step(new Map([[9, USE]]))).toContainEqual({ t: 'enterDenied', id: 9 });
+      run(sim, 3);
+      sim.removePlayer(n); // the last seat's player
+      expect(sim.step(new Map([[9, USE]]))).toContainEqual({ t: 'enter', id: 9, car, seat: n - 1 });
     }, WHOLE_CITY_TIMEOUT);
 
     test('exit refused at speed', async () => {
       const { sim, car } = await nextToCar();
       sim.step(new Map([[1, USE]]));
-      run(sim, 90);
+      run(sim, STARTED);
       run(sim, 90, () => new Map([[1, GAS]]));
       expect(Math.abs(sim.cars.vehicle(car)!.speed())).toBeGreaterThan(2);
       const ev = sim.step(new Map([[1, { ...GAS, use: true }]]));
@@ -158,7 +222,7 @@ for (const [name, assets, skip] of worlds) {
       expect(sim.braking(car)).toBe(false);
       sim.step(new Map([[1, { ...N, brake: true }]]));
       expect(sim.braking(car)).toBe(true);
-      run(sim, 90);
+      run(sim, STARTED);
       expect(sim.braking(car)).toBe(false);
       run(sim, 90, () => new Map([[1, GAS]]));
       expect(sim.cars.vehicle(car)!.speed()).toBeGreaterThan(1);
@@ -182,8 +246,8 @@ for (const [name, assets, skip] of worlds) {
         sim.addPlayer(2);
         // player 1 walks into the car's side (yaw towards it), gets in after 5 s and drives a curve; player 2 strolls
         const towards = Math.atan2(c.x - leftOf(c, 2.5).x, c.z - leftOf(c, 2.5).z);
-        for (let t = 0; t < 600; t++) {
-          const p1: PlayerInput = t < 300 ? { ...NEUTRAL_INPUT(towards), forward: 0.5 } : t === 300 ? { ...N, use: true } : { ...N, forward: 1, right: t > 450 ? 0.6 : 0 };
+        for (let t = 0; t < 760; t++) {
+          const p1: PlayerInput = t < 300 ? { ...NEUTRAL_INPUT(towards), forward: 0.5 } : t === 300 ? { ...N, use: true } : { ...N, forward: 1, right: t > 610 ? 0.6 : 0 };
           const p2: PlayerInput = { ...NEUTRAL_INPUT(t * 0.01), forward: 1, run: t % 200 < 100, jump: t % 90 === 0 };
           sim.step(new Map([[1, p1], [2, p2]]));
         }

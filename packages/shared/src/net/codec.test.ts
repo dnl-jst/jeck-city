@@ -4,6 +4,7 @@ import {
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotRider, type SnapshotWalker,
 } from './codec';
 import { PROTOCOL_VERSION, parseStationId } from './constants';
+import { ownStateOf } from '../sim/replay';
 
 
 const prng = (seed: number) => () => {
@@ -24,7 +25,7 @@ const makeSnapshot = (nWalkers: number, nCars: number, nLamps: number, withEvent
   return {
     serverTick: 123456, ackSeq: 4000000000,
     own: {
-      mode: 1, engine: 2, carId: 17,
+      mode: 1, engine: 2, carId: 17, seat: 0,
       char: { x: 1.5, y: 40.25, z: -300, vx: 1, vy: -2, vz: 3, grounded: true, downTicks: 42 },
       car: { x: 5, y: 41, z: -299, qx: 0, qy: 0.7071, qz: 0, qw: 0.7071, vx: 1, vy: 0, vz: 2, ax: 0.1, ay: 0.2, az: 0.3, steer: -0.25 },
       bikeId: 0, fallTicks: 0, bike: null,
@@ -133,7 +134,7 @@ describe('snapshot', () => {
   it('own riding state round-trips', () => {
     const s = makeSnapshot(0, 0, 0, false);
     s.own = {
-      mode: 3, engine: 0, carId: 0, char: s.own.char, car: null, bikeId: 301, fallTicks: 0,
+      mode: 3, engine: 0, carId: 0, seat: 0, char: s.own.char, car: null, bikeId: 301, fallTicks: 0,
       bike: { x: 1.5, y: 40.25, z: -300, heading: -2.5, speed: 6.5, steer: 0.125, vy: -0.5, grounded: false, crank: 12.75 },
     };
     const d = decodeSnapshot(encodeSnapshot(s))!;
@@ -145,6 +146,14 @@ describe('snapshot', () => {
     const w = decodeSnapshot(encodeSnapshot(s))!;
     expect(w.own.bike).toBeNull();
     expect(w.own.fallTicks).toBe(66);
+  });
+
+  it('own state riding along round-trips: the car and the seat', () => {
+    const snap = makeSnapshot(0, 0, 0, false);
+    snap.own = { ...snap.own, mode: 4, engine: 0, carId: 321, seat: 3, car: null };
+    const back = decodeSnapshot(encodeSnapshot(snap))!;
+    expect(back.own).toMatchObject({ mode: 4, engine: 0, carId: 321, seat: 3, car: null });
+    expect(ownStateOf(back.own)).toMatchObject({ mode: 'sit', carId: null, pass: { car: 321, seat: 3 } });
   });
 
   it('snapshot without own car round-trips', () => {

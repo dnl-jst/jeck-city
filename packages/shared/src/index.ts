@@ -13,6 +13,8 @@ export * from './physics/step';
 export * from './physics/props';
 export * from './physics/biketypes';
 export * from './physics/cartypes';
+export * from './physics/carseats';
+export * from './plates';
 export * from './physics/bike';
 export * from './physics/parkedbikes';
 export * from './physics/surface';
