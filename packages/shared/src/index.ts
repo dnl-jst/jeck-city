@@ -5,6 +5,8 @@ export * from './assets/collision';
 export * from './assets/terrain';
 export * from './sun';
 export * from './weather';
+export * from './transit';
+export * from './physics/trains';
 export * from './physics/tuning';
 export * from './physics/world';
 export * from './physics/character';

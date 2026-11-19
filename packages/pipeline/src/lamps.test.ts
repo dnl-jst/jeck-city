@@ -3,7 +3,7 @@ import { boxBuilding, crossOf } from './fixture.js';
 import { generatedLamps, LAMP_SPACING } from './lamps.js';
 import type { OsmFeatures, Road } from './osm.js';
 
-const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 // eastbound road along z = 0; "right" of travel is +z (south)
 const road = (over: Partial<Road> = {}): Road => ({
   id: 1, kind: 'residential', points: [{ x: 0, z: 0 }, { x: 300, z: 0 }], width: 6.5, oneway: false, lanes: 2, cross: crossOf('residential', over.width ?? 6.5), ...over,

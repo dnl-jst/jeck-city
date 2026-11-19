@@ -16,6 +16,10 @@ import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
 import { DrivenCar, lampPower, ParkedCars, setMirrorNight, type CarModels } from './car';
+import { sitOnBench, TransitView } from './transit';
+
+/** The camera's target is this much lower for someone sitting on a bench (m): the cushion they are on, and sitting instead of standing. */
+const SIT_DROP = 0.95;
 import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
@@ -115,6 +119,12 @@ export class Game {
   /** Lamps knocked over since the last takeFallenLamps(). */
   private fallen: number[] = [];
   private readonly tramStops: WorldManifest['tramStops'];
+  /** 0..1: sitting on a bench in a train (eased; lowers the camera). */
+  private sitDrop = 0;
+  /** 0..1: how far the player is underground (set by the frame loop; fades the city's sounds, see GameAudio.transit). */
+  underground = 0;
+  /** The underground trains (null in a world without them). */
+  private readonly transit: TransitView | null;
   private readonly qa = new Quaternion();
   private readonly qb = new Quaternion();
   private readonly qc = new Quaternion();
@@ -137,6 +147,7 @@ export class Game {
     const heading = devCam ? devCam.yawDeg * DEG : m.spawn.heading;
     this.figure.heading = heading;
     this.cars = new ParkedCars(scene, sim.cars, ctx.carModels);
+    this.transit = m.transit ? new TransitView(scene, m.transit, ctx.characters) : null;
     if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, sim.bikes, m.bikeRacks, sim.racks.ys);
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
@@ -147,6 +158,7 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
       ragdolls: this.ragdolls,
+      aboard: (x, y, z) => this.transit?.aboard(x, y, z, this.session.remoteTick ?? this.session.sim.transitTick) ?? null,
       // (also the car still being got out of: the game keeps drawing it, with its door, until the figure is out)
       localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? this.pass?.car ?? -1, pose: this.drawnPose }
         : this.boarding?.kind === 'out' ? { id: this.boarding.car, pose: this.leavingPose(this.boarding.car) } : null),
@@ -557,6 +569,8 @@ export class Game {
     const a = this.session.alpha;
     const off = this.session.renderOffset();
     WATER_TIME.value = (WATER_TIME.value + dt) % 3600;
+    // the trains between the last two steps, as the own figure
+    this.transit?.update(this.session.sim.transitTick - 1 + a, this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.ragdolls.step(dt);
     if (this.mode === 'walk') {
       // hit by a car: limp from the walking pose, thrown with the car's push
@@ -578,9 +592,14 @@ export class Game {
         poseOccupant(this.figure, this.ctx.scene, this.driven, this.session.sim.cars.types[out.car]!, out.seat, at, st, dt);
         if (st.done) this.finishLeave();
       } else {
-        this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
+        const seat = this.transit?.seated(p.x, p.y, p.z);
+        if (seat) sitOnBench(this.figure, seat);
+        else this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
       }
-      if (!this.flying) this.follow.update(p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
+      // sitting on a bench: the feet are on its cushion and the head is lower than standing; the camera eases down with it
+      const sit = this.transit?.seated(p.x, p.y, p.z) ? 1 : 0;
+      this.sitDrop += (sit - this.sitDrop) * Math.min(1, dt * 6);
+      if (!this.flying) this.follow.update(this.sitDrop > 0.001 ? { x: p.x, y: p.y - SIT_DROP * this.sitDrop, z: p.z } : p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
@@ -658,6 +677,8 @@ export class Game {
     }
     if (audio) {
       const f = this.focus();
+      audio.transit(this.underground, this.transit?.nearest(f.x, f.y, f.z) ?? null);
+      for (const e of this.transit?.takeDoorEvents() ?? []) audio.trainDoors(e.opening, e.x, e.z);
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }
   }

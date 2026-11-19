@@ -182,6 +182,9 @@ export class OnlineSession implements Session {
     return this.offset;
   }
 
+  /** The server tick the remote entities of this frame are sampled at (see remote()). */
+  remoteTick = 0;
+
   /**
    * Remote players, cars, riders, moving bikes and tipping lamps for this frame: sampled at the render tick; people,
    * cars and riders as drawn (catch-ups blended, see CatchUp).
@@ -367,6 +370,7 @@ export class OnlineSession implements Session {
       // the prediction for ackSeq is the server's state: replaying from it would reproduce the current prediction
       this.reconciles.skipped++;
       this.predErrorM = 0;
+      this.sim.setTransitTick(s.serverTick + this.pending.length);
       return { x: 0, y: 0, z: 0 };
     }
     this.reconciles[hard ? 'hard' : 'replayed']++;
@@ -377,9 +381,9 @@ export class OnlineSession implements Session {
       this.pending = [];
       this.enterSeq = null;
       this.mountSeq = null;
-      this.sim.replay(this.me, server, []);
+      this.sim.replay(this.me, server, [], undefined, s.serverTick);
     } else {
-      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()));
+      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()), s.serverTick);
     }
     const after = this.ownPose();
     this.onCorrection?.();
@@ -424,6 +428,7 @@ export class OnlineSession implements Session {
   private updateRemote(ev: SimEvent[]): void {
     const now = this.now();
     const rt = this.link.clock.renderTick(now);
+    this.remoteTick = rt;
     const walkers = this.walkerBuf.sample(rt), cars = this.carBuf.sample(rt), lamps = this.lampBuf.sample(rt);
     const riders = this.riderBuf.sample(rt), bikes = this.bikeBuf.sample(rt);
     // drawn poses smoothed; the prediction world's stand-ins below use the sampled ones

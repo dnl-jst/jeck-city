@@ -1,5 +1,6 @@
 import { ImpactDetector, landed, skidAmount, StepClock, TramBell } from './cues';
 import { MIX, type AudioMixer, type LoopVoice, type ShotVoice } from './mixer';
+import { trainVoices } from './train-sound';
 import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
@@ -51,6 +52,10 @@ export class GameAudio {
   private readonly hornState = new HornState();
   private hornVoice: LoopVoice | null = null;
   private ambience: LoopVoice | null = null;
+  /** 0..1: how far underground the listener is (see transit()). */
+  private under = 0;
+  private trainRoll: LoopVoice | null = null;
+  private trainMotor: LoopVoice | null = null;
   /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
   private rainVoice: LoopVoice | null = null;
   private rain = 0;
@@ -295,13 +300,43 @@ export class GameAudio {
   /** Rain intensity 0..1 (0 when dry or snowing); remembered until the loops start. */
   weather(rain: number): void {
     this.rain = rain;
-    this.rainVoice?.setGain(MIX.rain * rain);
+    this.rainVoice?.setGain(MIX.rain * rain * (1 - this.under));
+  }
+
+  /**
+   * Every frame: how far the listener is underground (0..1: the city's ambience and the rain fade out down there) and
+   * the nearest train (distance, speed, whether the listener rides in it), or null.
+   */
+  transit(under: number, train: { dist: number; speed: number; inside: boolean } | null): void {
+    this.under = under;
+    this.ambience?.setGain(MIX.ambience * (1 - under));
+    this.rainVoice?.setGain(MIX.rain * this.rain * (1 - under));
+    if (!this.loaded || !this.unlocked) return;
+    const v = train ? trainVoices(train.dist, train.speed, train.inside) : null;
+    if (v && (v.roll > 0.003 || v.motor > 0.003)) {
+      this.trainRoll ??= this.d.mixer.loop('trainRoll', 'sfx');
+      this.trainMotor ??= this.d.mixer.loop('trainMotor', 'sfx');
+      this.trainRoll.setGain(MIX.train * v.roll);
+      this.trainRoll.setRate(v.rollRate);
+      this.trainMotor.setGain(MIX.train * 0.5 * v.motor);
+      this.trainMotor.setRate(v.motorRate);
+    } else if (this.trainRoll || this.trainMotor) {
+      this.trainRoll?.stop();
+      this.trainMotor?.stop();
+      this.trainRoll = this.trainMotor = null;
+    }
+  }
+
+  /** A train's doors start to open, or to close (three warning beeps first), at (x, z). */
+  trainDoors(opening: boolean, x: number, z: number): void {
+    this.d.mixer.oneShot(opening ? 'trainDoorOpen' : 'trainDoorClose', { gain: MIX.trainDoors, at: { x, z } });
   }
 
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
-    if (nearestTramStop && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
+    // (no bell from the street down in the underground)
+    if (nearestTramStop && this.under < 0.5 && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
       this.d.mixer.oneShot('tramBell', { gain: MIX.tramBell, at: { x: nearestTramStop.x, z: nearestTramStop.z } });
     }
   }
@@ -333,11 +368,11 @@ export class GameAudio {
     if (!this.loaded || !this.unlocked) return;
     if (!this.ambience) {
       this.ambience = this.d.mixer.loop('ambience', 'ambience');
-      this.ambience.setGain(MIX.ambience);
+      this.ambience.setGain(MIX.ambience * (1 - this.under));
     }
     if (!this.rainVoice) {
       this.rainVoice = this.d.mixer.loop('rain', 'ambience');
-      this.rainVoice.setGain(MIX.rain * this.rain);
+      this.rainVoice.setGain(MIX.rain * this.rain * (1 - this.under));
     }
     if (this.inCar && this.engineOn) this.vehicle.start();
     if (this.riding) this.bike.start();

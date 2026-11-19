@@ -1,6 +1,6 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { TUNING } from './tuning';
-import { BIKE_GROUPS, CAR_GROUPS, CHARACTER_GROUPS, onAfterStep, type PhysicsWorld } from './world';
+import { BIKE_GROUPS, CAR_GROUPS, CHARACTER_GROUPS, onAfterStep, TRAIN_FLOOR_GROUPS, type PhysicsWorld } from './world';
 
 /** forward/right in −1..1 relative to yaw; yaw h faces (sin h, cos h) in x/z; jump takes off if standing on ground. */
 export type CharacterInput = { forward: number; right: number; run: boolean; yaw: number; jump?: boolean };
@@ -31,7 +31,14 @@ const KNOCK_QUERY_GROUPS = 0x0001_ffe7;
  */
 const CARRY_BELOW = 1.6;
 /** What carries: cars and bikes (membership bits). */
-const CARRIERS = new Set([CAR_GROUPS >>> 16, BIKE_GROUPS >>> 16]);
+const CARRIERS = new Set([CAR_GROUPS >>> 16, BIKE_GROUPS >>> 16, TRAIN_FLOOR_GROUPS >>> 16]);
+/**
+ * A train's floor carries too, but only the floors are left out of the controller (a car or bike under the feet is
+ * left out as a whole): the person stands between the train's walls and collides with them as with any wall. The
+ * floors must stay out: Rapier's controller would itself move a person along with a kinematic floor under their feet
+ * (by its velocity of the last step, and only while they touch it), on top of being carried here.
+ */
+const TRAIN_FLOOR = TRAIN_FLOOR_GROUPS >>> 16;
 /** The thrown ball moves across this far (m) above where it is, clear of the ground under it. */
 const THROWN_LIFT = 0.04;
 /** Ground: a contact normal at least this steep upwards. */
@@ -70,7 +77,7 @@ export class Character {
   private kvx = 0;
   private kvz = 0;
   /** The car carrying this person through the current step and its pose before it (see CARRY_BELOW). */
-  private carrier: { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation } | null = null;
+  private carrier: { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation; solid: boolean } | null = null;
   private readonly offStep: () => void;
   /** Extra displacement for the next applyInput. */
   private pushX = 0;
@@ -121,7 +128,9 @@ export class Character {
     this.vy += T.gravity * DT;
     const p0 = this.body.translation();
     const carrier = (this.carrier = this.carUnder());
-    const cb = carrier?.body.handle;
+    const cb = carrier?.body.handle, train = carrier?.solid === true, floors = this.pw.trainFloors;
+    // in a stairwell down to the underground the terrain is open (the heightfield itself has no holes)
+    const ground = this.pw.terrain?.open(p0.x, p0.z) ? this.pw.terrain.handle : -1;
 
     // over a car or bike, the controller leaves it out (it moves under the feet; colliding with it would push the
     // person around): the feet are kept on its top below instead
@@ -129,13 +138,23 @@ export class Character {
       this.collider,
       { x: vx * DT + this.pushX, y: this.vy * DT, z: vz * DT + this.pushZ },
       this.pw.rapier.QueryFilterFlags.EXCLUDE_SENSORS, undefined,
-      carrier ? (c) => c.parent()?.handle !== cb : undefined,
+      // (train floors never take part: a floor's edge next to a platform's, both at the feet's height, is where the
+      // controller gets stuck inside its own skin; the feet are put on the floor below instead)
+      // By handle: inside the controller's query a Collider method that calls into Rapier (collisionGroups …) throws
+      // "recursive use", and a throwing predicate counts as a hit.
+      carrier || ground >= 0 || floors
+        ? (c) => c.handle !== ground && !(carrier && !train && c.parent()?.handle === cb) && !floors?.has(c.handle)
+        : undefined,
     );
     this.pushX = this.pushZ = 0;
     const m = { ...this.kcc.computedMovement() };
     let onTop = false;
     if (carrier) {
-      const top = this.topOf(carrier.body, p0.x + m.x, p0.z + m.z, p0.y - CENTRE + m.y);
+      // (stepping off a train's floor, e.g. out of the door: still at its height for this step. The floors were left out
+      // of the move, so it would otherwise end a hair below the floor's top, inside the controller's skin, and the next
+      // step, which collides with the floor again, would be stuck on its edge.)
+      const top = this.topOf(carrier.body, p0.x + m.x, p0.z + m.z, p0.y - CENTRE + m.y, train)
+        ?? (train ? this.topOf(carrier.body, p0.x, p0.z, p0.y - CENTRE, train) : null);
       if (top !== null && p0.y - CENTRE + m.y <= top + T.skin) {
         m.y = top + T.skin - (p0.y - CENTRE);
         onTop = true;
@@ -149,23 +168,40 @@ export class Character {
     this.vel = { x: m.x / DT, y: m.y / DT, z: m.z / DT };
   }
 
+  /**
+   * One step without moving: stays where it is on what carries it (sitting on a bench in a train). The controller is
+   * left out on purpose: standing on a kinematic body, Rapier's controller would move the person along with it itself,
+   * on top of being carried here, and so push them off the bench of a running train.
+   */
+  rest(): void {
+    if (!this.enabled) return;
+    this.carrier = this.carUnder();
+    this.vy = 0;
+    this.grounded = true;
+    this.pushX = this.pushZ = 0;
+    this.vel = { x: 0, y: 0, z: 0 };
+    this.body.setNextKinematicTranslation(this.body.translation());
+  }
+
   /** The car under the feet (within CARRY_BELOW) and its pose now, or null (see CARRY_BELOW). */
-  private carUnder(): { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation } | null {
+  private carUnder(): { body: RAPIER.RigidBody; t: RAPIER.Vector; q: RAPIER.Rotation; solid: boolean } | null {
     const { rapier: R, world } = this.pw;
     const p = this.body.translation(), feet = p.y - CENTRE;
     const hit = world.castRay(new R.Ray({ x: p.x, y: feet + 0.1, z: p.z }, { x: 0, y: -1, z: 0 }), CARRY_BELOW + 0.1, true,
       R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body,
       (c) => CARRIERS.has(c.collisionGroups() >>> 16));
     const b = hit?.collider.parent();
-    return b && !b.isFixed() ? { body: b, t: b.translation(), q: b.rotation() } : null;
+    return b && !b.isFixed() ? { body: b, t: b.translation(), q: b.rotation(), solid: hit!.collider.collisionGroups() >>> 16 === TRAIN_FLOOR } : null;
   }
 
-  /** Height of the top of `body` (a car, a bike) under (x, z), looking down from a little above `feet`, or null. */
-  private topOf(body: RAPIER.RigidBody, x: number, z: number, feet: number): number | null {
+  /** Height of the top of `body` (a car, a bike; `train`: of any train floor) under (x, z), looking down from a little above `feet`, or null. */
+  private topOf(body: RAPIER.RigidBody, x: number, z: number, feet: number, train = false): number | null {
     const { rapier: R, world } = this.pw;
     const from = feet + 0.5;
     const hit = world.castRay(new R.Ray({ x, y: from, z }, { x: 0, y: -1, z: 0 }), CARRY_BELOW + 0.5, true,
-      R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body, (c) => c.parent()?.handle === body.handle);
+      R.QueryFilterFlags.EXCLUDE_SENSORS, undefined, this.collider, this.body,
+      // (a train: any section's floor, so the step over a joint finds the next one)
+      (c) => (train ? c.collisionGroups() >>> 16 === TRAIN_FLOOR : c.parent()?.handle === body.handle));
     return hit ? from - hit.timeOfImpact : null;
   }
 

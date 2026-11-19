@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
@@ -33,6 +33,8 @@ import { trackBed } from './trackbed.js';
 import { abutmentFills, bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
 import { carveRiverBed, findWater, waterOutlines, waterShare, waterSurface } from './water.js';
 import { railMesh } from './streets.js';
+import { meshCovers, punchMesh } from './punch.js';
+import { buildTransit } from './transit.js';
 
 const RAW_DIR = 'data/raw';
 const OVERRIDES = 'data/building-overrides.json';
@@ -197,15 +199,34 @@ async function main() {
   streets.bridge = bodies.mesh;
   streets.steel = bodies.steel;
   console.log(`water surface: ${streets.water.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
+  // the underground Stadtbahn: tunnel, stations and stairs; the stairwells are cut out of the ground and the pavement
+  const onSidewalk = meshCovers(flat.sidewalk), onSquare = meshCovers(flat.squares);
+  const transitBuild = await buildTransit(f, {
+    terrain, built: (p) => insideAnyFootprint(p, buildings), pavement: (p) => onSidewalk(p) || onSquare(p), roadway: meshCovers(flat.road),
+  });
+  const holes = transitBuild?.openings ?? [];
+  const holeBox = holes.map((ring) => ({
+    minX: Math.min(...ring.map((p) => p.x)), maxX: Math.max(...ring.map((p) => p.x)), minZ: Math.min(...ring.map((p) => p.z)), maxZ: Math.max(...ring.map((p) => p.z)),
+  }));
+  /** Clear of the stairwells (and a step around them): nothing is placed there. */
+  const inHole = openingTest(holes.map((ring) => ring.flatMap((p) => [p.x, p.z])));
+  const offHoles = <T extends { x: number; z: number }>(p: T) =>
+    !holeBox.some((b) => p.x > b.minX - 1.5 && p.x < b.maxX + 1.5 && p.z > b.minZ - 1.5 && p.z < b.maxZ + 1.5) && !inHole(p.x, p.z);
   const graph = buildRoadGraph(f);
   const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 
   await mkdir(OUT_DIR, { recursive: true });
-  for (const file of await readdir(OUT_DIR)) if (/^(chunk|model)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
+  for (const file of await readdir(OUT_DIR)) if (/^(chunk|model|transit)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
 
   const chunks: WorldManifest['chunks'] = [];
   for (const c of buildChunks(buildings, streets, overrides, area, terrain, decks)) {
     const file = `chunk_${c.key}.glb`;
+    // (triangles belong to the chunk of their centroid and may reach a little beyond its square)
+    const x0 = c.ix * CHUNK_SIZE - 10, z0 = c.iz * CHUNK_SIZE - 10, x1 = x0 + CHUNK_SIZE + 20, z1 = z0 + CHUNK_SIZE + 20;
+    if (holeBox.some((b) => b.maxX >= x0 && b.minX <= x1 && b.maxZ >= z0 && b.minZ <= z1)) {
+      if (c.ground) c.ground = punchMesh(c.ground, holes);
+      for (const name of STREET_MESHES) if (c.streets[name]) c.streets[name] = punchMesh(c.streets[name], holes);
+    }
     const glb = await encodeChunkGlb(c);
     await writeFile(join(OUT_DIR, file), glb);
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
@@ -231,16 +252,24 @@ async function main() {
     console.log(`model ${file} for ${ids.join(', ')}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid, lift ${lift.toFixed(2)} m`);
   }
 
+  for (const [key, glb] of transitBuild?.models ?? []) {
+    if (!chunks.some((c) => c.key === key)) throw new Error(`transit: chunk ${key} does not exist`);
+    const file = `transit_${key}.glb`;
+    await writeFile(join(OUT_DIR, file), glb);
+    models.push({ id: `transit_${key}`, chunk: key, file, bytes: glb.byteLength });
+  }
+  if (transitBuild) console.log(`transit: ${transitBuild.models.size} models, ${transitBuild.collision.length / 9} collision triangles, ${holes.length} openings in the ground`);
+
   // collision: the 1 m drape would put millions of kerb triangles into the trimesh; a coarse terrain-following copy
   // of the flat kerbs and sidewalks is enough (rendering keeps the draped meshes)
-  const curb = followTerrain(cropMesh(flatStreets.curb, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE);
-  const sidewalk = followTerrain(cropMesh(flatStreets.sidewalk, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE);
+  const curb = punchMesh(followTerrain(cropMesh(flatStreets.curb, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
+  const sidewalk = punchMesh(followTerrain(cropMesh(flatStreets.sidewalk, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
   for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
     const d = followDeviation(m, terrain);
     console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
   }
   const deckCollision = [...deckSurfaces.map(triangleSoup), bodies.collision];
-  const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain });
+  const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision, ...(transitBuild ? [transitBuild.collision] : [])], terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   // the spawn stands on the walkable surface there: pavement if any, else the terrain
   const spawnGround = heightAt(terrain, spawn.x, spawn.z);
@@ -263,11 +292,11 @@ async function main() {
   const extraLamps = generatedLamps(f, buildings); // overridden footprints keep lamps out too
   // props stand on the terrain: none on the bridges (they would stand on the water below)
   const offBridge = <T extends { x: number; z: number }>(p: T) => !onBridge(bridges, terrain, p);
-  const lamps = [...f.lamps, ...extraLamps].filter(offBridge);
+  const lamps = [...f.lamps, ...extraLamps].filter(offBridge).filter(offHoles);
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
   const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps, sidewalks);
-  const trees = [...f.trees, ...extraTrees].filter(offBridge);
+  const trees = [...f.trees, ...extraTrees].filter(offBridge).filter(offHoles);
   const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 
@@ -291,15 +320,15 @@ async function main() {
   const carModels = await shipCarModels(OUT_DIR);
   console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 
-  const racks = layoutRacks(f, buildings).filter((r) => r.hoops.every(offBridge));
-  const carSpots = dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings).filter((c) => offBridge(c.pos)), racks);
+  const racks = layoutRacks(f, buildings).filter((r) => r.hoops.every(offBridge) && r.hoops.every(offHoles));
+  const carSpots = dropCarsAtRacks(parkedCarSpots(f, PARKING_SEED, buildings).filter((c) => offBridge(c.pos) && offHoles(c.pos)), racks);
   const spawnBike = spawnBikeSpot(f, spawn, buildings);
   if (insideAnyFootprint(SOUND_BIKE, buildings)) throw new Error('sound bike: spot lies inside a building');
-  const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter(offBridge).filter((b) =>
+  const rackBikes = fillRacks(racks, BIKE_SEED, buildings).filter(offBridge).filter(offHoles).filter((b) =>
     Math.hypot(b.x - spawnBike.x, b.z - spawnBike.z) >= SPAWN_BIKE_CLEAR && Math.hypot(b.x - SOUND_BIKE.x, b.z - SOUND_BIKE.z) >= SPAWN_BIKE_CLEAR);
   const scooters = placeScooters(f, buildings, SCOOTER_SEED, {
     lamps, trees, hoops: racks.flatMap((r) => r.hoops), keepClear: [spawn, spawnBike, SOUND_BIKE],
-  }, sidewalks).filter(offBridge);
+  }, sidewalks).filter(offBridge).filter(offHoles);
   console.log(`e-scooters: ${scooters.length} (${scooters.filter((s) => s.down).length} lying)`);
   const hoopCount = racks.reduce((n, r) => n + r.hoops.length, 0);
   console.log(`bikes: ${f.bikeParking.length} OSM bike parkings → ${racks.length} rack rows (${racks.filter((r) => r.inStrip).length} in parking strips), ${hoopCount} hoops, ${rackBikes.length} bikes + the spawn Long John ${Math.hypot(spawnBike.x - spawn.x, spawnBike.z - spawn.z).toFixed(2)} m from the spawn`);
@@ -335,6 +364,7 @@ async function main() {
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,
     farGroundY: r2(borderMin(terrain) - 0.5),
+    ...(transitBuild ? { transit: transitBuild.transit } : {}),
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));

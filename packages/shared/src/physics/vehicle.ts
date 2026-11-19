@@ -1,7 +1,7 @@
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { CAR_SPECS, type CarSpec, type CarType } from './cartypes';
 import { TUNING } from './tuning';
-import { CAR_GROUPS, onBeforeStep, type PhysicsWorld } from './world';
+import { CAR_GROUPS, OFF_TERRAIN, onBeforeStep, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
 export type VehicleInput = { throttle: number; steer: number; brake: boolean };
@@ -73,7 +73,7 @@ export class Vehicle {
     );
     const [hx, hy, hz] = [lay.half.x, lay.half.y, lay.half.z];
     const m = this.spec.mass;
-    world.createCollider(
+    const body = world.createCollider(
       R.ColliderDesc.cuboid(hx, hy, hz).setTranslation(lay.centre.x, lay.centre.y, lay.centre.z).setMassProperties(
         m,
         // centre of mass over the axle midpoint at comY above the ground (collider-local)
@@ -107,7 +107,13 @@ export class Vehicle {
     // the old staticWorldFilter's fate (same results, bit for bit), at ~0.05 ms per thrown error, 8 per car and step.
     this.unsubscribe = onBeforeStep(pw, () => {
       // a kinematic chassis (a car the server streams, see CarPool.follow) is placed, not driven
-      if (!this.chassis.isSleeping() && this.chassis.isDynamic()) c.updateVehicle(TUNING.world.dt);
+      if (this.chassis.isSleeping() || !this.chassis.isDynamic()) return;
+      // over a stairwell down to the underground the terrain is open (the heightfield has no holes): body and wheels
+      // leave it out there, so whoever tries can drive down the stairs (and get stuck)
+      const t = this.chassis.translation(), open = pw.terrain?.open(t.x, t.z) === true;
+      const groups = open ? (CAR_GROUPS & 0xffff_0000) | (CAR_GROUPS & OFF_TERRAIN) : CAR_GROUPS;
+      if (body.collisionGroups() !== groups) body.setCollisionGroups(groups);
+      c.updateVehicle(TUNING.world.dt, undefined, open ? (0xffff_0000 | OFF_TERRAIN) >>> 0 : undefined);
     });
   }
 

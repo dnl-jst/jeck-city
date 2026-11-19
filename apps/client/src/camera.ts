@@ -1,5 +1,5 @@
 import { Euler, Vector3, type PerspectiveCamera } from 'three';
-import { staticWorldFilter, VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
+import { staticWorldFilter, TRAIN_FLOOR_GROUPS, TRAIN_GROUPS, VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
 import type { Input } from './input';
 import { angleDelta } from './player';
 
@@ -28,6 +28,8 @@ const SHAKE = { bike: { m: 0.03, roll: 0.004 }, car: { m: 0.018, roll: 0.0025 } 
 const MIN_DIST = 0.9;
 /** The camera only collides with the static city (not cars, not the player). */
 const STATIC_ONLY = staticWorldFilter();
+/** Membership bits of a train's colliders (kinematic, so not part of the static world). */
+const IN_TRAIN = new Set([TRAIN_GROUPS >>> 16, TRAIN_FLOOR_GROUPS >>> 16]);
 
 const smooth01 = (x: number) => {
   const t = Math.min(1, Math.max(0, x));
@@ -189,7 +191,11 @@ export class FollowCamera {
   /** How far the camera may sit from p along (dx, dy, dz) before hitting static geometry (≤ max). */
   private clearDistance(p: Vector3, dx: number, dy: number, dz: number, max: number): number {
     const { rapier: R, world } = this.pw;
-    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
+    // in a stairwell the terrain is open (see PhysicsWorld.terrain): the heightfield must not pull the camera in
+    const t = this.pw.terrain, open = t?.open(p.x, p.z) ? t.handle : -1;
+    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, undefined, undefined, undefined, undefined,
+      // (a train's walls and roof count too: inside one, the camera stays inside)
+      (c) => c.handle !== open && (IN_TRAIN.has(c.collisionGroups() >>> 16) || STATIC_ONLY(c)));
     return hit ? Math.max(MIN_DIST, Math.min(max, hit.timeOfImpact - 0.3)) : max;
   }
 }
