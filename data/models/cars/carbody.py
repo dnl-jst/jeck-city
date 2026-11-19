@@ -335,7 +335,7 @@ def mirror2(part, M, at, side, mat='paint'):
     for f in bm.faces:
         part._face([vmap[v] for v in f.verts], M[mat])
     bm.free()
-    part.box(at + V((side * 0.035, 0.0, -0.035)), (0.07, 0.04, 0.025), M['trim'])
+    part.box(at + V((side * 0.035, -0.016, -0.035)), (0.07, 0.03, 0.025), M['trim'])  # the foot, ahead of the glass
     # the glass: an oval a little smaller than the cut, slightly domed like a real door mirror (a flat one would
     # reflect a single colour of the game's small reflection panorama)
     k = math.sqrt(1 - (back / 0.07) ** 2) * 0.88
