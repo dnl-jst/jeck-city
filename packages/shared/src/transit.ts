@@ -88,7 +88,7 @@ export function sectionOffset(i: number): number {
 }
 
 /** A stretch between two standstills: from t0 over d metres from s0, speeding up at `a` for tAcc to v, cruising, braking at `a`. */
-type Leg = { t0: number; s0: number; d: number; tAcc: number; tCruise: number; v: number; a: number };
+type Leg = { t0: number; s0: number; d: number; tAcc: number; tCruise: number; v: number; a: number; p0?: number; p1?: number };
 /** A stop of a run: the train stands from t0 to t1; its doors are shut again by `doors` (it may wait on for its time). */
 type Dwell = { t0: number; t1: number; doors: number; side: 1 | -1; station: number };
 /**
@@ -224,8 +224,10 @@ const BLOCK_REACH = TRAIN_LENGTH / 2 + 12, BLOCK_GAP = 6;
 const MAX_HELD = 600;
 
 /** The time after its start at which a run first is `s` metres along its track. */
-function timeAt(p: Profile, s: number): number {
-  for (const leg of p.legs) {
+function timeAt(p: Profile, s: number, from = { leg: 0 }): number {
+  // (from: where the last call for a smaller s ended, to go on from there)
+  for (; from.leg < p.legs.length; from.leg++) {
+    const leg = p.legs[from.leg]!;
     if (s > leg.s0 + leg.d) continue;
     const ds = s - leg.s0;
     if (ds <= 0 || leg.d <= 0) return leg.t0;
@@ -237,14 +239,56 @@ function timeAt(p: Profile, s: number): number {
   return p.duration;
 }
 
+/** A wait of a run: after its m-th served stop, in that station (doors shut) or out on the line at `s` metres, until `until` seconds after its start. */
+type Wait = { after: number; s: number; until: number; inStation: boolean };
+
+/**
+ * The run of `base` with waits put in: the train stands where the waits say until their time, and from there on makes
+ * up for it, driving as quickly as it can and standing no longer than the doors take, until it is on time again.
+ */
+function withWaits(tr: Transit['tracks'][number], base: Profile, served: number[], waits: Wait[]): Profile {
+  const legs: Leg[] = [base.legs[0]!], dwells: Dwell[] = [], at: (Dwell | undefined)[] = new Array(tr.stops.length).fill(undefined);
+  let time = 0;
+  served.forEach((i, n) => {
+    const plan = base.at[i]!, stop = tr.stops[i]!;
+    let arrive = plan.t0;
+    if (n > 0) {
+      const prev = dwells[n - 1]!, before = base.at[served[n - 1]!]!, from = tr.stops[served[n - 1]!]!.s, whole = Math.max(1e-6, stop.s - from);
+      const here = waits.filter((w) => w.after === n - 1);
+      prev.t1 = Math.max(prev.t0 + DWELL, before.t1, ...here.filter((w) => w.inStation).map((w) => w.until));
+      let t = prev.t1, pos = from;
+      for (const w of here.filter((x) => !x.inStation && x.s > from + 1 && x.s < stop.s - 1).sort((a, b) => a.s - b.s)) {
+        const d = w.s - pos, leg = legOf(t, pos, d, Math.max(quickest(d), ((plan.t0 - before.t1) * d) / whole));
+        legs.push({ ...leg, p0: (pos - from) / whole, p1: (w.s - from) / whole });
+        t = Math.max(t + 2 * leg.tAcc + leg.tCruise, w.until);
+        pos = w.s;
+      }
+      const d = stop.s - pos;
+      arrive = Math.max(plan.t0, t + quickest(d));
+      legs.push({ ...legOf(t, pos, d, arrive - t), p0: (pos - from) / whole, p1: 1 });
+    }
+    const dwell: Dwell = { t0: arrive, t1: arrive + DWELL, doors: arrive + DWELL, side: plan.side, station: plan.station };
+    dwells.push(dwell);
+    at[i] = dwell;
+    time = dwell.t1;
+  });
+  // (the last stop: as long as planned, if there is a way on from it)
+  if (base.legs.length > base.dwells.length) {
+    const tail = base.legs[base.legs.length - 1]!;
+    legs.push({ ...tail, t0: time });
+    time += 2 * tail.tAcc + tail.tCruise;
+  }
+  return { legs, dwells, at, duration: time, lead: base.lead };
+}
+
 /**
  * Lines that share rails have their own timetables, each in whole minutes: now and then two trains would be in one
  * place at once, one inside the other (at a platform, where tracks join or cross, where a line turns back on one
  * track). So the rails are cut into blocks, and the trips of a day are gone through in the order they start: a trip
- * that would be in a block while another train is starts as much later as it takes. It waits behind the train ahead
- * (and does not make the time up again).
+ * that would come into a block while another train is in it waits before it, out on the line, and makes the time up
+ * again afterwards (withWaits). Only where that does not do (the block lies before its first stop) it starts later.
  */
-function keepApart(tracks: Track[]): (kind: number) => void {
+function keepApart(t: Transit, tracks: Track[]): (kind: number) => void {
   let blocksOf: number[][][] | null = null, ids = 0;
   const done = new Set<number>();
   const prepare = (): number[][][] => {
@@ -280,18 +324,20 @@ function keepApart(tracks: Track[]): (kind: number) => void {
   });
   };
   // when a run is in which block, after its start (per profile, made on first use)
-  const visits = new Map<Profile, { id: number; a: number; b: number }[]>();
-  const visitsOf = (k: number, p: Profile): { id: number; a: number; b: number }[] => {
-    let v = visits.get(p);
+  type Visit = { id: number; blk: number; a: number; b: number };
+  const visits = new Map<Profile, Visit[]>();
+  const visitsOf = (k: number, p: Profile, keep = true): Visit[] => {
+    let v = keep ? visits.get(p) : undefined;
     if (!v) {
       v = [];
       const first = p.legs[0], last = p.legs[p.legs.length - 1];
       const s0 = first ? first.s0 : 0, s1 = last ? last.s0 + last.d : 0, blocks = (blocksOf ??= prepare())[k]!;
+      const in_ = { leg: 0 }, out = { leg: 0 };
       for (let b = Math.max(0, Math.floor((s0 - BLOCK_REACH) / BLOCK)); b < blocks.length && b * BLOCK <= s1 + BLOCK_REACH; b++) {
-        const from = timeAt(p, b * BLOCK - BLOCK_REACH), to = timeAt(p, (b + 1) * BLOCK + BLOCK_REACH) + BLOCK_GAP;
-        for (const id of blocks[b]!) v.push({ id, a: from, b: to });
+        const from = timeAt(p, b * BLOCK - BLOCK_REACH, in_), to = timeAt(p, (b + 1) * BLOCK + BLOCK_REACH, out) + BLOCK_GAP;
+        for (const id of blocks[b]!) v.push({ id, blk: b, a: from, b: to });
       }
-      visits.set(p, v);
+      if (keep) visits.set(p, v);
     }
     return v;
   };
@@ -309,9 +355,46 @@ function keepApart(tracks: Track[]): (kind: number) => void {
       while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid]!.a < a) lo = mid + 1; else hi = mid; }
       return lo;
     };
+    /** The first block of `v` (a trip started at `start`) that another train is in: the block and when it is free. */
+    const blocked = (v: Visit[], start: number): { blk: number; at: number; free: number } | null => {
+      let hit: { blk: number; at: number; free: number } | null = null;
+      for (const q of v) {
+        const a = start + q.a, b = start + q.b, list = taken[q.id]!, at = place(list, a);
+        let free = at > 0 && list[at - 1]!.b > a ? list[at - 1]!.b : -Infinity;
+        for (let j = at; j < list.length && list[j]!.a < b; j++) free = Math.max(free, list[j]!.b);
+        if (free > -Infinity && (!hit || a < hit.at)) hit = { blk: q.blk, at: a, free };
+      }
+      return hit;
+    };
     trips.forEach((trip, n) => {
-      const tr = tracks[trip.k]!, v = visitsOf(trip.k, tr.profiles[tr.days[d]!.profile[trip.i]!]!);
+      const tr = tracks[trip.k]!, base = tr.profiles[tr.days[d]!.profile[trip.i]!]!;
+      let v = visitsOf(trip.k, base);
       let held = 0;
+      // first the way of a real train: it waits before the block that is taken, out on the line (in its station only
+      // where the block lies right ahead of it), and makes the time up again as far as it can
+      if (base.dwells.length > 0 && blocked(v, trip.start)) {
+        const stops = t.tracks[trip.k]!.stops, served = stops.map((_, i) => i).filter((i) => base.at[i]);
+        const waits: Wait[] = [];
+        let own: Profile | null = null;
+        for (let pass = 0; pass < 24; pass++) {
+          const hit = blocked(own ? visitsOf(trip.k, own, false) : v, trip.start);
+          if (!hit) break;
+          own = null;
+          const sH = hit.blk * BLOCK - BLOCK_REACH - 2, until = hit.free - trip.start;
+          let m = served.length - 1;
+          while (m >= 0 && stops[served[m]!]!.s > sH) m--;
+          if (m < 0 || until > base.duration + MAX_HELD) break; // (before the first stop: started later instead, below)
+          const inStation = sH - stops[served[m]!]!.s < 8;
+          const same = waits.find((w) => w.after === m && w.inStation === inStation && (inStation || Math.abs(w.s - sH) < 1));
+          if (same) same.until = Math.max(same.until, until + (same.until >= until ? 1 : 0));
+          else waits.push({ after: m, s: sH, until, inStation });
+          own = withWaits(t.tracks[trip.k]!, base, served, waits);
+        }
+        if (own && !blocked(visitsOf(trip.k, own, false), trip.start)) {
+          tr.days[d]!.profile[trip.i] = tr.profiles.push(own) - 1;
+          v = visitsOf(trip.k, own, false);
+        }
+      }
       for (let pass = 0; pass < 40; pass++) {
         let more = held;
         for (const q of v) {
@@ -359,7 +442,8 @@ export function transitModel(t: Transit): TransitModel {
       return { ...base, slots: Math.ceil(profile.duration / headway) + 1, periodic: { profile, headway, phase: tr.phase ?? (k * headway) / 2 }, profiles: [profile], days: [], longest: profile.duration };
     }
     const profiles = tt.patterns.map((times) => profileOf(tr, length, times));
-    const longest = Math.max(...profiles.map((p) => p.duration));
+    // (a run may take up to MAX_HELD longer where it has to wait for others, see keepApart)
+    const longest = Math.max(...profiles.map((p) => p.duration)) + MAX_HELD;
     const days = tt.days.map((list) => {
       const trips: [number, number][] = [];
       for (let i = 0; i + 1 < list.length; i += 2) trips.push([list[i + 1]! - profiles[list[i]!]!.lead, list[i]!]);
@@ -382,7 +466,7 @@ export function transitModel(t: Transit): TransitModel {
     }
     tr.slots = most + 1;
   }
-  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0), epochMs: Date.now(), apart: keepApart(tracks) };
+  return { headway: t.headway, tracks, count: tracks.reduce((n, tr) => n + tr.slots * TRAIN_SECTIONS, 0), epochMs: Date.now(), apart: keepApart(t, tracks) };
 }
 
 /** The clock in Köln: milliseconds to add to UTC, cached by the hour (daylight saving changes on the hour). */
@@ -495,7 +579,9 @@ function tripDistance(tr: Profile, t: number): { s: number; v: number; leg: numb
   let leg = tr.legs[0]!;
   for (const l of tr.legs) if (l.t0 <= t) leg = l;
   const u = t - leg.t0, total = 2 * leg.tAcc + leg.tCruise;
-  const at = (s: number, v: number) => ({ s, v, leg: leg.d > 0 ? Math.min(1, Math.max(0, (s - leg.s0) / leg.d)) : 1 });
+  // (a stretch between two stops driven in pieces, with a wait between: p0..p1 is this piece's share of it)
+  const p0 = leg.p0 ?? 0, p1 = leg.p1 ?? 1;
+  const at = (s: number, v: number) => ({ s, v, leg: p0 + (p1 - p0) * (leg.d > 0 ? Math.min(1, Math.max(0, (s - leg.s0) / leg.d)) : 1) });
   if (u >= total) return at(leg.s0 + leg.d, 0);
   if (u < leg.tAcc) return at(leg.s0 + 0.5 * leg.a * u * u, leg.a * u);
   const sAcc = 0.5 * leg.a * leg.tAcc * leg.tAcc;
