@@ -9,9 +9,9 @@ export type SeatLayout = { seats: CarSeat[]; doors: Partial<Record<DoorName, Car
 
 /**
  * Seats and doors per car type; the models carry the same points as nodes (seat_<n>, door_*; data/models/cars).
- * Seat 0 is the driver. Types without an entry still use the old one-driver model.
+ * Seat 0 is the driver.
  */
-export const CAR_SEATS: Partial<Record<CarType, SeatLayout>> = {
+export const CAR_SEATS: Record<CarType, SeatLayout> = {
   kleinwagen: {
     seats: [
       { x: 0.37, u: 0.05, h: 0.5, door: 'door_fl' },
@@ -24,6 +24,41 @@ export const CAR_SEATS: Partial<Record<CarType, SeatLayout>> = {
       door_fr: { hingeX: -0.86, hingeU: 0.9, rearU: -0.2, openAngle: 1.13 },
       door_rl: { hingeX: 0.87, hingeU: -0.2, rearU: -1.08, openAngle: 1.13 },
       door_rr: { hingeX: -0.87, hingeU: -0.2, rearU: -1.08, openAngle: 1.13 },
+    },
+  },
+  mittelklasse: {
+    seats: [
+      { x: 0.38, u: 0.09, h: 0.47, door: 'door_fl' },
+      { x: -0.38, u: 0.09, h: 0.47, door: 'door_fr' },
+      { x: 0.37, u: -0.74, h: 0.5, door: 'door_rl' },
+      { x: -0.37, u: -0.74, h: 0.5, door: 'door_rr' },
+    ],
+    doors: {
+      door_fl: { hingeX: 0.9, hingeU: 0.95, rearU: -0.15, openAngle: 1.13 },
+      door_fr: { hingeX: -0.9, hingeU: 0.95, rearU: -0.15, openAngle: 1.13 },
+      door_rl: { hingeX: 0.905, hingeU: -0.15, rearU: -1.03, openAngle: 1.13 },
+      door_rr: { hingeX: -0.905, hingeU: -0.15, rearU: -1.03, openAngle: 1.13 },
+    },
+  },
+  // driver and the outer place of the double bench; the load space is not entered
+  transporter: {
+    seats: [
+      { x: 0.47, u: 1.27, h: 0.92, door: 'door_fl' },
+      { x: -0.5, u: 1.27, h: 0.92, door: 'door_fr' },
+    ],
+    doors: {
+      door_fl: { hingeX: 0.94, hingeU: 1.95, rearU: 1, openAngle: 1.13 },
+      door_fr: { hingeX: -0.94, hingeU: 1.95, rearU: 1, openAngle: 1.13 },
+    },
+  },
+  smart: {
+    seats: [
+      { x: 0.33, u: -0.2, h: 0.62, door: 'door_fl' },
+      { x: -0.33, u: -0.2, h: 0.62, door: 'door_fr' },
+    ],
+    doors: {
+      door_fl: { hingeX: 0.765, hingeU: 1, rearU: -0.4, openAngle: 1.13 },
+      door_fr: { hingeX: -0.765, hingeU: 1, rearU: -0.4, openAngle: 1.13 },
     },
   },
 };

@@ -23,7 +23,7 @@ export const CAR_SPECS: Record<CarType, CarSpec> = {
   kleinwagen: { length: 4.05, width: 1.75, height: 1.47, bodyZ: 0.05, wheelbase: 2.55, track: 1.5, wheelRadius: 0.305, mass: 1150, comY: 0.36 },
   mittelklasse: { length: 4.76, width: 1.83, height: 1.44, bodyZ: -0.07, wheelbase: 2.82, track: 1.58, wheelRadius: 0.33, mass: 1450, comY: 0.36 },
   transporter: { length: 4.9, width: 1.9, height: 1.97, bodyZ: 0.03, wheelbase: 3.0, track: 1.62, wheelRadius: 0.343, mass: 1900, comY: 0.45 },
-  smart: { length: 2.7, width: 1.66, height: 1.55, bodyZ: 0.055, wheelbase: 1.87, track: 1.46, wheelRadius: 0.29, mass: 880, comY: 0.36 },
+  smart: { length: 2.7, width: 1.56, height: 1.55, bodyZ: 0.055, wheelbase: 1.87, track: 1.36, wheelRadius: 0.29, mass: 880, comY: 0.36 },
 };
 
 /** Share of each type among the parked cars (same order as CAR_TYPES). */

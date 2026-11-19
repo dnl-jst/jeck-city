@@ -13,6 +13,10 @@ Everything is placed from a `layout` dict in metres (u = ahead of the origin, x 
     shelf      {'u0', 'u1', 'z'}: cover behind the rear seats, or None
     mirror     (u, z) of the inner mirror
     panels     {'door_fl': (u0, u1), ...}: extent of each door's inner panel
+    panel_z    height of the panels' middle (default 0.61)
+    bench      {'w': width, 'cx': centre x} of the bench (default: 1.3 m, centred)
+    bulkhead   {'u', 'top'}: a wall behind the seats (panel van), or absent
+    tunnel, console   False to leave out the centre tunnel / the centre console
 """
 import math
 
@@ -58,11 +62,12 @@ def taper(size, top=0.85, axis=2):
     return f
 
 
-def bucket_seat(p, M, x, u, h, recline=RECLINE_FRONT, w=0.5):
+def bucket_seat(p, M, x, u, h, recline=RECLINE_FRONT, w=0.5, floor=None):
     """A front seat round the hip point (x, u, h): cushion with side bolsters, shaped backrest, headrest on stalks."""
     y = -u
     top = h - 0.09  # cushion surface under the hip point
-    p.box(V((x, y - 0.17, top - 0.2)), (w * 0.8, 0.42, 0.1), M['interior'])  # base and rails
+    lo = top - 0.25 if floor is None else floor  # base and rails, down to the floor
+    p.box(V((x, y - 0.17, (lo + top - 0.1) / 2)), (w * 0.8, 0.42, max(0.05, top - 0.1 - lo)), M['interior'])
     blob(p, (x, y - 0.19, top - 0.055), (w, 0.52, 0.13), M['seat'], RX(math.radians(-7)), r=0.045)
     for s in (1, -1):
         blob(p, (x + s * (w / 2 - 0.035), y - 0.17, top - 0.01), (0.09, 0.46, 0.1), M['seat'], RX(math.radians(-7)), r=0.04)
@@ -78,16 +83,18 @@ def bucket_seat(p, M, x, u, h, recline=RECLINE_FRONT, w=0.5):
     blob(p, head, (0.27, 0.11, 0.19), M['seat'], back, r=0.045)
 
 
-def bench(p, M, seats, recline=RECLINE_REAR, w=1.3):
+def bench(p, M, seats, recline=RECLINE_REAR, w=1.3, cx=0.0, floor=None):
     """A rear bench for the two outer seats: one cushion, one backrest, a headrest behind each seat."""
     u = sum(s[1] for s in seats) / len(seats)
     h = sum(s[2] for s in seats) / len(seats)
     y, top = -u, h - 0.09
-    p.box(V((0, y - 0.15, top - 0.2)), (w, 0.5, 0.14), M['interior'])
-    blob(p, (0, y - 0.17, top - 0.055), (w, 0.52, 0.14), M['seat'], RX(math.radians(-8)), r=0.05)
+    lo = top - 0.27 if floor is None else floor
+    p.box(V((cx, y - 0.15, (lo + top - 0.13) / 2)), (w, 0.5, max(0.05, top - 0.13 - lo)), M['interior'])
+    blob(p, (cx, y - 0.17, top - 0.055), (w, 0.52, 0.14), M['seat'], RX(math.radians(-8)), r=0.05)
     back = RX(-recline)
-    foot = V((0, y + 0.15, top - 0.02))
+    foot = V((cx, y + 0.15, top - 0.02))
     blob(p, foot + back @ V((0, 0, 0.33)), (w - 0.08, 0.11, 0.66), M['seat'], back, r=0.05)
+    foot = V((0, y + 0.15, top - 0.02))
     for x, _, _ in seats:
         head = foot + back @ V((x, -0.04, 0.8))
         for s in (1, -1):
@@ -135,12 +142,15 @@ def build_interior(sh, layout):
     # carpet (inside the sills, between the axles' wheel housings), tunnel, firewall
     rear = -sh.S['wb'] / 2 + 0.25
     p.box(V((0, -(fw + rear) / 2, fl + 0.006)), (2 * hw - 0.18, fw - rear, 0.012), M['interior'])
-    blob(p, (0, -(fw - 0.75), fl + 0.07), (0.2, 1.5, 0.14), M['interior'], r=0.04)
-    p.box(V((0, -fw, (fl + L['dash']['top']) / 2)), (2 * hw, 0.03, L['dash']['top'] - fl), M['interior'])
+    if L.get('tunnel', True):
+        blob(p, (0, -(fw - 0.75), fl + 0.07), (0.2, 1.5, 0.14), M['interior'], r=0.04)
+    p.box(V((0, -fw, (fl + L['dash']['top'] - 0.14) / 2)), (2 * hw - 0.1, 0.03, L['dash']['top'] - 0.14 - fl), M['interior'])
     # dashboard: a deep upper body under the windscreen, a shallower lower part, the instrument hood, vents
+    # it ends under the foot of the windscreen: further forward it would come through the bonnet
     d0, dt = L['dash']['u0'], L['dash']['top']
-    blob(p, (0, -(d0 + fw) / 2, dt - 0.09), (2 * hw, fw - d0, 0.18), M['interior'], RX(math.radians(4)), r=0.05)
-    blob(p, (0, -(d0 + 0.1 + fw) / 2, dt - 0.26), (2 * hw, fw - d0 - 0.1, 0.22), M['interior_trim'], r=0.04)
+    df = min(fw, sh.S['screen'][0] + 0.02)
+    blob(p, (0, -(d0 + df) / 2, dt - 0.09), (2 * hw - 0.03, df - d0, 0.18), M['interior'], RX(math.radians(4)), r=0.05)
+    blob(p, (0, -(d0 + 0.1 + fw) / 2, dt - 0.28), (2 * hw - 0.06, fw - d0 - 0.1, 0.22), M['interior_trim'], r=0.04)
     wh = L['wheel']
     blob(p, (wh['x'], -(d0 + 0.07), dt + 0.015), (0.36, 0.2, 0.07), M['interior'], RX(math.radians(-6)), r=0.03)
     p.box(V((wh['x'], -(d0 - 0.002), dt - 0.05)), (0.26, 0.004, 0.07), M['dark'])  # instrument cluster
@@ -149,18 +159,22 @@ def build_interior(sh, layout):
     for x in (-hw + 0.14, -0.2, 0.2, hw - 0.14):  # air vents
         p.box(V((x, -(d0 - 0.002), dt - 0.07)), (0.1, 0.004, 0.045), M['dark'])
     blob(p, (-wh['x'], -(d0 - 0.003), dt - 0.24), (0.34, 0.01, 0.13), M['interior'], r=0.005)  # glove box lid
-    # centre console with gear lever and handbrake
-    blob(p, (0, -(d0 - 0.42), fl + 0.15), (0.2, 0.84, 0.2), M['interior_trim'], r=0.04)
-    gl = V((0, -(d0 - 0.22), fl + 0.25))
-    p.cyl(gl, gl + V((0, 0.02, 0.13)), 0.009, M['chrome'], seg=6)
-    blob(p, gl + V((0, 0.02, 0.15)), (0.045, 0.05, 0.05), M['interior'], r=0.02)
-    hb = V((0.0, -(d0 - 0.62), fl + 0.26))
-    blob(p, hb, (0.035, 0.22, 0.035), M['interior'], RX(math.radians(12)), r=0.015)
+    if L.get('console', True):
+        # centre console with gear lever and handbrake
+        blob(p, (0, -(d0 - 0.42), fl + 0.15), (0.2, 0.84, 0.2), M['interior_trim'], r=0.04)
+        gl = V((0, -(d0 - 0.22), fl + 0.25))
+        p.cyl(gl, gl + V((0, 0.02, 0.13)), 0.009, M['chrome'], seg=6)
+        blob(p, gl + V((0, 0.02, 0.15)), (0.045, 0.05, 0.05), M['interior'], r=0.02)
+        hb = V((0.0, -(d0 - 0.62), fl + 0.26))
+        blob(p, hb, (0.035, 0.22, 0.035), M['interior'], RX(math.radians(12)), r=0.015)
     # seats
     for x, u, h in L['seats'][:L['front']]:
-        bucket_seat(p, M, x, u, h)
+        bucket_seat(p, M, x, u, h, floor=fl)
     if len(L['seats']) > L['front']:
-        bench(p, M, L['seats'][L['front']:])
+        bench(p, M, L['seats'][L['front']:], floor=fl, **L.get('bench', {}))
+    if L.get('bulkhead'):
+        bk = L['bulkhead']
+        p.box(V((0, -bk['u'], (fl + bk['top']) / 2)), (2 * hw, 0.03, bk['top'] - fl), M['interior_trim'])
     if L.get('shelf'):
         s = L['shelf']
         p.box(V((0, -(s['u0'] + s['u1']) / 2, s['z'])), (2 * hw, abs(s['u0'] - s['u1']), 0.025), M['interior'])
@@ -174,6 +188,7 @@ def build_interior(sh, layout):
     for i, (x, u, h) in enumerate(L['seats']):
         empty(coll, f'seat_{i}', (x, -u, h), body)
     # door panels: trim board, armrest with a grip, a pocket low down
+    pz = L.get('panel_z', 0.61)
     for name, (u0, u1) in L.get('panels', {}).items():
         if name not in sh.doors:
             continue
@@ -181,10 +196,10 @@ def build_interior(sh, layout):
         x = s * (hw - 0.012)
         dp = sh.part('details', (s * 0.8, -(u0 + u1) / 2, 0.6))
         n = u1 - u0
-        blob(dp, (x, -(u0 + u1) / 2, 0.61), (0.035, n, 0.6), M['interior_trim'], r=0.015)
-        blob(dp, (x - s * 0.04, -(u0 + u1) / 2 + 0.03, 0.66), (0.075, n * 0.62, 0.06), M['interior'], r=0.025)
-        blob(dp, (x - s * 0.03, -(u0 + u1) / 2 - 0.02, 0.4), (0.05, n * 0.7, 0.13), M['interior'], r=0.02)
-        dp.box(V((x - s * 0.02, -(u0 + n * 0.2), 0.76)), (0.012, 0.1, 0.025), M['chrome'])  # inner handle
+        blob(dp, (x, -(u0 + u1) / 2, pz), (0.035, n, 0.6), M['interior_trim'], r=0.015)
+        blob(dp, (x - s * 0.04, -(u0 + u1) / 2 + 0.03, pz + 0.05), (0.075, n * 0.62, 0.06), M['interior'], r=0.025)
+        blob(dp, (x - s * 0.03, -(u0 + u1) / 2 - 0.02, pz - 0.21), (0.05, n * 0.7, 0.13), M['interior'], r=0.02)
+        dp.box(V((x - s * 0.02, -(u0 + n * 0.2), pz + 0.15)), (0.012, 0.1, 0.025), M['chrome'])  # inner handle
     return ob
 
 
@@ -248,3 +263,21 @@ def seat_manikins(sh, layout):
         out.append(manikin(coll, M, seat, layout['floor'], RECLINE_FRONT if front else RECLINE_REAR,
                            grips if i == 0 else None, f'manikin_{i}'))
     return out
+
+
+def review_shots(layout, cut_z=1.06, look=(0.0, 0.0)):
+    """The interior review stills for run2: 'cut' from above with everything over cut_z clipped away, 'seated*' with a
+    manikin on every seat. look = (u, z offset) of the cabin's middle for cars whose cabin sits off-centre."""
+    lu, lz = look
+
+    def review(shot, sh):
+        out = [shot('cut', (0, 0.1, 6.0), (0, 0.1, 0), ortho=5.6, clip=6.0 - cut_z)]
+        seat_manikins(sh, layout)
+        out.append(shot('seated-side', (5.6, 0.2 - lu, 1.05 + lz), (0, 0.2 - lu, 0.85 + lz), lens=60))
+        out.append(shot('seated-front', (-0.9, -5.2, 1.45 + lz), (0, -lu, 0.95 + lz), lens=55))
+        first = sorted(sh.doors)[0]
+        sh.doors[first].rotation_euler.z = -sh.specs[first]['side'] * 1.13
+        out.append(shot('seated', (3.8, -3.4 - lu, 1.9 + lz), (0.2, -lu, 0.8 + lz), lens=45))
+        sh.doors[first].rotation_euler.z = 0
+        return out
+    return review

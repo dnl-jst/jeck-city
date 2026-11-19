@@ -23,8 +23,9 @@ V = Vector
 
 WALL = 0.03  # wall thickness of body and doors (m)
 GAP = 0.005  # a door's edge stands this far back from its opening (m)
+LAMP_DEPTH = 0.024  # lamp and grille recesses stay inside the wall, so they keep their back
 GLASS_INSET = 0.008  # the panes sit this far inside the outer skin (m)
-TAG_BASES = ('paint', 'glass', 'pillar', 'trim')  # materials a door's skin may carry
+TAG_BASES = ('paint', 'glass', 'pillar', 'trim', 'tridion')  # materials a door's skin may carry
 DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body)
 
 
@@ -323,7 +324,7 @@ def pair(front, u_face, x, z, outline, d_side=0.35):
 
 
 def mirror2(part, M, at, side, mat='paint'):
-    """Door mirror: an egg-shaped housing on a short foot, its back cut flat, with an oval mirror glass set into it
+    """Door mirror: an egg-shaped housing on a short arm, its back cut flat, with an oval mirror glass set into it
     (material 'mirror'). at: where the foot meets the door; side: +1 left."""
     at = V(at)
     back = 0.014  # the housing is cut flat this far behind its middle; the glass sits just proud of the cut
@@ -335,7 +336,8 @@ def mirror2(part, M, at, side, mat='paint'):
     for f in bm.faces:
         part._face([vmap[v] for v in f.verts], M[mat])
     bm.free()
-    part.box(at + V((side * 0.035, -0.016, -0.035)), (0.07, 0.03, 0.025), M['trim'])  # the foot, ahead of the glass
+    # a short round arm from the door into the housing, ahead of the glass (a boxy foot shows as a black wedge)
+    part.tube([at + V((-side * 0.02, -0.012, -0.012)), at + V((side * 0.07, -0.012, -0.005))], 0.02, M[mat], seg=10)
     # the glass: an oval a little smaller than the cut, slightly domed like a real door mirror (a flat one would
     # reflect a single colour of the game's small reflection panorama)
     k = math.sqrt(1 - (back / 0.07) ** 2) * 0.88
@@ -361,7 +363,7 @@ def tagged(S, M, specs):
     S['extra'] = list(S.get('extra', [])) + [u for g in groups for u in g]
     M = dict(M)
     for i in range(len(groups)):
-        for base in TAG_BASES:
+        for base in (b for b in TAG_BASES if b in M):
             M[f'{base}@{i}'] = material(f'{base}@{i}', (0.5, 0.5, 0.5))
     plain = carparts.face_material
 
@@ -425,6 +427,87 @@ def build_lod_shell(S, M, coll):
     coll.objects.link(skin)
     skin.hide_render = True
     return Shell(S, M, coll, body, {}, {}, skin)
+
+
+# ---------------------------------------------------------------- parts every car has
+
+def arch_lip(sh, s, ua, mat='paint'):
+    """A rolled lip round the wheel arch on side s at axle u = ua, split between the body and the door it crosses."""
+    S = sh.S
+    cz, R = S['r'] + 0.012, S['r'] + S.get('arch_gap', 0.035) + 0.014
+    runs, last = [], None
+    for i in range(33):
+        a = math.radians(8 + 164 * i / 32)
+        dy, dz = math.cos(a), math.sin(a)
+        loc, _ = sh.surface((s, -ua + (R + 0.02) * dy, cz + (R + 0.02) * dz), (-s, 0, 0))
+        if loc is None:
+            last = None
+            continue
+        pt = V((loc.x - s * 0.006, -ua + R * dy, cz + R * dz))
+        t = sh.target(-pt.y, pt.x)
+        if t != last:
+            runs.append((pt, []))
+            last = t
+        runs[-1][1].append(pt)
+    for at, pts in runs:
+        if len(pts) > 1:
+            sh.part('details', at).tube(pts, 0.016, sh.M[mat], seg=8)
+
+
+def handle(sh, s, u, z, mat='paint'):
+    """A door handle on side s: a grip bar over a dark recess, on whatever door lies under it."""
+    at = (s, -u, z)
+    sh.decal('dark', at, (-s, 0, 0), carparts.rrect(0.17, 0.05, 0.02), off=0.002)
+    loc, n = sh.surface(at, (-s, 0, 0))
+    p = sh.part('details', at)
+    c = loc + n * 0.016
+    p.tube([c + V((0, -0.075, 0)), c + V((0, 0.075, 0))], 0.012, sh.M[mat], seg=8)
+
+
+def window_cut(skin, M, c, d, outline):
+    """A cutter (for build_shell's `cuts`) that opens a window right through the wall; glaze it with
+    sh.decal('glass', c, d, outline, off=0.0)."""
+    return recess(skin, M['rubber'], c, d, outline, depth=WALL + 0.05)
+
+
+def wheels_and_lamps(sh, coll, hl, tl, wheel=None):
+    """The four wheel nodes and the lamp empties (hl / tl: front and rear lamp centres, left first)."""
+    S, M = sh.S, sh.M
+    ua, x = S['wb'] / 2, S['track'] / 2
+    for name, (sx, su) in {'wheel_fl': (1, ua), 'wheel_fr': (-1, ua), 'wheel_rl': (1, -ua), 'wheel_rr': (-1, -ua)}.items():
+        (wheel or carparts.wheel)(name, M, S, sx, coll, sh.body, (sx * x, -su, S['r']))
+    for name, c in (('light_fl', hl[0]), ('light_fr', hl[1]), ('tail_l', tl[0]), ('tail_r', tl[1])):
+        carparts.empty(coll, name, c if c is not None else V((0, 0, 0)), sh.body)
+
+
+def lamp_units(sh, front, u_face, x, z, outline, d_side, inner):
+    """Two recessed lamps behind clear covers; returns their centres (left first). The recesses themselves come from
+    lamp_cuts() with the same arguments. inner(part, side, centre, direction) adds what sits in the recess."""
+    out = []
+    p = sh.part('details')
+    for s, c, d, ol in pair(front, u_face, x, z, outline, d_side):
+        out.append(sh.decal('lens' if front else 'lens_red', c, d, ol, off=0.0005))
+        inner(p, s, c, d.normalized())
+    return out
+
+
+def lamp_cuts(skin, M, front, u_face, x, z, outline, d_side):
+    return [recess(skin, M['lamp_front' if front else 'lamp_rear'], c, d, ol, LAMP_DEPTH) for _, c, d, ol in pair(front, u_face, x, z, outline, d_side)]
+
+
+def projector(sh, p, c, n, r=0.036):
+    """A round headlamp unit in a recess: chrome ring, glowing centre."""
+    loc, _ = sh.surface(c, n)
+    if loc is None:
+        return
+    p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.007, r, sh.M['chrome'], seg=20)
+    p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.004, r * 0.75, sh.M['lamp_front'], seg=20)
+
+
+def bulb(sh, p, c, n, mat, r=0.026):
+    loc, _ = sh.surface(c, n)
+    if loc is not None:
+        p.cyl(loc + n * LAMP_DEPTH, loc + n * 0.006, r, sh.M[mat], seg=16)
 
 
 # ---------------------------------------------------------------- report / review / run

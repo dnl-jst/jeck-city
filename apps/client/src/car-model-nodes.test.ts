@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CAR_SEATS } from '@nn/shared';
+import { CAR_SEATS, CAR_TYPES } from '@nn/shared';
 import { describe, expect, it } from 'vitest';
 
 type Gltf = {
@@ -16,8 +16,9 @@ function readModel(type: string): Gltf {
   return JSON.parse(buf.toString('utf8', 20, 20 + len)) as Gltf;
 }
 
-describe('kleinwagen model', () => {
-  const g = readModel('kleinwagen');
+describe.each(CAR_TYPES)('%s model', (type) => {
+  const g = readModel(type);
+  const L = CAR_SEATS[type]!;
   const names = g.nodes.map((n) => n.name);
   const parent = new Map<number, number>();
   g.nodes.forEach((n, i) => n.children?.forEach((c) => parent.set(c, i)));
@@ -32,14 +33,13 @@ describe('kleinwagen model', () => {
   };
 
   it('has the nodes the client uses by name', () => {
-    for (const n of ['body', 'interior', 'steering', 'grip_l', 'grip_r', 'door_fl', 'door_fr', 'door_rl', 'door_rr',
-      'seat_0', 'seat_1', 'seat_2', 'seat_3', 'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr', 'light_fl', 'light_fr', 'tail_l', 'tail_r']) {
+    for (const n of ['body', 'interior', 'steering', 'grip_l', 'grip_r', ...Object.keys(L.doors), ...L.seats.map((_, i) => `seat_${i}`),
+      'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr', 'light_fl', 'light_fr', 'tail_l', 'tail_r']) {
       expect(names, n).toContain(n);
     }
   });
 
   it('has its seats and door hinges where CAR_SEATS says', () => {
-    const L = CAR_SEATS.kleinwagen!;
     L.seats.forEach((s, i) => {
       const [x, y, z] = world(`seat_${i}`);
       expect(Math.hypot(x - s.x, y - s.h, z - s.u), `seat_${i}`).toBeLessThan(0.05);
@@ -55,7 +55,7 @@ describe('kleinwagen model', () => {
   });
 });
 
-describe.each(['kleinwagen', 'mittelklasse', 'transporter', 'smart'])('%s model', (type) => {
+describe.each(CAR_TYPES)('%s model plates', (type) => {
   it('has a node for each number plate, front ahead of the rear', () => {
     const g = readModel(type);
     const at = (name: string) => g.nodes.find((n) => n.name === name)?.translation;

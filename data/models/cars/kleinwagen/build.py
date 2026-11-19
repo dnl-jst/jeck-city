@@ -11,8 +11,8 @@ from mathutils import Matrix
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, '..'))
-from carbody import V, build_lod_shell, build_shell, car_materials2, mirror2, pair, recess, run2  # noqa: E402
-from carinterior import blob, build_interior, seat_manikins  # noqa: E402
+from carbody import V, arch_lip, build_lod_shell, build_shell, car_materials2, mirror2, pair, recess, run2  # noqa: E402
+from carinterior import blob, build_interior, review_shots  # noqa: E402
 from carparts import empty, exhaust, lamp_pair, plate_node, poly_round, rrect, wheel, wipers  # noqa: E402
 
 NAME = 'kleinwagen'
@@ -148,7 +148,7 @@ def build(coll, lod=False):
         mirror2(sh.part('details', (s * 0.83, -0.83, 1.0)), M, (s * 0.83, -0.83, 1.0), s)
         if not lod:
             for ua in (S['wb'] / 2, -S['wb'] / 2):
-                arch_lip(sh, M, s, ua)
+                arch_lip(sh, s, ua)
     wipers(p, M, skin, S)
     exhaust(p, M, skin, 0.4, B, r=0.036)
     p.cyl(V((0.0, 1.3, 1.445)), V((0.0, 1.52, 1.56)), 0.005, M['trim'], seg=5)  # antenna at the rear of the roof
@@ -166,39 +166,5 @@ def build(coll, lod=False):
     return body, S, sh
 
 
-def arch_lip(sh, M, s, ua):
-    """A rolled lip round the wheel arch on side s at axle u = ua, split between the body and the door it crosses."""
-    cz, R = S['r'] + 0.012, S['r'] + 0.035 + 0.014
-    runs, last = [], None
-    for i in range(33):
-        a = math.radians(8 + 164 * i / 32)
-        dy, dz = math.cos(a), math.sin(a)
-        loc, _ = sh.surface((s, -ua + (R + 0.02) * dy, cz + (R + 0.02) * dz), (-s, 0, 0))
-        if loc is None:
-            last = None
-            continue
-        pt = V((loc.x - s * 0.006, -ua + R * dy, cz + R * dz))
-        t = sh.target(-pt.y, pt.x)
-        if t != last:
-            runs.append((pt, []))
-            last = t
-        runs[-1][1].append(pt)
-    for at, pts in runs:
-        if len(pts) > 1:
-            sh.part('details', at).tube(pts, 0.016, M['paint'], seg=8)
-
-
-def review(shot, sh):
-    """Interior stills: 'cut' from above with the roof clipped away, 'seated' with a manikin on every seat."""
-    out = [shot('cut', (0, 0.1, 6.0), (0, 0.1, 0), ortho=4.6, clip=6.0 - 1.06)]
-    seat_manikins(sh, LAYOUT)
-    out.append(shot('seated-side', (5.2, 0.2, 1.05), (0, 0.2, 0.85), lens=60))
-    out.append(shot('seated-front', (-0.9, -4.6, 1.45), (0, 0, 0.95), lens=55))
-    sh.doors['door_fl'].rotation_euler.z = -1.13
-    out.append(shot('seated', (3.6, -3.2, 1.9), (0.2, 0, 0.8), lens=45))
-    sh.doors['door_fl'].rotation_euler.z = 0
-    return out
-
-
 if __name__ == '__main__':
-    run2(NAME, HERE, build, review)
+    run2(NAME, HERE, build, review_shots(LAYOUT))

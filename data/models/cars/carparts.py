@@ -1,4 +1,5 @@
-"""Shared helpers for the procedural car models in data/models/cars (run inside Blender, headless is fine).
+"""The loft and the helpers shared by the car models in data/models/cars (run inside Blender, headless is fine).
+carbody.py builds the shell with openings, doors and glass on top of this, carinterior.py what is inside.
 
 Frame (see README.md here): metres, Blender Z up, ground z = 0, origin on the ground midway between the axles,
 the car faces -Y (glTF: +z), its left is +X. `u` below is the distance forward of the origin (Blender y = -u).
@@ -337,9 +338,6 @@ def decal(part, body, mat, c, d, outline, off=0.004, bulge=0.0, up=V((0, 0, 1)),
     return centre
 
 
-S_LOD = {}
-
-
 def rrect(w, h, r, n=4, cx=0.0, cy=0.0, skew=0.0):
     """Rounded rectangle outline (counter-clockwise), corner radius r; skew shifts the top edge sideways."""
     r = min(r, w / 2 - 1e-4, h / 2 - 1e-4)
@@ -454,25 +452,6 @@ def wheel(name, M, S, side, coll, parent, loc):
 
 # ---------------------------------------------------------------- common details
 
-def mirror(part, M, at, side, mat='paint'):
-    """Door mirror: a rounded housing on a short arm, glass on the back."""
-    at = V(at)
-    bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=10, radius=1.0)
-    for v in bm.verts:
-        v.co = V((v.co.x * 0.1, v.co.y * 0.06 + (0.02 if v.co.y > 0 else 0), v.co.z * 0.065))
-        if v.co.y > 0.03:
-            v.co.y = 0.03 + (v.co.y - 0.03) * 0.3  # flat back for the glass
-    vmap = {}
-    for v in bm.verts:
-        vmap[v] = part.bm.verts.new(at + V((side * (0.11 + v.co.x), v.co.y, v.co.z)))
-    for f in bm.faces:
-        part._face([vmap[v] for v in f.verts], M[mat])
-    bm.free()
-    part.box(at + V((side * 0.04, 0.0, -0.03)), (0.08, 0.035, 0.03), M['trim'])
-    part.box(at + V((side * 0.11, 0.032, 0.0)), (0.16, 0.004, 0.09), M['glass'])
-
-
 def exhaust(part, M, body, x, rear_u, r=0.03, length=0.8):
     """Tail pipe tucked under the body at x: the body's underside is sampled with upward rays over the last
     `length` metres, the pipe runs just below the lowest point; the chrome tip sticks out ~5 cm past the rearmost
@@ -576,54 +555,6 @@ def export_car(path, root):
         export_animations=False, export_materials='EXPORT')
 
 
-def report(root, S):
-    bpy.context.view_layer.update()
-    lo, hi = V((1e9,) * 3), V((-1e9,) * 3)
-    tris = 0
-    for o in [root, *root.children_recursive]:
-        if o.type != 'MESH':
-            continue
-        tris += sum(len(p.vertices) - 2 for p in o.data.polygons)
-        for c in o.bound_box:
-            w = o.matrix_world @ V(c)
-            lo = V((min(lo.x, w.x), min(lo.y, w.y), min(lo.z, w.z)))
-            hi = V((max(hi.x, w.x), max(hi.y, w.y), max(hi.z, w.z)))
-    names = {o.name for o in [root, *root.children_recursive]}
-    need = {'body', 'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr', 'light_fl', 'light_fr', 'tail_l', 'tail_r'}
-    return {'missing': sorted(need - names), 'length': round(hi.y - lo.y, 3), 'width': round(hi.x - lo.x, 3), 'height': round(hi.z - lo.z, 3),
-            'bottom': round(lo.z, 4), 'front_u': round(-lo.y, 3), 'rear_u': round(-hi.y, 3), 'tris': tris}
-
-
-def render(name, out_dir, L):
-    scene = bpy.context.scene
-    scene.render.engine = 'BLENDER_WORKBENCH'
-    sh = scene.display.shading
-    sh.light = 'STUDIO'
-    sh.color_type = 'MATERIAL'
-    sh.show_shadows = False  # Workbench stencil shadows streak across the open decal patches
-    sh.show_cavity = True
-    sh.show_specular_highlight = True
-    scene.render.resolution_x, scene.render.resolution_y = 1400, 900
-    cam = bpy.data.objects.new('ReviewCam', bpy.data.cameras.new('ReviewCam'))
-    scene.collection.objects.link(cam)
-    scene.camera = cam
-    cam.data.lens = 50
-    os.makedirs(out_dir, exist_ok=True)
-    k = max(L, 3.9) / 4.2
-    shots = {'34': (V((-3.6, -4.6, 1.7)) * k, V((0, 0, 0.6))), 'side': (V((-7.0, 0, 0.9)) * k, V((0, 0, 0.7))),
-             'rear': (V((3.2, 4.8, 1.8)) * k, V((0, 0, 0.6))), 'front': (V((0.0, -6.5, 0.9)) * k, V((0, 0, 0.7)))}
-    paths = []
-    for tag, (pos, look) in shots.items():
-        cam.location = pos
-        cam.rotation_euler = (look - pos).to_track_quat('-Z', 'Y').to_euler()
-        path = os.path.join(out_dir, f'{name}-{tag}.png')
-        scene.render.filepath = path
-        bpy.ops.render.render(write_still=True)
-        paths.append(path)
-    grid(paths, os.path.join(out_dir, f'{name}-grid.png'))
-    return paths
-
-
 def grid(paths, out):
     """2 × 2 contact sheet of the review stills at half size."""
     import numpy as np
@@ -656,19 +587,3 @@ def make_lod(root, ratio=0.18):
         apply_modifiers(o)
         tris += sum(len(p.vertices) - 2 for p in o.data.polygons)
     return tris
-
-
-def run(name, here, build):
-    clear_scene()
-    coll = bpy.data.collections.new('CAR_' + name.upper())
-    bpy.context.scene.collection.children.link(coll)
-    root, S = build(coll)
-    rep = report(root, S)
-    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(here, f'{name}.blend'))
-    export_car(os.path.join(here, f'{name}.glb'), root)
-    repo = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
-    rep['shots'] = render(name, os.path.join(repo, 'shots', 'cars'), rep['length'])
-    rep['lod_tris'] = make_lod(root)
-    export_car(os.path.join(here, f'{name}_lod.glb'), root)
-    print('CAR_REPORT', name, rep)
-    return rep
