@@ -21,6 +21,7 @@ import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
+import { setServerVersion } from './version-label';
 import { attachInput, Input } from './input';
 import { TouchControls, touchPreferred } from './touch';
 import { Game } from './game';
@@ -390,6 +391,8 @@ async function connect(): Promise<Connection | null> {
     try {
       const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
       conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
+      setServerVersion(conn.welcome.version ?? null);
+      conn.onWelcome((w) => setServerVersion(w.version ?? null)); // a reconnect may reach a newer server
       dialog.close();
       lobby = null;
       return conn;

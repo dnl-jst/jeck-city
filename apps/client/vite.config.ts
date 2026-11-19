@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type UserConfig } from "vite";
@@ -19,7 +20,11 @@ const proxy = {
 const here = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
 
 export default defineConfig(async (): Promise<UserConfig> => ({
-  define: { __NN_DOWNLOAD__: JSON.stringify(await measureDownload(here("public"), here("node_modules/.cache/nn-download-size.json"))) },
+  define: {
+    __NN_DOWNLOAD__: JSON.stringify(await measureDownload(here("public"), here("node_modules/.cache/nn-download-size.json"))),
+    // the release version: the repository's root package.json (see AGENTS.md)
+    __NN_VERSION__: JSON.stringify((JSON.parse(readFileSync(here("../../package.json"), "utf8")) as { version: string }).version),
+  },
   server: { host: true, port: clientPort, strictPort: true, proxy },
   // vite preview does not compress; a real static host does. gzip text/binary assets so `npm run accept` measures
   // what a deployment would transfer.

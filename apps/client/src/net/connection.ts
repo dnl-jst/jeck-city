@@ -15,7 +15,7 @@ export const CONNECT_TEXTS = {
 export const STATUS_TEXTS = { connecting: 'Verbinde …', reconnecting: 'Verbindung unterbrochen …' } as const;
 
 /** What the server answers in `welcome` (again after every reconnect). */
-export type Welcome = { slot: number; name: string; devMode: boolean; tick: number };
+export type Welcome = { slot: number; name: string; devMode: boolean; tick: number; /** the server's release version */ version?: string };
 
 /** online → (connection drops) reconnecting → online again, or lost for good (window over, kicked, closed). */
 export type NetStatus = 'online' | 'reconnecting' | 'lost';

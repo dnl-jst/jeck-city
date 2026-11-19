@@ -8,6 +8,7 @@ import { log, setLogLevel } from './log';
 import { staticHandler } from './static';
 import { WeatherService } from './weather';
 import { nippesRoom, type NippesRoom } from './room';
+import { SERVER_VERSION } from './version';
 
 export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<void> };
 
@@ -30,7 +31,7 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
     transport,
     greet: false,
     express: (app) => {
-      app.get('/healthz', (_req: unknown, res: { json(b: unknown): void }) => res.json(room?.health() ?? { players: 0, tickP95Ms: 0, dropped: 0 }));
+      app.get('/healthz', (_req: unknown, res: { json(b: unknown): void }) => res.json(room?.health() ?? { players: 0, tickP95Ms: 0, dropped: 0, version: SERVER_VERSION }));
       if (cfg.clientDir) {
         const serve = staticHandler(cfg.clientDir);
         app.get('/', serve); // an explicit root route keeps Colyseus from adding its own greeting there
