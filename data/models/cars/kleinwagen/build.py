@@ -30,14 +30,14 @@ S = dict(
     widest=0.42,
     screen=(0.95, 0.25),
     topglass=[(0.93, 0.27), (-1.5, -1.93)],
-    side=[(0.86, -0.06), (-0.16, -1.27)],  # each pane lies inside its door, framed all round
+    side=[(0.86, -0.15), (-0.25, -1.02), (-1.14, -1.4)],  # a pane in each door, framed all round, and a fixed quarter light in the body
     extra=[1.275, -1.275, 0.0],
     step=0.15,
     shoulder=0.02, cap_bulge=0.05,
     creases={2: 0.5, 3: 0.45, 4: 0.7, 5: 0.5, 6: 0.8, 7: 0.8},  # 3: a crease along the flank
 )
 # gloss black window frames on the doors (the pillars between the panes)
-S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and -1.33 <= u <= 0.9 else None
+S['face_mat'] = lambda u, seg: 'pillar' if seg == 5 and -1.08 <= u <= 0.9 else None
 
 
 def lower_trim(u, ax, z, mat):
@@ -58,8 +58,9 @@ LAMP_DEPTH = 0.024  # recesses stay inside the 30 mm wall, so they keep their ba
 
 # doors: (rear u, hinge u), side (+1 = left), hinge axis x; as CAR_SEATS in packages/shared/src/physics/carseats.ts
 DOORS = {
-    'door_fl': dict(u=(-0.11, 0.90), side=1, hinge_x=0.86), 'door_fr': dict(u=(-0.11, 0.90), side=-1, hinge_x=-0.86),
-    'door_rl': dict(u=(-1.33, -0.11), side=1, hinge_x=0.87), 'door_rr': dict(u=(-1.33, -0.11), side=-1, hinge_x=-0.87),
+    # front doors 1.10 m, rear doors 0.88 m (they end over the front of the rear wheel arch)
+    'door_fl': dict(u=(-0.20, 0.90), side=1, hinge_x=0.86), 'door_fr': dict(u=(-0.20, 0.90), side=-1, hinge_x=-0.86),
+    'door_rl': dict(u=(-1.08, -0.20), side=1, hinge_x=0.87), 'door_rr': dict(u=(-1.08, -0.20), side=-1, hinge_x=-0.87),
 }
 
 # interior (carinterior.py); the seats are CAR_SEATS' hip points
@@ -68,7 +69,7 @@ LAYOUT = dict(
     wheel=dict(x=0.37, u=0.47, z=0.88, rake=0.42, r=0.185),
     floor=0.22, half_w=0.845, firewall=1.02, dash=dict(u0=0.58, top=0.95),
     shelf=dict(u0=-1.16, u1=-1.76, z=0.965), mirror=(0.36, 1.33),
-    panels={'door_fl': (-0.07, 0.8), 'door_fr': (-0.07, 0.8), 'door_rl': (-0.86, -0.15), 'door_rr': (-0.86, -0.15)},
+    panels={'door_fl': (-0.16, 0.8), 'door_fr': (-0.16, 0.8), 'door_rl': (-0.88, -0.24), 'door_rr': (-0.88, -0.24)},
 )
 
 
@@ -131,18 +132,18 @@ def build(coll, lod=False):
     p.box(lip + tilt @ V((0, 0.087, 0.0)), (0.34, 0.008, 0.016), M['lamp_rear'], rot=tilt)
     for s in (1, -1):
         sd = V((-s, 0, 0))
-        for u0 in (0.06, -1.17):  # door handles near the doors' rear edges: a grip over a dark recess
+        for u0 in (-0.03, -0.92):  # door handles near the doors' rear edges: a grip over a dark recess
             at = (s, -u0, 0.89)
             sh.decal('dark', at, sd, rrect(0.17, 0.05, 0.02), off=0.002)
             loc, n = sh.surface(at, sd)
             blob(sh.part('details', at), loc + n * 0.016, (0.026, 0.17, 0.026), M['paint'], r=0.011)
         if lod:  # the distance model has no door gaps: seams instead
-            for u0, z0, z1 in ((0.90, 0.33, 0.95), (-0.11, 0.3, 0.99), (-1.33, 0.33, 0.99)):
+            for u0, z0, z1 in ((0.90, 0.33, 0.95), (-0.20, 0.3, 0.99), (-1.08, 0.6, 0.99)):
                 sh.decal('dark', (s, -u0, (z0 + z1) / 2), sd, rrect(0.008, z1 - z0, 0.003), off=0.0015)
         # side indicator on the front wing
         sh.decal('indicator', (s, -1.68, 0.78), sd, rrect(0.06, 0.025, 0.012), bulge=0.004)
         # rubbing strip low on the doors and wings
-        for u0, u1 in ((0.91, 0.99), (-0.10, 0.89), (-0.86, -0.12)):
+        for u0, u1 in ((0.91, 0.99), (-0.19, 0.89), (-0.88, -0.21)):
             sh.decal('trim', (s, -(u0 + u1) / 2, 0.4), sd, rrect(u1 - u0, 0.05, 0.02), off=0.006)
         mirror2(sh.part('details', (s * 0.83, -0.83, 1.0)), M, (s * 0.83, -0.83, 1.0), s)
         if not lod:
