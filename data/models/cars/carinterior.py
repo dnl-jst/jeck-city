@@ -132,9 +132,9 @@ def build_interior(sh, layout):
     M, coll, body, L = sh.M, sh.coll, sh.body, layout
     p = Part('interior')
     hw, fl, fw = L['half_w'], L['floor'], L['firewall']
-    rear = sh.S['rear'] + 0.12
-    # carpet, tunnel, firewall
-    p.box(V((0, -(fw + rear) / 2, fl + 0.006)), (2 * hw, fw - rear, 0.012), M['interior'])
+    # carpet (inside the sills, between the axles' wheel housings), tunnel, firewall
+    rear = -sh.S['wb'] / 2 + 0.25
+    p.box(V((0, -(fw + rear) / 2, fl + 0.006)), (2 * hw - 0.18, fw - rear, 0.012), M['interior'])
     blob(p, (0, -(fw - 0.75), fl + 0.07), (0.2, 1.5, 0.14), M['interior'], r=0.04)
     p.box(V((0, -fw, (fl + L['dash']['top']) / 2)), (2 * hw, 0.03, L['dash']['top'] - fl), M['interior'])
     # dashboard: a deep upper body under the windscreen, a shallower lower part, the instrument hood, vents

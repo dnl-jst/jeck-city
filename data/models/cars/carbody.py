@@ -16,7 +16,7 @@ from mathutils import Vector
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import carparts  # noqa: E402
-from carparts import Part, apply_modifiers, car_materials, clear_scene, decal, decal_object, export_car, grid, make_lod  # noqa: E402
+from carparts import Part, apply_modifiers, frame_of, car_materials, clear_scene, decal, decal_object, export_car, grid, make_lod  # noqa: E402
 from nnmodel import material  # noqa: E402
 
 V = Vector
@@ -24,6 +24,7 @@ V = Vector
 WALL = 0.03  # wall thickness of body and doors (m)
 GAP = 0.003  # a door's edge stands this far back from its opening (m)
 GLASS_INSET = 0.008  # the panes sit this far inside the outer skin (m)
+TAG_BASES = ('paint', 'glass', 'pillar', 'trim')  # materials a door's skin may carry
 DOOR_SEGS = (2, 3, 4, 5)  # half-ring segments of a door: lower side … window (the roof rail stays on the body)
 
 
@@ -35,6 +36,8 @@ def car_materials2(paint=(0.55, 0.06, 0.05)):
     m['glass_dark'] = material('glass_dark', (0.07, 0.09, 0.1), rough=0.05, metal=0.2)  # the distance model's opaque glass
     m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.38, rough=0.05)
     m['lens'] = clear('lens', (0.9, 0.9, 0.9), 0.25, rough=0.03)  # clear lamp covers
+    m['lens_red'] = clear('lens_red', (0.75, 0.03, 0.02), 0.6, rough=0.05)  # tail lamp covers
+    m['pillar'] = material('pillar', (0.015, 0.015, 0.018), rough=0.12)  # gloss black window pillars
     m['interior'] = material('interior', (0.07, 0.07, 0.075), rough=0.8)
     m['interior_trim'] = material('interior_trim', (0.15, 0.15, 0.155), rough=0.6)
     m['seat'] = material('seat', (0.2, 0.2, 0.215), rough=0.9)
@@ -97,9 +100,9 @@ def shrink_boundary(bm, d):
             v.co += n.normalized() * d
 
 
-def piece(me, name, coll, M, gap=0.0):
+def piece(me, name, coll, M, gap=0.0, cutters=()):
     """One part of the car from its skin faces: panes set back, the rest given a wall (inside 'interior_trim', edges
-    'rubber'). Returns the object (at the origin)."""
+    'rubber'), `cutters` subtracted from the wall (their faces line the recesses). Returns the object (at the origin)."""
     for tag in [m.name for m in me.materials if '@' in m.name]:  # door tags back to the real materials
         base = slot(me, M[tag.split('@')[0]])
         t = [m.name for m in me.materials].index(tag)
@@ -138,6 +141,24 @@ def piece(me, name, coll, M, gap=0.0):
         f.smooth = False
         for e in f.edges:
             e.smooth = False
+    bm.to_mesh(wall)
+    bm.free()
+    if cutters:
+        cc = bpy.data.collections.new('CUTTERS')
+        bpy.context.scene.collection.children.link(cc)
+        for c in cutters:
+            cc.objects.link(c)
+        bpy.context.view_layer.update()
+        bo = ob.modifiers.new('cut', 'BOOLEAN')
+        bo.operation, bo.operand_type, bo.collection = 'DIFFERENCE', 'COLLECTION', cc
+        bo.solver, bo.material_mode = 'EXACT', 'TRANSFER'
+        apply_modifiers(ob)
+        for c in cutters:
+            bpy.data.objects.remove(c, do_unlink=True)
+        bpy.data.collections.remove(cc)
+        wall = ob.data
+    bm = bmesh.new()
+    bm.from_mesh(wall)
     # the panes, set back from the skin
     gm = bmesh.new()
     gm.from_mesh(panes)
@@ -192,6 +213,12 @@ class Shell:
     def decal(self, mat, c, d, outline, **kw):
         return decal(self.part('decals', c), self.skin, self.M[mat], c, d, outline, **kw)
 
+    def surface(self, c, d):
+        """Where the ray from c − 2.5 d along d meets the skin: (point, normal), or (None, None)."""
+        d = V(d).normalized()
+        ok, loc, nrm, _ = self.skin.ray_cast(V(c) - d * 2.5, d, distance=5.0)
+        return (loc, nrm) if ok else (None, None)
+
     def finish(self):
         for (t, kind), p in self.parts.items():
             parent = self.body if t == 'body' else self.doors[t]
@@ -202,6 +229,45 @@ class Shell:
         self.skin = None
 
 
+def recess(skin, mat, c, d, outline, depth=0.06, up=V((0, 0, 1))):
+    """A cutter for build_shell's `cuts`: the prism of `outline` (as for decal: 2D points round c in the plane ⟂ d)
+    from just outside the skin to `depth` behind it, following the skin. Its faces (material mat) line the recess."""
+    d, e1, e2 = frame_of(d, up)
+    c = V(c)
+    bm = bmesh.new()
+    front, back = [], []
+    for px, py in outline:
+        ok, loc, _, _ = skin.ray_cast(c + e1 * px + e2 * py - d * 2.5, d, distance=5.0)
+        if not ok:
+            bm.free()
+            print('RECESS_MISS', tuple(round(x, 2) for x in c), mat.name)
+            return None
+        front.append(bm.verts.new(loc - d * 0.05))
+        back.append(bm.verts.new(loc + d * depth))
+    n = len(outline)
+    for j in range(n):
+        k = (j + 1) % n
+        bm.faces.new([front[j], front[k], back[k], back[j]])
+    bm.faces.new(front)
+    bm.faces.new(back)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new('cutter')
+    bm.to_mesh(me)
+    bm.free()
+    me.materials.append(mat)
+    return bpy.data.objects.new('cutter', me)
+
+
+def pair(front, u_face, x, z, outline, d_side=0.35):
+    """Two mirrored placements on the front (rays towards +Y) or rear face: yields (side, centre, direction, outline)."""
+    for s in (1, -1):
+        d = V((-s * d_side, 1 if front else -1, 0))
+        ol = [(-s * px if front else s * px, py) for px, py in outline]
+        if (front and s == 1) or (not front and s == -1):
+            ol = list(reversed(ol))
+        yield s, V((s * x, -u_face, z)), d, ol
+
+
 def tagged(S, M, specs):
     """S and M for a skin whose door faces carry '<material>@<door group>' materials."""
     groups = sorted({d['u'] for d in specs.values()})
@@ -209,13 +275,13 @@ def tagged(S, M, specs):
     S['extra'] = list(S.get('extra', [])) + [u for g in groups for u in g]
     M = dict(M)
     for i in range(len(groups)):
-        for base in ('paint', 'glass'):
+        for base in TAG_BASES:
             M[f'{base}@{i}'] = material(f'{base}@{i}', (0.5, 0.5, 0.5))
     plain = carparts.face_material
 
     def tag(S_, u, seg):
         name = plain(S_, u, seg)
-        if seg in DOOR_SEGS and name in ('paint', 'glass'):
+        if seg in DOOR_SEGS and name in TAG_BASES:
             for i, (u0, u1) in enumerate(groups):
                 if u0 <= u <= u1:
                     return f'{name}@{i}'
@@ -223,9 +289,10 @@ def tagged(S, M, specs):
     return S, M, groups, tag
 
 
-def build_shell(S, M, coll, doors):
+def build_shell(S, M, coll, doors, cuts=None):
     """doors: {'door_fl': {'u': (rear_u, hinge_u), 'side': +1, 'hinge_x': 0.86}, ...} → Shell (body at the origin,
-    doors as its children with their origin on the hinge axis)."""
+    doors as its children with their origin on the hinge axis). cuts(skin) may return cutter objects (see recess) that
+    are subtracted from the body's wall."""
     S2, M2, groups, tag = tagged(S, M, doors)
     plain = carparts.face_material
     carparts.face_material = tag
@@ -242,7 +309,7 @@ def build_shell(S, M, coll, doors):
         ob = piece(me, name, coll, M, gap=GAP)
         set_origin(ob, (d['hinge_x'], -d['u'][1], 0.0))
         out[name] = ob
-    body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M)
+    body = piece(subset(src, 'body', lambda f, m: '@' not in m), 'body', coll, M, cutters=cuts(skin) if cuts else ())
     for ob in out.values():
         ob.parent = body
     # the ray target keeps the plain materials
