@@ -97,6 +97,7 @@ def build(coll, lod=False):
         hl, tl = [], []
         for s, c, dr, ol in pair(True, F, 0.6, 0.715, HEAD, 0.45):
             hl.append(sh.decal('lens', c, dr, ol, off=0.0005))
+            sh.decal('lamp_front', c, dr, ol, off=-(LAMP_DEPTH - 0.003))  # the reflector at the back of the recess
             for dx in (-0.075, 0.07):
                 loc, _ = sh.surface(c + V((s * dx, 0, 0.004)), dr)
                 n = dr.normalized()
@@ -106,6 +107,7 @@ def build(coll, lod=False):
             blob(p, loc + dr.normalized() * 0.012, (0.05, 0.02, 0.035), M['indicator'], r=0.008)
         for s, c, dr, ol in pair(False, B, 0.68, 0.88, TAIL, 0.5):
             tl.append(sh.decal('lens_red', c, dr, ol, off=0.0005))
+            sh.decal('lamp_rear', c, dr, ol, off=-(LAMP_DEPTH - 0.003))
             n = dr.normalized()
             for dz, mat, r in ((-0.045, 'chrome', 0.026), (0.04, 'indicator', 0.026)):
                 loc, _ = sh.surface(c + V((0, 0, dz)), dr)

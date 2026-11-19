@@ -587,6 +587,43 @@ export class PlayerFigure {
     this.model?.apply();
   }
 
+  /**
+   * Sitting in a car, in the frame of the car model (the caller parents `group` there; the car faces +z): hips on
+   * `seat` (the hip point), the torso leaning back by `recline`, feet on the floor at `feet`, hands on the wheel at
+   * `grips` – or resting on the thighs without. `shift` moves the whole pose (getting in and out slides it between the
+   * door and the seat).
+   */
+  sit(seat: Vector3, feet: [Vector3, Vector3], grips: [Vector3, Vector3] | null, recline: number, shift?: Vector3): void {
+    this.fallT = -1;
+    this.endRagdoll();
+    this.rise = null;
+    const p = this.p, off = shift ?? new Vector3();
+    this.group.position.set(seat.x + off.x, seat.y - p.hip.y + off.y, seat.z + off.z);
+    this.group.rotation.set(0, 0, 0);
+    this.body.position.set(0, 0, 0);
+    this.body.rotation.set(0, 0, 0);
+    this.torso.rotation.set(-recline, 0, 0);
+    this.headNode.rotation.set(recline * 0.85, 0, 0); // looking ahead, not at the roof
+    for (let i = 0; i < 2; i++) {
+      this.feet[i]!.rotation.set(0, 0, 0);
+      this.solveLeg(i, feet[i]!.clone().add(off));
+    }
+    this.group.updateMatrixWorld(true);
+    // the hands: on the rim (palms on it, turned with the wheel), or flat on the thighs
+    const targets = grips ?? [0, 1].map((i) => new Vector3(seat.x + (i === 0 ? 0.13 : -0.13), seat.y + 0.1, seat.z + 0.3)) as [Vector3, Vector3];
+    const across = targets[0].clone().sub(targets[1]);
+    const turn = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), grips ? Math.atan2(across.y, across.x) : 0);
+    const handRot = [0, 1].map((i) => turn.clone().multiply(gripRotation(i === 0 ? 1 : -1, this.fingerAxis(i))));
+    for (let i = 0; i < 2; i++) {
+      const wrist = targets[i]!.clone().add(off).add(GRIP_PALM).sub(this.segs(i).palm.applyQuaternion(handRot[i]!));
+      this.solveArm(i, this.group.parent ? this.group.parent.localToWorld(wrist) : wrist);
+      this.orientHand(i, handRot[i]!);
+      this.curlFingers(i, grips ? 1 : 0.2);
+    }
+    this.group.updateMatrixWorld(true);
+    this.model?.apply();
+  }
+
   /** How far (m) the lower of ball and heel of foot i is below its rest height (negative: above), body at 0. */
   private footDrop(i: number): number {
     const s = i === 0 ? 1 : -1, p = this.p;

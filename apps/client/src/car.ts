@@ -4,7 +4,7 @@ import {
   Vector3, type Scene,
 } from 'three';
 import {
-  CAR_SPECS, plateText, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
+  CAR_SEATS, CAR_SPECS, plateText, type DoorName, SUSPENSION_REST_LENGTH, TUNING, VEHICLE_REST_Y, type CarPool, type CarPose, type CarType,
 } from '@nn/shared';
 import { Plates, platePoses } from './plates';
 
@@ -189,6 +189,8 @@ export type WheelSource = { speed(): number; wheelSteering(w: number): number; w
 
 /** Wheel nodes in Vehicle wheel order (0 front right, 1 front left, 2 rear right, 3 rear left). */
 const WHEEL_NODES = ['wheel_fr', 'wheel_fl', 'wheel_rr', 'wheel_rl'] as const;
+/** The steering wheel turns this many times the front wheels' angle, up to STEERING_WHEEL_MAX (rad) either way. */
+const STEERING_RATIO = 6, STEERING_WHEEL_MAX = 2.2;
 /** How far the suspension may visibly move a wheel from its rest position (m). */
 const WHEEL_TRAVEL = 0.12;
 
@@ -206,6 +208,10 @@ type Rig = {
   lamps: { fl: Vector3; fr: Vector3; rl: Vector3; rr: Vector3 };
   /** The car's number plates (front, rear), lettered in show(); null for a model without plate nodes. */
   plates: Plates | null;
+  /** Seat nodes (hip points) in order, the steering wheel with its grip nodes, the doors by name; rest = closed / straight. */
+  seats: Object3D[];
+  steering: { node: Object3D; rest: Quaternion; grips: [Object3D, Object3D] | null } | null;
+  doors: Map<DoorName, { node: Object3D; rest: Quaternion; side: number; open: number }>;
 };
 
 function makeRig(model: Object3D, type: CarType): Rig {
@@ -221,6 +227,14 @@ function makeRig(model: Object3D, type: CarType): Rig {
       if (mat.name === 'paint') { const c = mat.clone(); paint.push(c); return c; }
       if (mat.name === 'lamp_front') { const c = mat.clone(); c.emissive.set(0xfff1d6); head.push(c); return c; }
       if (mat.name === 'lamp_rear') { const c = mat.clone(); c.emissive.set(0xff1a0a); tail.push(c); return c; }
+      // the lamps' covers glow with them: a tinted cover over a glowing recess swallows most of the light
+      if (mat.name === 'lens' || mat.name === 'lens_red') {
+        const c = carMaterial(mat) as MeshStandardMaterial;
+        c.emissive.set(mat.name === 'lens' ? 0xfff1d6 : 0xff1a0a);
+        c.userData.gain = 0.6 / Math.max(0.2, c.opacity); // blended: its glow is scaled by its opacity
+        (mat.name === 'lens' ? head : tail).push(c);
+        return c;
+      }
       return carMaterial(mat);
     };
     if ([m.material].flat().some(isClearGlass)) glassMesh(m);
@@ -243,10 +257,23 @@ function makeRig(model: Object3D, type: CarType): Rig {
     poses.forEach((m, k) => plates!.move(k, m));
     root.add(plates.mesh);
   }
+  const seats: Object3D[] = [];
+  for (let i = 0; ; i++) {
+    const n = root.getObjectByName(`seat_${i}`);
+    if (!n) break;
+    seats.push(n);
+  }
+  const wheelNode = root.getObjectByName('steering'), gl = root.getObjectByName('grip_l'), gr = root.getObjectByName('grip_r');
+  const steering = wheelNode ? { node: wheelNode, rest: wheelNode.quaternion.clone(), grips: gl && gr ? [gl, gr] as [Object3D, Object3D] : null } : null;
+  const doors: Rig['doors'] = new Map();
+  for (const [name, d] of Object.entries(CAR_SEATS[type].doors)) {
+    const node = root.getObjectByName(name);
+    if (node) doors.set(name as DoorName, { node, rest: node.quaternion.clone(), side: Math.sign(d.hingeX), open: d.openAngle });
+  }
   const sp = CAR_SPECS[type];
   const fz = sp.bodyZ + sp.length / 2, rz = sp.bodyZ - sp.length / 2;
   return {
-    root, paint, head, tail, wheels, plates,
+    root, paint, head, tail, wheels, plates, seats, steering, doors,
     lamps: {
       fl: lamp('light_fl', new Vector3(0.6, G + 0.75, fz)), fr: lamp('light_fr', new Vector3(-0.6, G + 0.75, fz)),
       rl: lamp('tail_l', new Vector3(0.7, G + 0.85, rz)), rr: lamp('tail_r', new Vector3(-0.7, G + 0.85, rz)),
@@ -275,6 +302,7 @@ export class DrivenCar {
   private readonly qSpin = new Quaternion();
   private readonly axisX = new Vector3(1, 0, 0);
   private readonly axisY = new Vector3(0, 1, 0);
+  private readonly axisZ = new Vector3(0, 0, 1);
 
   /**
    * beams: false = another player's car: no spotlights (only the emissive lamp materials), so the
@@ -361,10 +389,42 @@ export class DrivenCar {
     }
   }
 
+  /** The shown model's root (its frame: x left, y up, z forward, origin on the ground), to seat figures in; null without a model. */
+  get root(): Object3D | null {
+    return this.current?.root ?? null;
+  }
+
+  /** The hip point of seat i in the frame of root, or null. */
+  seat(i: number): Vector3 | null {
+    const n = this.current?.seats[i];
+    return n ? this.current!.root.worldToLocal(n.getWorldPosition(new Vector3())) : null;
+  }
+
+  /** Where the hands hold the steering wheel (left, right) in the frame of root, as the wheel is turned now; or null. */
+  grips(): [Vector3, Vector3] | null {
+    const r = this.current, g = r?.steering?.grips;
+    if (!r || !g) return null;
+    r.root.updateMatrixWorld(true);
+    return g.map((n) => r.root.worldToLocal(n.getWorldPosition(new Vector3()))) as [Vector3, Vector3];
+  }
+
+  /** Opens door `name` by k (0 shut … 1 fully open). */
+  setDoor(name: DoorName, k: number): void {
+    const d = this.current?.doors.get(name);
+    if (!d) return;
+    // hinged at the front: the rear edge of a left door swings out to the left
+    d.node.quaternion.copy(d.rest).multiply(this.qSteer.setFromAxisAngle(this.axisY, -d.side * d.open * Math.max(0, Math.min(1, k))));
+  }
+
   /** Wheels: spin with the speed (m/s), steer and follow each wheel's suspension; dt = frame time. */
   setWheels(v: WheelSource, dt: number): void {
     const r = this.current;
     if (!r) return;
+    if (r.steering) {
+      // the steering wheel turns with the front wheels, geared up; its node's local Z is the column
+      const turn = Math.max(-STEERING_WHEEL_MAX, Math.min(STEERING_WHEEL_MAX, v.wheelSteering(0) * STEERING_RATIO));
+      r.steering.node.quaternion.copy(r.steering.rest).multiply(this.qSteer.setFromAxisAngle(this.axisZ, turn));
+    }
     this.spin = (this.spin + (v.speed() * dt) / this.radius) % (Math.PI * 2);
     this.qSpin.setFromAxisAngle(this.axisX, this.spin);
     r.wheels.forEach(({ node, rest }, i) => {
@@ -380,8 +440,8 @@ export class DrivenCar {
     const brake = braking && power > 0.5;
     const r = this.current;
     if (r) {
-      for (const m of r.head) m.emissiveIntensity = (0.15 + 2.2 * night) * power;
-      for (const m of r.tail) m.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power;
+      for (const m of r.head) m.emissiveIntensity = (0.15 + 2.2 * night) * power * ((m.userData.gain as number | undefined) ?? 1);
+      for (const m of r.tail) m.emissiveIntensity = (brake ? 2.5 : 0.08 + 1.1 * night) * power * ((m.userData.gain as number | undefined) ?? 1);
     }
     this.setBeams(this.shown && power > 0.5 ? night * power : 0);
     const tail = !this.shown ? 0 : brake ? BRAKE_INTENSITY : TAIL_INTENSITY * night;

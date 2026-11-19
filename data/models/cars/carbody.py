@@ -36,7 +36,7 @@ def car_materials2(paint=(0.55, 0.06, 0.05)):
     m = car_materials(paint)
     m['glass_dark'] = material('glass_dark', (0.07, 0.09, 0.1), rough=0.05, metal=0.2)  # the distance model's opaque glass
     m['glass'] = clear('glass', (0.10, 0.13, 0.14), 0.32, rough=0.05)
-    m['lens'] = clear('lens', (0.9, 0.9, 0.9), 0.25, rough=0.03)  # clear lamp covers
+    m['lens'] = clear('lens', (0.93, 0.95, 1.0), 0.32, rough=0.03)  # clear lamp covers
     m['lens_red'] = clear('lens_red', (0.75, 0.03, 0.02), 0.6, rough=0.05)  # tail lamp covers
     m['mirror'] = material('mirror', (0.75, 0.78, 0.8), rough=0.04, metal=1.0)  # mirror glass; the game gives it a reflection
     m['pillar'] = material('pillar', (0.015, 0.015, 0.018), rough=0.12)  # gloss black window pillars
@@ -516,6 +516,9 @@ def lamp_units(sh, front, u_face, x, z, outline, d_side, inner):
     p = sh.part('details')
     for s, c, d, ol in pair(front, u_face, x, z, outline, d_side):
         out.append(sh.decal('lens' if front else 'lens_red', c, d, ol, off=0.0005))
+        # the reflector: a plate of the lamp material at the back of the recess (the wall is not everywhere thick
+        # enough to leave the recess a back of its own; without it one looks into the body)
+        sh.decal('lamp_front' if front else 'lamp_rear', c, d, ol, off=-(LAMP_DEPTH - 0.003))
         inner(p, s, c, d.normalized())
     return out
 

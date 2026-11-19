@@ -1,0 +1,55 @@
+import { BOARD_WALK_SPEED, DOOR_OPEN_S, LEAVE_S, SIT_S, type CarPoint } from '@nn/shared';
+import { Vector3 } from 'three';
+
+/**
+ * What getting into and out of a car looks like over time (the simulation seats the player at once; see boarding in
+ * @nn/shared): the walk to the door, the door, the slide between the door and the seat.
+ */
+
+/** The door shuts this long after the figure sits (s); the ignition's door sound follows right after. */
+export const DOOR_SHUT_S = 0.3;
+/** How far the seated figure leans back (rad). */
+export const SEAT_RECLINE = 0.36;
+
+/**
+ * walk: where the figure walks (car frame) and which way, or null once it stands at the door; door: 0 shut … 1 open;
+ * slide: 0 standing at the door … 1 in the seat; done: the sequence is over.
+ */
+export type BoardStage = { walk: CarPoint | null; heading: CarPoint | null; door: number; slide: number; done: boolean };
+
+const smooth = (k: number): number => { const t = Math.max(0, Math.min(1, k)); return t * t * (3 - 2 * t); };
+
+/** Getting in, t seconds after pressing E, along `path` (boardingPath). */
+export function enterStage(path: readonly CarPoint[], t: number): BoardStage {
+  let left = t * BOARD_WALK_SPEED;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1]!, b = path[i]!, n = Math.hypot(b.x - a.x, b.u - a.u);
+    if (left < n) {
+      const k = left / n;
+      return { walk: { x: a.x + (b.x - a.x) * k, u: a.u + (b.u - a.u) * k }, heading: { x: (b.x - a.x) / n, u: (b.u - a.u) / n }, door: 0, slide: 0, done: false };
+    }
+    left -= n;
+  }
+  const s = left / BOARD_WALK_SPEED; // seconds at the door
+  if (s < DOOR_OPEN_S) return { walk: null, heading: null, door: s / DOOR_OPEN_S, slide: 0, done: false };
+  if (s < DOOR_OPEN_S + SIT_S) return { walk: null, heading: null, door: 1, slide: smooth((s - DOOR_OPEN_S) / SIT_S), done: false };
+  const shut = (s - DOOR_OPEN_S - SIT_S) / DOOR_SHUT_S;
+  return { walk: null, heading: null, door: Math.max(0, 1 - shut), slide: 1, done: shut >= 1 };
+}
+
+/** Getting out, t seconds after it began: the reverse, without the walk. */
+export function leaveStage(t: number): BoardStage {
+  if (t < DOOR_OPEN_S) return { walk: null, heading: null, door: t / DOOR_OPEN_S, slide: 1, done: false };
+  if (t < DOOR_OPEN_S + SIT_S) return { walk: null, heading: null, door: 1, slide: 1 - smooth((t - DOOR_OPEN_S) / SIT_S), done: false };
+  const shut = (t - DOOR_OPEN_S - SIT_S) / (LEAVE_S - DOOR_OPEN_S - SIT_S);
+  return { walk: null, heading: null, door: Math.max(0, 1 - shut), slide: 0, done: shut >= 1 };
+}
+
+/**
+ * Where a seated figure's feet rest, in the car model's frame (x left, y up, z forward): on the floor ahead of the
+ * seat – further ahead under a low seat (legs stretched), closer under a high one (legs down).
+ */
+export function footTargets(seat: { x: number; u: number; h: number }, floor: number): [Vector3, Vector3] {
+  const ahead = Math.max(0.45, Math.min(0.75, 0.82 - 0.6 * (seat.h - floor)));
+  return [1, -1].map((s) => new Vector3(seat.x + s * 0.1, floor + 0.08, seat.u + ahead)) as [Vector3, Vector3];
+}

@@ -1,10 +1,11 @@
-import { Quaternion, type Object3D, type PerspectiveCamera, type Scene } from 'three';
+import { Quaternion, Vector3, type Object3D, type PerspectiveCamera, type Scene } from 'three';
 import { WATER_TIME } from './materials/street';
 import {
   BIKE_SPECS, bikeGroundPose, CHARACTER_VARIANTS, headingOf, headingPose, KNOCKDOWN_S, staticWorldFilter, TUNING, type BikeState, type BikeType, type CarPose, type CharacterVariant, type PlayerInput,
   type PlayerSnapshot, type SimEvent, type StationId, type WorldManifest,
-  plateText,
+  plateText, boardingPath, CAR_SEATS, CAR_SPECS, DRIVER_SEAT, fromCarPoint, standPoint, toCarPoint, VEHICLE_REST_Y, type CarPoint,
 } from '@nn/shared';
+import { enterStage, footTargets, leaveStage, SEAT_RECLINE, type BoardStage } from './boarding';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
 import { DRIVE_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
@@ -14,6 +15,7 @@ import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
 import { DrivenCar, lampPower, ParkedCars, setMirrorNight, type CarModels } from './car';
+import { BOARD_WALK_SPEED, type DoorName } from '@nn/shared';
 import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
@@ -74,6 +76,11 @@ export class Game {
   mapInput = { dx: 0, dy: 0, notches: 0 };
   /** Steering input of this frame after the map gate. */
   private ctl: DriveControls = { forward: 0, right: 0, brake: false, run: false };
+  /**
+   * Getting into the driven car (walking to the door, the door, sitting down) or out of the car just left; null
+   * otherwise. While it runs the player's controls rest.
+   */
+  private boarding: { kind: 'in'; car: number; path: CarPoint[]; t: number } | { kind: 'out'; car: number; t: number } | null = null;
   /** The car the player drives (null on foot). */
   private carId: number | null = null;
   /** Vehicle the last sampled step had the player in ('w' on foot; undefined before the first sample). */
@@ -278,11 +285,11 @@ export class Game {
         this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
       }
       honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
-      if (input.consume('KeyE') && !busy) use = true;
+      if (input.consume('KeyE') && !busy && !this.boarding) use = true;
       if (this.radioOn) for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
     audio?.horn(honk, dt);
-    const still = this.flying || this.figure.busy;
+    const still = this.flying || this.figure.busy || this.boarding !== null; // getting in or out: the controls rest
     const raw = still ? { forward: 0, right: 0, brake: false, run: false } : { ...input.axes(), brake: input.brake(), run: input.run() };
     const ctl = this.ctl = this.map.gate(raw);
     const cmd: PlayerInput = { forward: ctl.forward, right: ctl.right, run: ctl.run, brake: ctl.brake, jump, use, yaw: this.follow.yaw, horn: honk, bell };
@@ -404,12 +411,17 @@ export class Game {
 
   private enteredCar(car: number): void {
     const pose = this.currPose ?? this.session.sim.cars.poses[car]!;
+    if (this.boarding?.kind === 'out') this.finishLeave(); // straight into the next car
     this.carId = car;
     this.sentRadio = undefined;
     this.cars.setOwn(car);
-    this.figure.visible = false;
     this.driven.setPose(pose);
-    this.driven.show(this.session.sim.cars.types[car]!, this.session.sim.cars.colors[car]!, plateText(car));
+    const type = this.session.sim.cars.types[car]!;
+    this.driven.show(type, this.session.sim.cars.colors[car]!, plateText(car));
+    // the figure walks to the driver's door from where it stands, gets in and shuts the door
+    const at = this.figure.group.position;
+    const from = toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, at.x, at.z);
+    this.boarding = { kind: 'in', car, path: boardingPath(CAR_SPECS[type], CAR_SEATS[type], DRIVER_SEAT, from), t: 0 };
     this.follow.setDriving(true, headingOf(pose));
     this.mode = 'drive';
     this.ctx.hud.setHint(this.modeHint);
@@ -417,10 +429,9 @@ export class Game {
   }
 
   private leftCar(car: number): void {
+    const wasIn = this.boarding?.kind === 'in';
     this.carId = null;
     this.currPose = this.prevPose = null;
-    this.cars.setOwn(null);
-    this.driven.hide();
     this.figure.heading = headingOf(this.session.sim.cars.poses[car]!);
     this.figure.visible = true;
     this.follow.setDriving(false);
@@ -429,6 +440,54 @@ export class Game {
     this.closeWheel();
     this.ctx.hud.setHint('');
     this.ctx.audio?.exitCar();
+    if (wasIn) {
+      // not in yet (a server correction took the car away): no getting-out to show
+      this.boarding = { kind: 'out', car, t: Infinity };
+      this.finishLeave();
+    } else {
+      this.boarding = { kind: 'out', car, t: 0 }; // the car stays drawn with its door until the figure is out
+    }
+  }
+
+  /** Getting out is over (or cut short): the car goes back to the parked ones, the figure walks again. */
+  private finishLeave(): void {
+    const b = this.boarding;
+    if (b?.kind !== 'out') return;
+    for (const name of Object.keys(CAR_SEATS[this.session.sim.cars.types[b.car]!].doors)) this.driven.setDoor(name as DoorName, 0);
+    this.ctx.scene.add(this.figure.group);
+    this.boarding = null;
+    if (this.carId === null) {
+      this.cars.setOwn(null);
+      this.driven.hide();
+    }
+  }
+
+  /**
+   * The figure of the car's driver for this frame: seated, or on its way in or out. `pose`: the car as drawn.
+   * Returns true while the figure is still on foot outside (walking to the door, or out again).
+   */
+  private poseOccupant(car: number, pose: CarPose, st: BoardStage | null, dt: number): void {
+    const type = this.session.sim.cars.types[car]!, layout = CAR_SEATS[type], seat = layout.seats[DRIVER_SEAT]!;
+    const frame = { x: pose.x, z: pose.z, heading: headingOf(pose) }, ground = pose.y - VEHICLE_REST_Y;
+    const fig = this.figure, root = this.driven.root;
+    if (st) this.driven.setDoor(seat.door, st.door);
+    if (st && (st.walk || st.slide === 0)) {
+      // on foot: walking the path, or standing at the open door, turned to the car
+      if (fig.group.parent !== this.ctx.scene) this.ctx.scene.add(fig.group);
+      const at = st.walk ?? standPoint(layout, DRIVER_SEAT), w = fromCarPoint(frame, at);
+      const dir = st.heading ?? { x: -Math.sign(at.x), u: 0 };
+      const ahead = fromCarPoint({ x: 0, z: 0, heading: frame.heading }, dir);
+      const speed = st.walk ? BOARD_WALK_SPEED : 0;
+      fig.update(w.x, ground, w.z, { x: ahead.x * speed, y: 0, z: ahead.z * speed }, dt, false, Math.atan2(ahead.x, ahead.z));
+      return;
+    }
+    if (!root) return;
+    if (fig.group.parent !== root) root.add(fig.group);
+    const hip = this.driven.seat(DRIVER_SEAT) ?? new Vector3(seat.x, seat.h, seat.u);
+    // between the door and the seat the whole pose slides: out to the stand point and up to standing height
+    const k = st ? 1 - st.slide : 0, stand = standPoint(layout, DRIVER_SEAT);
+    const shift = new Vector3((stand.x - hip.x) * k, 0.3 * k, (stand.u - hip.z) * k);
+    fig.sit(hip, footTargets(seat, layout.floor), this.driven.grips(), SEAT_RECLINE, shift);
   }
 
   private mountedBike(id: number): void {
@@ -509,7 +568,17 @@ export class Game {
       p.x += off.x; p.y += off.y; p.z += off.z;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
-      this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
+      const out = this.boarding?.kind === 'out' ? this.boarding : null;
+      if (out) {
+        // still getting out of the car just left: it stands where it is, its door open
+        out.t += dt;
+        const st = leaveStage(out.t), at = this.session.sim.cars.poses[out.car]!;
+        this.driven.setPose(at);
+        this.poseOccupant(out.car, at, st, dt);
+        if (st.done) this.finishLeave();
+      } else {
+        this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
+      }
       if (!this.flying) this.follow.update(p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
@@ -545,6 +614,11 @@ export class Game {
       this.driven.setPose(pose);
       this.drawnPose = pose;
       this.driven.setWheels(sim.cars.vehicle(this.carId)!, dt);
+      const into = this.boarding?.kind === 'in' ? this.boarding : null;
+      if (into) into.t += dt;
+      const st = into ? enterStage(into.path, into.t) : null;
+      this.poseOccupant(this.carId, pose, st, dt);
+      if (st?.done) this.boarding = null;
       this.driven.setLights(night, sim.braking(this.carId), lampPower(sim.ignition(this.carId).lightLevel(), Math.random));
       const v = sim.cars.vehicle(this.carId)!.chassis.linvel();
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));

@@ -9,6 +9,7 @@ Each has a `build.py` that regenerates `<name>.blend`, `<name>.glb` and the dist
 blender -b --factory-startup --python data/models/cars/<name>/build.py
 npm run ship-cars     # re-encodes all car models into apps/client/public/world and updates its manifest
 npm run car-shots -- <dev server url> shots/cars/ingame   # in-game stills and a frame-time line (FRAME_MS)
+npm run board-shots -- <dev server url> shots/cars/board  # stills of getting in, driving with the figure at the wheel, getting out
 ```
 
 Each run renders review stills to `shots/cars/<name>-*.png` and prints `CAR_REPORT` (size, triangles, seats) and

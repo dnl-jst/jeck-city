@@ -1,9 +1,10 @@
-import type { Camera, Object3D, Scene } from 'three';
+import { Vector3, type Camera, type Object3D, type Scene } from 'three';
 import {
   BIKE_GEAR, BIKE_SPECS, BIKE_WHEEL_RADIUS, bikeLean, KNOCKDOWN_S, SUSPENSION_REST_LENGTH, BIKE_ROOF, fromCarLocal, headingPose, onRoof, TUNING, vaultThrow, VEHICLE_REST_Y, type BikeState, type BikeType, type CarPose, type CarType, type SnapshotCar,
   type SnapshotRider, type SnapshotWalker, type StationId,
-  plateText,
+  plateText, CAR_SEATS, DRIVER_SEAT,
 } from '@nn/shared';
+import { footTargets, SEAT_RECLINE } from '../boarding';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
@@ -41,6 +42,10 @@ export interface CarView {
   setPose(p: CarPose): void;
   setWheels(w: WheelSource, dt: number): void;
   setLights(night: number, braking: boolean, power: number): void;
+  /** To seat the driver's figure (DrivenCar): the model's root, a seat's hip point and the steering wheel's grips in its frame. */
+  readonly root?: Object3D | null;
+  seat?(i: number): Vector3 | null;
+  grips?(): [Vector3, Vector3] | null;
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
@@ -96,7 +101,7 @@ type Walker = Figure & {
   roof: { x: number; y: number; z: number } | null;
 };
 type Rider = Figure & { label: Label | null; rig: RiderRig | null; crank: number; seen: boolean; vx: number; vz: number; x: number; y: number; z: number };
-type Driven = { view: CarView; label: Label | null; seen: boolean };
+type Driven = { view: CarView; label: Label | null; seen: boolean; /** The driver at the wheel (once the car's model is there). */ fig: Figure | null };
 
 /**
  * Other players: figures on foot (pooled; a figure is hidden when its player leaves and reused for the next), each
@@ -264,12 +269,21 @@ export class RemotePlayers {
       if (!d) {
         const view = this.freeCars.pop() ?? this.opts.makeCar?.() ?? new DrivenCar(this.scene, this.opts.carModels, { beams: false });
         view.show(this.opts.typeOf(c.id), this.opts.colorOf(c.id), plateText(c.id));
-        d = { view, label: null, seen: true };
+        d = { view, label: null, seen: true, fig: null };
         this.driven.set(c.id, d);
       }
       d.seen = true;
       d.view.setPose(c);
       d.view.setWheels(streamedWheels(c), dt);
+      // the driver sits at the wheel (getting in and out is only shown for the own figure so far)
+      const root = d.view.root;
+      if (root) {
+        d.fig ??= this.takeFigure();
+        this.dress(d.fig, variants.get(info.driver) ?? 0);
+        if (d.fig.fig.group.parent !== root) root.add(d.fig.fig.group);
+        const layout = CAR_SEATS[this.opts.typeOf(c.id)], seat = layout.seats[DRIVER_SEAT]!;
+        d.fig.fig.sit(d.view.seat?.(DRIVER_SEAT) ?? new Vector3(seat.x, seat.h, seat.u), footTargets(seat, layout.floor), d.view.grips?.() ?? null, SEAT_RECLINE);
+      }
       // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
       d.view.setLights(night, c.brakeLight, lampPower(info.level, Math.random));
       d.label = this.label(d.label, names.get(info.driver), c.x, c.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, c.z, cp);
@@ -278,6 +292,7 @@ export class RemotePlayers {
       if (d.seen) continue;
       d.view.hide();
       d.label?.dispose();
+      if (d.fig) this.freeFigure(d.fig);
       this.freeCars.push(d.view);
       this.driven.delete(id);
     }
