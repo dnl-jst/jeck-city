@@ -86,12 +86,13 @@ Trennwand; der Laderaum hat keine Fenster und bleibt leer. Smart: zwei Sitze.
 | Typ | Türen | Sitze |
 |---|---|---|
 | `smart` | 2 | 2: Fahrer, Beifahrer |
-| `kleinwagen` | 4 (+ Heckklappe, fest) | 5: vorn 2, hinten 3 |
-| `mittelklasse` | 4 | 5: vorn 2, hinten 3 |
-| `transporter` | 2 vorn (Schiebetür fest) | 3: Fahrer + Doppelbank |
+| `kleinwagen` | 4 (+ Heckklappe, fest) | 4: vorn 2, hinten 2 (außen) |
+| `mittelklasse` | 4 | 4: vorn 2, hinten 2 (außen) |
+| `transporter` | 2 vorn (Schiebetür fest) | 2: Fahrer, Bank außen |
 
-Der Fahrer sitzt links (Sitz 0). Die mittleren Plätze (hinten Mitte; im Transporter Bankmitte) haben keine eigene
-Tür und werden über die Tür ihrer Seite erreicht – hinten Mitte von beiden Seiten, Transporter-Mitte von rechts.
+Der Fahrer sitzt links (Sitz 0). **Mittelplätze gibt es nicht** (Nutzer: hinten Mitte ignorieren): jeder Sitz hat
+seine eigene Tür. Die Rückbank ist optisch eine durchgehende Bank, benutzt werden nur die Außenplätze. Beim
+Transporter gilt dasselbe für die Doppelbank (Vorschlag, aus derselben Regel abgeleitet).
 
 ### Knoten und Materialien (Vorschlag; der Client greift per Name zu)
 
@@ -101,7 +102,7 @@ Bestehende Namen bleiben (`body`, `wheel_*`, `light_*`, `tail_*`, `paint`, `lamp
 |---|---|
 | `door_fl`, `door_fr`, `door_rl`, `door_rr` | Türen; Ursprung auf der Scharnierachse (vorn angeschlagen), drehen um die Hochachse |
 | `steering` | Lenkrad; dreht um die Lenksäulenachse |
-| `seat_0` … `seat_n` | Leerobjekte am Hüftpunkt jedes Sitzes, Reihenfolge: Fahrer, Beifahrer, hinten links, hinten rechts, hinten Mitte (Transporter: Fahrer, Bank außen, Bank Mitte) |
+| `seat_0` … `seat_n` | Leerobjekte am Hüftpunkt jedes Sitzes, Reihenfolge: Fahrer, Beifahrer, hinten links, hinten rechts |
 | `grip_l`, `grip_r` | Griffpunkte am Lenkrad (Kinder von `steering`) |
 | Material `glass` | Scheiben; im Client durchsichtig, getönt, spiegelnd |
 | Materialien `interior`, `interior_trim`, `seat` | Innenraum (dunkel, matt) |
@@ -119,26 +120,22 @@ auseinanderlaufen (Vorschlag; das genaue Mittel ist Sache der Umsetzung).
 
 ## Sitzen, Ein- und Aussteigen im Spiel
 
-### Regeln (Nutzer bestätigt, soweit nicht anders markiert)
+### Regeln (Nutzer, soweit nicht anders markiert)
 
-- **Einsteigen:** an eine Tür gehen, **E**. Man bekommt den Platz hinter der nächstgelegenen Tür; ist er belegt, den
-  nächsten freien auf derselben Seite (hinten also die Mitte).
-  - Genauer (Vorschlag): Jede Tür bedient nur ihre eigenen Plätze. Vordertür → nur der Vordersitz; hintere Tür →
-    Außenplatz, dann Mitte; rechte Tür des Transporters → Bank außen, dann Bankmitte. Ist an dieser Tür nichts frei:
-    abgelehnt, mit Hinweis wie heute bei besetztem Auto – auch wenn an einer anderen Tür noch Platz wäre. Auf die
-    Mitte kommt man nur, wenn der Außenplatz belegt ist; die Figur steigt dann an der sitzenden Figur vorbei.
+- **Einsteigen:** ans Auto gehen, **E**. Man bekommt den Platz hinter der nächstgelegenen Tür. Ist er belegt, bekommt
+  man einen anderen freien Platz, und **die Figur läuft von selbst ums Auto zu dessen Tür** (Nutzer). Abgelehnt wird
+  nur, wenn das Auto voll ist (Hinweis wie heute bei besetztem Auto).
+  - Welcher freie Platz (Vorschlag): der, dessen Tür vom Standort aus den kürzesten Fußweg ums Auto hat.
   - Reichweite (Vorschlag): Welches Auto gemeint ist, entscheidet wie heute der Abstand zur Wagenmitte
-    (`ENTER_MAX_DIST`), ebenso die Wahl Auto/Rad. Die Tür ist die dem Spieler nächstgelegene, egal wo am Auto er
-    steht. Die Bewegung beginnt am Standpunkt vor dieser Tür: die Figur gleitet in der Zeit, in der die Tür
-    aufschwingt, dorthin. Das gilt schon in Stufe 3, dort mit nur einer Tür (Fahrertür).
+    (`ENTER_MAX_DIST`), ebenso die Wahl Auto/Rad. Das gilt schon in Stufe 3, dort mit nur einem Sitz: wer auf der
+    Beifahrerseite E drückt, läuft ums Auto zur Fahrertür.
 - Einsteigen nur, solange das Auto (fast) steht – dieselbe Schwelle wie fürs Aussteigen (`EXIT_MAX_SPEED`).
 - **Fahrer** wird, wer auf Sitz 0 sitzt. Nur dann läuft die Zündung an (Tür zu → Anlasser → Motor), wie heute.
-- **Mitfahrende** steuern nichts außer: sich umsehen (Kamera), **hupen** und aussteigen. Sie hören Motor und Radio des
+- **Mitfahrende** steuern nichts außer: sich umsehen (Kamera) und aussteigen. **Hupen darf nur der Fahrer** (Nutzer). Sie hören Motor und Radio des
   Autos so wie der Fahrer. Das Radio bedient nur der Fahrer (Vorschlag).
 - **Fahrer steigt aus:** Handbremse, Motor und Radio aus (wie heute), die anderen bleiben sitzen. Der Fahrersitz ist
   frei; wer an die Fahrertür geht, wird neuer Fahrer. Kein Durchrutschen.
-- **Aussteigen:** aus der eigenen Tür auf die eigene Seite, auf Höhe der Tür (Mittelplätze: feste Regel, zuerst
-  rechts – die Seite wird nicht gemerkt; Vorschlag); ist dort blockiert, auf der anderen
+- **Aussteigen:** aus der eigenen Tür auf die eigene Seite, auf Höhe der Tür; ist dort blockiert, auf der anderen
   Seite, sonst hinter dem Auto (die heutige Reihenfolge, nur mit der eigenen Seite zuerst). Nur unter
   `EXIT_MAX_SPEED`; sonst der heutige Hinweis.
 - Ein Auto mit Insassen, aber ohne Fahrer, gilt als **benutzt**: es wird nicht auf seinen Stellplatz zurückgesetzt
@@ -152,11 +149,17 @@ Die Simulation bleibt **sofort**: Mit **E** sitzt der Spieler in der Simulation 
 Ausstiegspunkt) – wie heute, damit Vorhersage und Server-Korrektur einfach bleiben. Die Bewegung ist **Darstellung**
 im Client, ausgelöst durch das Ereignis:
 
-- Einsteigen, rund 1,2 s: Tür schwingt auf (~0,3 s), die Figur geht von ihrem Standort in den Sitz und nimmt die
-  Sitzhaltung ein (~0,6 s), Tür fällt zu (~0,3 s, mit dem Türgeräusch).
+- Einsteigen: die Figur läuft im Lauftempo von ihrem Standort zum Standpunkt vor der Tür – auf dem kürzeren Weg um
+  Front oder Heck, mit Abstand zur Karosserie, nie durch das Auto –, dann rund 1,2 s: Tür schwingt auf (~0,3 s), die
+  Figur setzt sich (~0,6 s), Tür fällt zu (~0,3 s, mit dem Türgeräusch). Steht sie schon an der Tür, entfällt der Weg.
+- Die Dauer des Wegs hängt vom Standort ab. Die Simulation berechnet sie beim Einsteigen aus der Weglänge (gleich
+  auf Client und Server) und führt sie als Tick-Zähler im Spielerzustand; das Ereignis `enter` trägt den
+  Startpunkt, damit alle denselben Weg zeigen. Hindernisse auf dem Weg (Wand, Nachbarauto) werden nicht geprüft –
+  die Figur ist in der Simulation schon im Auto und läuft notfalls durch sie hindurch.
 - Aussteigen: dasselbe rückwärts, die Figur endet am Ausstiegspunkt.
-- Damit nichts losfährt oder losläuft, während die Figur noch unterwegs ist: Die Zündung des Fahrers wartet auf das
-  Türschließen (die Zeiten `DOOR_CLOSE_AT`/`CRANK_AT` rücken entsprechend nach hinten), und nach dem Aussteigen
+- Damit nichts losfährt oder losläuft, während die Figur noch unterwegs ist: Die Zündung des Fahrers beginnt erst, wenn der Weg zur Tür
+  abgelaufen ist, und wartet dann auf das Türschließen (die Zeiten `DOOR_CLOSE_AT`/`CRANK_AT` rücken entsprechend
+  nach hinten), und nach dem Aussteigen
   nimmt die Simulation für die Dauer der Bewegung keine Lauf-Eingaben an (ein Tick-Zähler im Spielerzustand, analog
   `fallTicks`, damit Client und Server gleich rechnen).
 - Fährt der Fahrer an, während jemand anderes noch einsteigt, läuft dessen Bewegung im Bezug zum Auto weiter zu Ende.
@@ -179,7 +182,6 @@ Figur muss in jeden Typ passen, ohne durch Dach, Sitz oder Tür zu ragen – das
   Protokollversion hoch; alte Clients werden wie bei früheren Protokolländerungen behandelt.
 - **Mitfahrende sagen das Auto nicht vorher.** Ihr Client zeigt es aus den Server-Schnappschüssen wie jedes fremde
   gefahrene Auto und hängt Kamera und eigene Figur daran. Nur der Fahrer rechnet sein Auto voraus (wie heute).
-- Hupe: an, wenn irgendein Insasse sie hält.
 - Interesse/Fokus eines Mitfahrenden liegt auf dem Auto (er sieht, was um das Auto ist).
 
 ## Darstellung im Client (Vorschlag)
@@ -193,7 +195,7 @@ Figur muss in jeden Typ passen, ohne durch Dach, Sitz oder Tür zu ragen – das
   sauber aussehen.
 - **Namensschilder:** über dem Dach die Namen aller Insassen, Fahrer zuoberst.
 - **Kamera:** für Mitfahrende dieselbe Fahrkamera wie für den Fahrer.
-- **Hinweise:** Fahrer wie heute; Mitfahrende „E aussteigen · H hupen“. Touch-Bedienung entsprechend.
+- **Hinweise:** Fahrer wie heute; Mitfahrende „E aussteigen“. Touch-Bedienung entsprechend.
 - **Karten:** Mitfahrende erscheinen an der Position des Autos.
 - **Bildrate statt Größe:** Kein Dreieckslimit vorab. Geprüft wird im Spiel (Playwright mit Hardware-GPU) an einer
   Straße voller geparkter Autos gegen den Stand vor dem Umbau; bricht die Bildrate spürbar ein, wird zuerst die
