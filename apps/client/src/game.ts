@@ -456,6 +456,7 @@ export class Game {
     this.closeWheel();
     this.ctx.hud.setHint('');
     if (wasDriver) this.ctx.audio?.exitCar();
+    else this.ctx.audio?.leaveRide();
     if (wasIn) {
       // not in yet (a server correction took the seat away): no getting-out to show
       this.boarding = { kind: 'out', car, seat, t: Infinity };
@@ -620,6 +621,8 @@ export class Game {
       this.driven.setLights(night, sim.braking(car), lampPower(level, Math.random));
       const v = vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
+      // riding along: the car's radio, as the driver hears it
+      if (this.pass) audio?.rideAlong(this.session.roster?.().cars.get(car)?.radio ?? null);
       if (audio && this.carId !== null) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
         const h = headingOf(pose);
@@ -634,7 +637,7 @@ export class Game {
       const { walkers, cars, riders } = this.session.remote!();
       const { names, variants, cars: info, seats } = this.session.roster!();
       this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants, seats);
-      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt), dt);
+      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null), dt);
 
     }
     if (audio) {

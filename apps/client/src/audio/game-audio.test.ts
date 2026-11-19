@@ -394,3 +394,26 @@ test('weather before unlock is applied when the loops start', async () => {
   await flush();
   expect(voices.find((v) => v.id === 'rain')?.gain).toBeCloseTo(0.5);
 });
+
+test('riding along: the passenger hears the car\'s radio as in the car, following what the driver tunes', () => {
+  const { audio, tunes, calls, flashes } = setup();
+  audio.rideAlong('einslive');
+  expect(calls).toContain('mixer.setInCar(true)');
+  expect(tunes).toEqual(['einslive']);
+  audio.rideAlong('einslive'); // every frame: nothing new
+  expect(tunes).toEqual(['einslive']);
+  audio.rideAlong('radiokoeln'); // the driver changed the station
+  expect(tunes).toEqual(['einslive', 'radiokoeln']);
+  audio.rideAlong(null); // … or switched it off (or got out: engine off)
+  expect(tunes).toEqual(['einslive', 'radiokoeln', null]);
+  expect(flashes).toHaveLength(2); // the station names, as for the driver
+  // a passenger cannot tune
+  audio.radioStep(1);
+  expect(tunes).toHaveLength(3);
+  audio.rideAlong('einslive');
+  audio.leaveRide();
+  expect(tunes.at(-1)).toBeNull();
+  expect(calls.at(-1)).toBe('mixer.setInCar(false)');
+  audio.leaveRide(); // twice does nothing
+  expect(calls.filter((c) => c === 'mixer.setInCar(false)')).toHaveLength(1);
+});

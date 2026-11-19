@@ -95,6 +95,14 @@ export const TUNING = {
     brake: 60,
     /** Light brake when no throttle is given, so the car rolls to a stop. */
     coastBrake: 2,
+    /**
+     * Handbrake (Space): brake impulse on each rear wheel; while the car moves faster than handbrakeSlideAbove (m/s)
+     * the locked rear tyres keep only handbrakeGrip of their grip along and handbrakeSideGrip of it across.
+     */
+    handbrake: 60,
+    handbrakeGrip: 0.55,
+    handbrakeSideGrip: 0.3,
+    handbrakeSlideAbove: 2,
     /** Parking brake of an unoccupied car. */
     parkingBrake: 50,
 

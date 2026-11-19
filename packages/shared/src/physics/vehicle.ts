@@ -128,7 +128,7 @@ export class Vehicle {
 
     // Throttle against the direction of travel brakes first; only near standstill does it change gear.
     let engine = 0;
-    let brake = i.brake ? T.brake * this.force : 0;
+    let brake = 0;
     if ((throttle > 0 && v < -1) || (throttle < 0 && v > 1)) {
       brake = T.brake * this.force;
     } else if (throttle !== 0) {
@@ -138,11 +138,16 @@ export class Vehicle {
     } else if (!i.brake) {
       brake = T.coastBrake * this.force;
     }
-
+    // The handbrake holds the rear wheels only: it stops the car far less than the brakes do, and locked rear tyres
+    // lose their side grip, so at speed the tail swings out when steering (wheels 2 and 3 are the rear ones).
+    const sliding = i.brake && Math.abs(v) > T.handbrakeSlideAbove;
     for (let w = 0; w < 4; w++) {
-      c.setWheelEngineForce(w, engine / 4);
-      c.setWheelBrake(w, brake);
+      const rear = w >= 2, held = rear && i.brake;
+      c.setWheelEngineForce(w, held ? 0 : engine / 4);
+      c.setWheelBrake(w, held ? Math.max(brake, T.handbrake * this.force) : brake);
       c.setWheelSteering(w, w < 2 ? this.steerAngle : 0);
+      c.setWheelFrictionSlip(w, rear && sliding ? T.frictionSlip * T.handbrakeGrip : T.frictionSlip);
+      c.setWheelSideFrictionStiffness(w, rear && sliding ? T.sideFrictionStiffness * T.handbrakeSideGrip : T.sideFrictionStiffness);
     }
     if (throttle !== 0 || i.steer !== 0 || i.brake) this.chassis.wakeUp();
   }

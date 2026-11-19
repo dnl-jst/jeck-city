@@ -58,6 +58,8 @@ export class GameAudio {
   private unlocked = false;
   private loaded = false;
   private inCar = false;
+  /** Riding along as a passenger: the station of that car's radio (null: off); undefined when not riding along. */
+  private passenger: StationId | null | undefined = undefined;
   /** Engine caught (Ignition 'running'): engine voices and radio on. */
   private engineOn = false;
   /** The starter clip while cranking; stopped if the player leaves before the engine catches. */
@@ -145,6 +147,29 @@ export class GameAudio {
     this.starter = null; // the clip's own idle tail may play out
     this.startLoops();
     this.tune(this.d.tuner.enterCar());
+  }
+
+  /**
+   * Riding along in somebody's car, every frame: `station` is what its radio plays (null: off). The passenger hears
+   * it as the driver does, in the cabin; only the driver tunes.
+   */
+  rideAlong(station: StationId | null): void {
+    if (this.passenger === undefined) this.d.mixer.setInCar(true);
+    else if (this.passenger === station) return;
+    const first = this.passenger === undefined;
+    this.passenger = station;
+    if (first && station === null) return;
+    this.stopStatic();
+    this.d.radio.tune(station);
+    if (station !== null) this.d.flash(stationLabel(station));
+  }
+
+  /** Got out of the car ridden along in. */
+  leaveRide(): void {
+    if (this.passenger === undefined) return;
+    if (this.passenger !== null) this.d.radio.tune(null);
+    this.passenger = undefined;
+    this.d.mixer.setInCar(false);
   }
 
   exitCar(): void {

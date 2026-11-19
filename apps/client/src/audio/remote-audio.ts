@@ -230,7 +230,8 @@ export class RemoteAudio {
 export class RemoteCarFeed {
   private prev = new Map<number, { speed: number; accel: number }>();
 
-  build(cars: ReadonlyMap<string, SnapshotCar>, info: ReadonlyMap<number, RemoteCarInfo>, me: number, dt: number): RemoteCarIn[] {
+  /** riding: the car the listener rides along in – its radio plays in the cabin (GameAudio.rideAlong), not from outside. */
+  build(cars: ReadonlyMap<string, SnapshotCar>, info: ReadonlyMap<number, RemoteCarInfo>, me: number, dt: number, riding: number | null = null): RemoteCarIn[] {
     const out: RemoteCarIn[] = [];
     const next = new Map<number, { speed: number; accel: number }>();
     for (const c of cars.values()) {
@@ -244,7 +245,7 @@ export class RemoteCarFeed {
         accel += (raw - accel) * (1 - Math.exp(-dt / ACCEL_TAU));
       }
       next.set(c.id, { speed, accel });
-      out.push({ id: c.id, x: c.x, z: c.z, speed, accel, engine: i.engine ?? 'off', radio: i.radio ?? null, horn: c.horn });
+      out.push({ id: c.id, x: c.x, z: c.z, speed, accel, engine: i.engine ?? 'off', radio: c.id === riding ? null : i.radio ?? null, horn: c.horn });
     }
     this.prev = next;
     return out;
