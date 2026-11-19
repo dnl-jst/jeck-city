@@ -350,7 +350,8 @@ export class TransitView {
           const fx = x - tr.pts[i * 3 - 3]!, fz = z - tr.pts[i * 3 - 1]!, len = Math.hypot(fx, fz) || 1;
           // to the platform's side of the track: left = (cos h, −sin h) for forward (sin h, cos h)
           const lx = (fz / len) * stop.side, lz = (-fx / len) * stop.side, yaw = Math.atan2(fx, fz);
-          {
+          // (no wall across the track where another track runs there: a station with more than two tracks)
+          if (!island || !this.trackBeside(trackIndex, x, z, -lx, -lz)) {
             // on the wall: behind a side platform; across the track from an island (the other track lies beyond the platform)
             const wall = island ? -STATION.wallClear : STATION.edge + STATION.platformWidth, d = wall - Math.sign(wall) * 0.03;
             const m = new Mesh(geo, mat);
@@ -435,25 +436,8 @@ export class TransitView {
           this.root.add(m);
         }
       };
-      // on top of the departure board, read along the platform …
+      // on top of the departure board
       put(e.x, e.y + PH / 2, e.z, e.yaw);
-      // … and hung over the platform's edge, read across it
-      const n = e.tr.pts.length / 3, top = STATION.ceiling;
-      for (const off of [-15, 15]) {
-        const i = Math.max(1, Math.min(n - 1, e.cum.findIndex((c) => c >= e.stop.s + off)));
-        const x = e.tr.pts[i * 3]!, y = e.tr.pts[i * 3 + 1]!, z = e.tr.pts[i * 3 + 2]!;
-        const fx = x - e.tr.pts[i * 3 - 3]!, fz = z - e.tr.pts[i * 3 - 1]!, len = Math.hypot(fx, fz) || 1;
-        const lx = (fz / len) * e.stop.side, lz = (-fx / len) * e.stop.side;
-        const px = x + lx * (STATION.edge + 0.5), pz = z + lz * (STATION.edge + 0.5), py = y + TRAIN.floor + 2.75;
-        put(px, py, pz, Math.atan2(lx, lz));
-        const rod = new BoxGeometry(0.05, Math.max(0.05, y + top - (py + PH / 2)), 0.05);
-        this.owned.push(rod);
-        for (const side of [-1, 1]) {
-          const m = new Mesh(rod, rodMat), o = side * (PW / 2 - 0.3);
-          m.position.set(px + (fx / len) * o, (y + top + py + PH / 2) / 2, pz + (fz / len) * o);
-          this.root.add(m);
-        }
-      }
     }
   }
 
@@ -535,6 +519,18 @@ export class TransitView {
         d.mesh.position.set(d.side * (W - TRAIN.wall / 2 + 0.06 * Math.min(1, open * 4)), 0, d.dir * open * (DOOR - 0.04));
       }
     }
+  }
+
+  /** Whether another track runs beside (x, z) towards (nx, nz), within the width of a hall. */
+  private trackBeside(trackIndex: number, x: number, z: number, nx: number, nz: number): boolean {
+    for (const [k, other] of this.transit.tracks.entries()) {
+      if (k === trackIndex) continue;
+      for (let j = 0; j < other.pts.length; j += 3) {
+        const dx = other.pts[j]! - x, dz = other.pts[j + 2]! - z, across = dx * nx + dz * nz;
+        if (across > 2 && across < 9 && Math.abs(dx * nz - dz * nx) < 2) return true;
+      }
+    }
+    return false;
   }
 
   /** Whether the platform of `stop` lies between this track and another one (an island platform). */

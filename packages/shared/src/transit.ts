@@ -484,6 +484,20 @@ function sectionWorld(states: Float64Array, o: number, p: { x: number; y: number
   return { x: states[o + 1]! + p.x * c + p.z * s, y: states[o + 2]! + p.y, z: states[o + 3]! - p.x * s + p.z * c };
 }
 
+const carryFrom = new Float64Array(0), carryTo = new Float64Array(0);
+let carryA: Float64Array = carryFrom, carryB: Float64Array = carryTo;
+/**
+ * Someone at (x, y, z) in a train as it is at tick `from`: where the same place in that train is at tick `to`; null
+ * outside every train. (A client that runs the trains a tick or two off the server's compares positions this way.)
+ */
+export function carriedTo(model: TransitModel, x: number, y: number, z: number, from: number, to: number): { x: number; y: number; z: number } | null {
+  carryA = sectionStates(model, from, carryA.length ? carryA : undefined);
+  const hit = sectionAt(carryA, x, y, z);
+  if (!hit) return null;
+  carryB = sectionStates(model, to, carryB.length ? carryB : undefined);
+  return carryB[hit.o] === 1 ? sectionWorld(carryB, hit.o, hit.local) : null;
+}
+
 /**
  * The section (offset into `states`, as from sectionStates) whose body holds the point (x, y, z), and the point in its
  * frame; null outside every train.

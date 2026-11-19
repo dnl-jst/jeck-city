@@ -36,6 +36,8 @@ const RAMP = 130;
 const DEEP_EXTRA = 5.5;
 /** Platforms: found up to this far beside a track; at least this wide; a run shorter than this many samples is none. */
 const PLATFORM_REACH = 9, PLATFORM_MIN_RUN = 10;
+/** A platform's outline may begin this far from its track (m). */
+const PLATFORM_GAP = 5;
 /** Two tracks this far apart at most (m) with a platform between them share it as an island. */
 const ISLAND_REACH = 20;
 /** A side platform is at least this wide, whatever OSM draws (m): room for a stair beside the way along it. */
@@ -306,7 +308,8 @@ export async function buildNetwork(
           const hit = near.find((p) => q.x >= p.minX && q.x <= p.maxX && q.z >= p.minZ && q.z <= p.maxZ && pointInPolygon(q, p.ring));
           if (hit) { if (d0 === 0) { d0 = u; name[s][i] = hit.name; } d1 = u; } else if (d0 > 0) break;
         }
-        if (d0 > 0 && d0 <= 2.6) far[s][i] = d1;
+        // (the outlines are drawn loosely: up to PLATFORM_GAP from the track, unless another track runs between)
+        if (d0 > 0 && (d0 <= 2.6 || (d0 <= PLATFORM_GAP && !neighbour(w, i, side, d0)))) far[s][i] = d1;
         else name[s][i] = -1;
       }
     }

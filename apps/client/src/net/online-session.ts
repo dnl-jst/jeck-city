@@ -4,6 +4,10 @@ import {
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
   type Weather, type WorldSim,
 } from '@nn/shared';
+import { carriedTo } from '@nn/shared';
+
+/** The trains' clock (see transitLead): taken over at once when more than LEAD_SNAP ticks off, else after LEAD_SETTLE snapshots in a row that differ. */
+const LEAD_SNAP = 6, LEAD_SETTLE = 40;
 import type { RenderOffset, Session } from '../session';
 import type { ServerClock } from './clock';
 import type { NetState, Welcome } from './connection';
@@ -100,6 +104,13 @@ export class OnlineSession implements Session {
   correction = 0;
   /** Reconciliations so far: replayed, skipped (the prediction at ackSeq matched the server), set hard. */
   readonly reconciles = { replayed: 0, skipped: 0, hard: 0 };
+  /**
+   * The trains' clock: how many ticks the server is ahead of the input it has just applied. It wavers by a tick or two
+   * with the network; the trains here run on a settled value of it (a train that jumped a tick forth and back with
+   * every snapshot would shake around someone riding in it), taken over only when it is far off or stays different.
+   */
+  private transitLead: number | null = null;
+  private leadOff = 0;
   private readonly stepper = new FixedStepper(TUNING.world.dt, 8);
   /** use/jump/bell pressed but not yet sent in a step (one-tick pulses, as offline). */
   private use = false;
@@ -336,6 +347,18 @@ export class OnlineSession implements Session {
       this.acked = e;
     }
     const server = ownStateOf(s.own);
+    const lead = s.serverTick - ack;
+    if (this.transitLead === null || Math.abs(lead - this.transitLead) > LEAD_SNAP) { this.transitLead = lead; this.leadOff = 0; }
+    else if (lead === this.transitLead) this.leadOff = 0;
+    else if (++this.leadOff >= LEAD_SETTLE) { this.transitLead = lead; this.leadOff = 0; }
+    // the trains' tick here for the server's state. Riding a train, the server's position counts relative to the train:
+    // moved from where the train is on the server to where it is here at that input
+    const transitAck = ack + this.transitLead;
+    const model = this.sim.trains?.model;
+    if (model && transitAck !== s.serverTick && server.carId === null && (server.bikeId ?? null) === null) {
+      const p = carriedTo(model, server.char.x, server.char.y, server.char.z, s.serverTick, transitAck);
+      if (p) server.char = { ...server.char, ...p };
+    }
     // standing on a car someone else drives: the server carried us with that car where it is on the server, but here
     // it is drawn (and stood in for) a little behind. So the server's position counts relative to the car: compared
     // with the prediction on the car's stand-in pose at ackSeq, replayed from its pose now.
@@ -373,7 +396,7 @@ export class OnlineSession implements Session {
       // the prediction for ackSeq is the server's state: replaying from it would reproduce the current prediction
       this.reconciles.skipped++;
       this.predErrorM = 0;
-      this.sim.setTransitTick(s.serverTick + this.pending.length);
+      this.sim.setTransitTick(transitAck + this.pending.length);
       return { x: 0, y: 0, z: 0 };
     }
     this.reconciles[hard ? 'hard' : 'replayed']++;
@@ -384,9 +407,9 @@ export class OnlineSession implements Session {
       this.pending = [];
       this.enterSeq = null;
       this.mountSeq = null;
-      this.sim.replay(this.me, server, [], undefined, s.serverTick);
+      this.sim.replay(this.me, server, [], undefined, transitAck);
     } else {
-      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()), s.serverTick);
+      this.sim.replay(this.me, server, this.pending.map((p) => p.input), (k) => Object.assign(this.pending[k]!, this.ownSample()), transitAck);
     }
     const after = this.ownPose();
     this.onCorrection?.();
