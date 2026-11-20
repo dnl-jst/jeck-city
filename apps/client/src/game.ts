@@ -9,13 +9,17 @@ import { enterStage, leaveStage } from './boarding';
 import { poseOccupant, shutDoors } from './occupant';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { DRIVE_HINT, PASSENGER_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, HELI_HINT, PASSENGER_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
 import type { Hud } from './hud';
 import type { Input } from './input';
 import { DrivenCar, lampPower, ParkedCars, setMirrorNight, type CarModels } from './car';
+import { sitOnBench, TransitView } from './transit';
+
+/** The camera's target is this much lower for someone sitting on a bench (m): the cushion they are on, and sitting instead of standing. */
+const SIT_DROP = 0.95;
 import { angleDelta, PlayerFigure } from './player';
 import { storeCharacter, storedCharacter, type CharacterModels } from './characters';
 import { FollowCamera, FreeFly } from './camera';
@@ -115,6 +119,14 @@ export class Game {
   /** Lamps knocked over since the last takeFallenLamps(). */
   private fallen: number[] = [];
   private readonly tramStops: WorldManifest['tramStops'];
+  /** The stop last announced to the player in a train (station index; −1 the end of the line, −2 none yet). */
+  private announced = -2;
+  /** 0..1: sitting on a bench in a train (eased; lowers the camera). */
+  private sitDrop = 0;
+  /** 0..1: how far the player is underground (set by the frame loop; fades the city's sounds, see GameAudio.transit). */
+  underground = 0;
+  /** The underground trains (null in a world without them). */
+  private readonly transit: TransitView | null;
   private readonly qa = new Quaternion();
   private readonly qb = new Quaternion();
   private readonly qc = new Quaternion();
@@ -137,6 +149,7 @@ export class Game {
     const heading = devCam ? devCam.yawDeg * DEG : m.spawn.heading;
     this.figure.heading = heading;
     this.cars = new ParkedCars(scene, sim.cars, ctx.carModels);
+    this.transit = m.transit ? new TransitView(scene, m.transit, ctx.characters, sim.trains?.model) : null;
     if (ctx.bikeModels) this.bikeView = new BikeView(scene, ctx.bikeModels.bikes, ctx.bikeModels.racks, sim.bikes, m.bikeRacks, sim.racks.ys);
     this.follow = new FollowCamera(camera, sim.pw);
     this.follow.yaw = heading;
@@ -147,6 +160,7 @@ export class Game {
       // other riders have no physics bike here: their wheels are probed against the static city and terrain
       bikeGroundPose: (type, s) => bikeGroundPose(sim.pw, BIKE_SPECS[type].wheelbase, s, STATIC_ONLY),
       ragdolls: this.ragdolls,
+      aboard: (x, y, z) => this.transit?.aboard(x, y, z, this.session.remoteTick ?? this.session.sim.transitTick) ?? null,
       // (also the car still being got out of: the game keeps drawing it, with its door, until the figure is out)
       localCar: () => (this.mode !== 'walk' && this.drawnPose ? { id: this.carId ?? this.pass?.car ?? -1, pose: this.drawnPose }
         : this.boarding?.kind === 'out' ? { id: this.boarding.car, pose: this.leavingPose(this.boarding.car) } : null),
@@ -240,9 +254,24 @@ export class Game {
     return out;
   }
 
+  /** Whether car i is a helicopter. */
+  private isHeli(i: number): boolean {
+    return CAR_SPECS[this.session.sim.cars.types[i]!].fly !== undefined;
+  }
+
+  /** Flying the helicopter (mode 'drive'). */
+  get heli(): boolean {
+    return this.carId !== null && this.isHeli(this.carId);
+  }
+
+  /** Car `car` drawn by `driven` is a helicopter: its rotors turn (while `on`, else they run down) and are heard. */
+  private spinRotor(car: number, on: boolean, dt: number): void {
+    if (this.isHeli(car)) this.ctx.audio?.rotor(this.driven.setRotor(on, dt));
+  }
+
   /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
   get modeHint(): string {
-    if (this.mode === 'drive') return DRIVE_HINT;
+    if (this.mode === 'drive') return this.heli ? HELI_HINT : DRIVE_HINT;
     if (this.mode === 'sit') return PASSENGER_HINT;
     if (this.mode === 'ride') {
       const t = this.bikeType();
@@ -292,7 +321,7 @@ export class Game {
         this.rig.setDisco(!this.rig.discoOn);
         this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
       }
-      honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
+      honk = this.mode === 'drive' && !this.heli && (hPressed || input.held('KeyH'));
       if (input.consume('KeyE') && !busy && !this.boarding) use = true;
       if (this.radioOn) for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
@@ -392,7 +421,7 @@ export class Game {
       else if (e.t === 'knock') this.knockSound(e.id);
       else if (e.t === 'enter' && e.id === me) this.enteredCar(e.car, e.seat);
       else if (e.t === 'exit' && e.id === me) this.leftCar(e.car, e.seat);
-      else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
+      else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'air' ? 'Erst landen' : e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
       else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
@@ -436,10 +465,10 @@ export class Game {
     const at = this.figure.group.position;
     const from = toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, at.x, at.z);
     this.boarding = { kind: 'in', car, seat, path: boardingPath(CAR_SPECS[type], CAR_SEATS[type], seat, from), t: 0 };
-    this.follow.setDriving(true, headingOf(pose));
+    this.follow.setDriving(true, headingOf(pose), this.isHeli(car) ? 'heli' : 'car');
     this.mode = driver ? 'drive' : 'sit';
     this.ctx.hud.setHint(this.modeHint);
-    if (driver) this.ctx.audio?.enterCar();
+    if (driver) this.ctx.audio?.enterCar(this.isHeli(car));
   }
 
   private leftCar(car: number, seat: number): void {
@@ -488,6 +517,7 @@ export class Game {
     if (this.carId === null && !this.pass) {
       this.cars.setOwn(null);
       this.driven.hide();
+      this.ctx.audio?.rotor(0);
     }
   }
 
@@ -557,6 +587,8 @@ export class Game {
     const a = this.session.alpha;
     const off = this.session.renderOffset();
     WATER_TIME.value = (WATER_TIME.value + dt) % 3600;
+    // the trains between the last two steps, as the own figure
+    this.transit?.update(this.session.sim.transitTick - 1 + a, this.ctx.camera.position.x, this.ctx.camera.position.z);
     this.ragdolls.step(dt);
     if (this.mode === 'walk') {
       // hit by a car: limp from the walking pose, thrown with the car's push
@@ -575,12 +607,18 @@ export class Game {
         out.t += dt;
         const st = leaveStage(out.t), at = this.leavingPose(out.car);
         this.driven.setPose(at);
+        this.spinRotor(out.car, false, dt);
         poseOccupant(this.figure, this.ctx.scene, this.driven, this.session.sim.cars.types[out.car]!, out.seat, at, st, dt);
         if (st.done) this.finishLeave();
       } else {
-        this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
+        const seat = this.transit?.seated(p.x, p.y, p.z);
+        if (seat) sitOnBench(this.figure, seat);
+        else this.figure.update(p.x, p.y, p.z, v, dt, !this.grounded, this.facing);
       }
-      if (!this.flying) this.follow.update(p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
+      // sitting on a bench: the feet are on its cushion and the head is lower than standing; the camera eases down with it
+      const sit = this.transit?.seated(p.x, p.y, p.z) ? 1 : 0;
+      this.sitDrop += (sit - this.sitDrop) * Math.min(1, dt * 6);
+      if (!this.flying) this.follow.update(this.sitDrop > 0.001 ? { x: p.x, y: p.y - SIT_DROP * this.sitDrop, z: p.z } : p, 0, dt, Math.hypot(this.vel.x, this.vel.z));
       const grounded = this.grounded;
       if (!grounded) this.airTime += dt;
       audio?.walk({ speed: Math.hypot(v.x, v.z), grounded, airTime: this.airTime }, dt);
@@ -635,11 +673,12 @@ export class Game {
       const level = this.carId !== null ? sim.ignition(car).lightLevel() : this.session.roster?.().cars.get(car)?.level ?? 0;
       // (the brake lights of somebody else's car come with the stream, as for every other car)
       this.driven.setLights(night, streamed ? streamed.brakeLight : sim.braking(car), lampPower(level, Math.random));
+      this.spinRotor(car, level > 0, dt);
       const v = streamed ? { x: streamed.vx, y: streamed.vy, z: streamed.vz } : vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
       // riding along: the car's radio, as the driver hears it
       if (this.pass) audio?.rideAlong(this.session.roster?.().cars.get(car)?.radio ?? null);
-      if (audio && this.carId !== null) {
+      if (audio && this.carId !== null && !this.isHeli(car)) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
         const h = headingOf(pose);
         const s = Math.sin(h), c = Math.cos(h);
@@ -653,11 +692,23 @@ export class Game {
       const { walkers, cars, riders } = this.session.remote!();
       const { names, variants, cars: info, seats } = this.session.roster!();
       this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants, seats);
-      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null), dt);
+      // (helicopters have a rotor, not a car engine; the one ridden along in is the own view's)
+      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null).filter((c) => !this.isHeli(c.id)), dt);
+      audio?.remoteRotors([...cars.values()].filter((c) => c.hasDriver && this.isHeli(c.id) && c.id !== this.pass?.car));
 
     }
     if (audio) {
       const f = this.focus();
+      const train = this.transit?.nearest(f.x, f.y, f.z) ?? null;
+      audio.transit(this.underground, train);
+      // riding: about half way to the next stop, it is announced
+      if (train?.inside && this.transit) {
+        if (train.speed > 1.5 && train.way >= 0.5 && train.next !== this.announced) {
+          this.announced = train.next;
+          audio.announceStop(train.next < 0 ? null : this.transit.stationName(train.next));
+        }
+      } else this.announced = -2;
+      for (const e of this.transit?.takeDoorEvents() ?? []) audio.trainDoors(e.opening, e.x, e.z);
       audio.listener(f.x, f.z, this.follow.yaw, nearestStop(this.tramStops, f.x, f.z), dt);
     }
   }

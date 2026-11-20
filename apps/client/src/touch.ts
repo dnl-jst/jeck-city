@@ -51,6 +51,8 @@ export type TouchState = {
   playing: boolean;
   mode: 'walk' | 'drive' | 'ride';
   bikeType: string | null;
+  /** Flying the helicopter (mode 'drive'): climb and sink buttons instead of handbrake and horn. */
+  heli: boolean;
   radio: boolean;
   disco: boolean;
   mapOpen: boolean;
@@ -64,6 +66,7 @@ const ICON = {
   enter: '<path d="M10 4h8a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-8"/><path d="M3 12h11M10 8l4 4-4 4"/>',
   exit: '<path d="M14 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8"/><path d="M10 12h11M17 8l4 4-4 4"/>',
   jump: '<path d="M12 20V5M6 11l6-6 6 6"/><path d="M5 21h14"/>',
+  sink: '<path d="M12 4v15M6 13l6 6 6-6"/><path d="M5 3h14"/>',
   brake: '<circle cx="12" cy="12" r="8"/><path d="M12 7v6"/><circle cx="12" cy="16.5" r=".6"/>',
   horn: '<path d="M3 10v4h4l6 4V6L7 10H3z"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
@@ -145,7 +148,7 @@ export class TouchControls {
   private look: { id: number; dx: number; dy: number } | null = null;
   /** Swipes on the free screen that look around: last position per pointer. */
   private readonly swipes = new Map<number, { x: number; y: number }>();
-  private readonly btns: Record<'use' | 'jump' | 'horn' | 'radio' | 'disco', Btn>;
+  private readonly btns: Record<'use' | 'jump' | 'sink' | 'horn' | 'radio' | 'disco', Btn>;
   private readonly sysBtns: Record<'map' | 'sound' | 'gfx' | 'figure' | 'full', Btn>;
   private readonly zoom: HTMLDivElement;
   private readonly rotate: HTMLDivElement;
@@ -184,6 +187,7 @@ export class TouchControls {
     this.btns = {
       use: btn('nn-main', this.root, 'KeyE'),
       jump: btn('', this.root, 'Space'),
+      sink: btn('', this.root, 'ShiftLeft'),
       horn: btn('', this.root, 'KeyH'),
       radio: btn('', this.root, 'KeyR'),
       disco: btn('', this.root, 'KeyL'),
@@ -279,6 +283,7 @@ export class TouchControls {
     place(this.btns.use.el, ...at(180, 1.05));
     place(this.btns.jump.el, ...at(145));
     place(this.btns.horn.el, ...at(112));
+    place(this.btns.sink.el, ...at(112)); // (shown instead of the horn)
     place(this.btns.radio.el, ...at(80));
     place(this.btns.disco.el, ...at(162, 1.75));
   }
@@ -411,24 +416,27 @@ export class TouchControls {
       if (!shown) this.releaseAll();
     }
     if (!shown) return;
-    const key = `${s.mode}|${s.bikeType}|${s.radio}|${s.disco}|${s.mapOpen}|${s.muted}|${s.flying}`;
+    const key = `${s.mode}|${s.heli}|${s.bikeType}|${s.radio}|${s.disco}|${s.mapOpen}|${s.muted}|${s.flying}`;
     if (key === this.last) return;
     this.last = key;
     this.walk = s.mode !== 'drive';
-    const { use, jump, horn, radio, disco } = this.btns;
-    const drive = s.mode === 'drive', ride = s.mode === 'ride';
+    const { use, jump, sink, horn, radio, disco } = this.btns;
+    const drive = s.mode === 'drive', ride = s.mode === 'ride', heli = drive && s.heli;
     if (s.mode === 'walk') setBtn(use, ICON.enter, 'Einsteigen');
     else setBtn(use, ICON.exit, drive ? 'Aussteigen' : 'Absteigen');
-    if (drive) setBtn(jump, ICON.brake, 'Handbremse');
+    if (heli) setBtn(jump, ICON.jump, 'Steigen');
+    else if (drive) setBtn(jump, ICON.brake, 'Handbremse');
     else setBtn(jump, ICON.jump, ride ? 'Hüpfen' : 'Springen');
     setBtn(horn, drive ? ICON.horn : ICON.bell, drive ? 'Hupe' : 'Klingel');
     setBtn(radio, ICON.radio, 'Radio');
     setBtn(disco, ICON.disco, 'Disco');
     use.el.hidden = jump.el.hidden = false;
-    horn.el.hidden = s.mode === 'walk';
+    setBtn(sink, ICON.sink, 'Sinken');
+    sink.el.hidden = !heli;
+    horn.el.hidden = s.mode === 'walk' || heli;
     radio.el.hidden = !s.radio;
     disco.el.hidden = !s.disco;
-    this.moveCap.textContent = drive ? 'Gas · Lenken' : ride ? (s.bikeType === 'escooter' ? 'Fahren' : 'Treten') : 'Laufen';
+    this.moveCap.textContent = heli ? 'Fliegen' : drive ? 'Gas · Lenken' : ride ? (s.bikeType === 'escooter' ? 'Fahren' : 'Treten') : 'Laufen';
     setBtn(this.sysBtns.sound, s.muted ? ICON.mute : ICON.sound, s.muted ? 'Ton an' : 'Ton aus');
     // the open map: sticks and action buttons rest, swipes pan, + and − zoom
     for (const b of Object.values(this.btns)) if (s.mapOpen || s.flying) b.el.hidden = true;

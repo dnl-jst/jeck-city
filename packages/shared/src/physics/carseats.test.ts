@@ -4,7 +4,7 @@ import { CAR_SPECS, CAR_TYPES } from './cartypes';
 
 describe('CAR_SEATS', () => {
   it('has a layout for every car type: four seats in the two cars with rear doors, two in the others', () => {
-    expect(CAR_TYPES.map((t) => CAR_SEATS[t]?.seats.length)).toEqual([4, 4, 2, 2]);
+    expect(CAR_TYPES.map((t) => CAR_SEATS[t]?.seats.length)).toEqual([4, 4, 2, 2, 2]);
   });
 
   it.each(CAR_TYPES)('%s: every seat behind its own door inside the body, the driver on the left', (type) => {

@@ -1,5 +1,6 @@
 import { ImpactDetector, landed, skidAmount, StepClock, TramBell } from './cues';
-import { MIX, type AudioMixer, type LoopVoice, type ShotVoice } from './mixer';
+import { MIX, type AudioMixer, type LoopVoice, type PositionalLoopVoice, type ShotVoice } from './mixer';
+import { trainVoices } from './train-sound';
 import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
@@ -11,7 +12,9 @@ import type { RemoteAudio, RemoteCarIn } from './remote-audio';
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
   AudioMixer, 'unlock' | 'load' | 'setMuted' | 'setInCar' | 'oneShot' | 'loop' | 'setListener' | 'suspend' | 'resume'
->;
+>
+  // (positional loops: the other players' helicopters; optional, so the tests' fakes need not have it)
+  & Partial<Pick<AudioMixer, 'loopAt'>>;
 /** The parts of Radio that GameAudio uses (fakes in tests). */
 export type RadioLike = Pick<Radio, 'tune' | 'setMuted' | 'unlocked' | 'suspend' | 'resume'>;
 
@@ -23,6 +26,9 @@ const STEPS: SoundId[] = ['step1', 'step2', 'step3', 'step4'];
  * The game's sound: turns player/car state into mixer cues and drives the car radio.
  * Loops (ambience, engine) start only once the sounds are loaded and the mixer is unlocked.
  */
+/** Pause between "Nächster Halt" and the station's name in a train's announcement (ms). */
+const STOP_PAUSE_MS = 280;
+
 export class GameAudio {
   /** Radio callbacks; main.ts hands these to the Radio. */
   readonly radioEvents = {
@@ -50,7 +56,19 @@ export class GameAudio {
   private staticVoice: LoopVoice | null = null;
   private readonly hornState = new HornState();
   private hornVoice: LoopVoice | null = null;
+  /** In a helicopter (no car engine or starter sounds), its rotor loop, and the other players' rotors by car. */
+  private heliMode = false;
+  private rotorVoice: LoopVoice | null = null;
+  private readonly rotors = new Map<number, PositionalLoopVoice>();
   private ambience: LoopVoice | null = null;
+  /** 0..1: how far underground the listener is (see transit()). */
+  private under = 0;
+  /** Recorded stop announcements (see stopClips), the clip playing and a counter: a newer announcement replaces an older one. */
+  private clips: Promise<Record<string, string> | null> | null = null;
+  private clip: HTMLAudioElement | null = null;
+  private announcement = 0;
+  private trainRoll: LoopVoice | null = null;
+  private trainMotor: LoopVoice | null = null;
   /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
   private rainVoice: LoopVoice | null = null;
   private rain = 0;
@@ -107,6 +125,7 @@ export class GameAudio {
     this.d.mixer.setMuted(this.muted);
     this.d.radio.setMuted(this.muted);
     this.d.remote?.setMuted(this.muted);
+    if (this.muted) this.clip?.pause();
     this.d.flash(this.muted ? 'Ton aus' : 'Ton an');
   }
 
@@ -124,8 +143,9 @@ export class GameAudio {
   }
 
   /** Getting in: door opens; the Ignition then calls doorClosed(), crank() and engineRunning(). */
-  enterCar(): void {
+  enterCar(heli = false): void {
     this.inCar = true;
+    this.heliMode = heli;
     this.impacts = new ImpactDetector();
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.setInCar(true);
@@ -136,6 +156,7 @@ export class GameAudio {
   }
 
   crank(): void {
+    if (this.heliMode) return; // the rotor spools up instead
     this.starter?.stop();
     this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine, bus: 'cabin' });
   }
@@ -183,7 +204,8 @@ export class GameAudio {
     this.d.tuner.exitCar();
     this.vehicle.stop();
     this.stopHorn();
-    if (running) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
+    if (running && !this.heliMode) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
+    this.heliMode = false;
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
     this.d.mixer.setInCar(false);
@@ -270,6 +292,41 @@ export class GameAudio {
     this.d.mixer.oneShot('impact2', { gain: MIX.impact * 0.7 });
   }
 
+  /** The own helicopter's rotor, every frame while it is drawn: level 0..1 = how fast it turns (0: silent). */
+  rotor(level: number): void {
+    if (level > 0.01 && !this.rotorVoice && this.loaded && this.unlocked) this.rotorVoice = this.d.mixer.loop('heliRotor', 'cabin');
+    if (!this.rotorVoice) return;
+    if (level <= 0.01) {
+      this.rotorVoice.stop();
+      this.rotorVoice = null;
+      return;
+    }
+    this.rotorVoice.setGain(MIX.heli * level * level);
+    this.rotorVoice.setRate(0.4 + 0.6 * level);
+  }
+
+  /** Online, every frame: the helicopters other players fly, each heard from where it is. */
+  remoteRotors(helis: readonly { id: number; x: number; z: number }[]): void {
+    const loopAt = this.d.mixer.loopAt?.bind(this.d.mixer);
+    if (!loopAt || !this.loaded || !this.unlocked) return;
+    const seen = new Set<number>();
+    for (const h of helis) {
+      seen.add(h.id);
+      let v = this.rotors.get(h.id);
+      if (!v) {
+        v = loopAt('heliRotor');
+        v.setGain(MIX.heli * 1.6);
+        this.rotors.set(h.id, v);
+      }
+      v.setPosition(h.x, h.z);
+    }
+    for (const [id, v] of this.rotors) {
+      if (seen.has(id)) continue;
+      v.stop();
+      this.rotors.delete(id);
+    }
+  }
+
   /** Online, every frame: the other players' cars (engines, horns, radio) around `listener`. */
   remoteCars(listener: { x: number; z: number }, cars: readonly RemoteCarIn[], dt: number): void {
     if (this.loaded && this.unlocked) this.d.remote?.update(listener, cars, Math.min(dt, MAX_DT));
@@ -295,13 +352,96 @@ export class GameAudio {
   /** Rain intensity 0..1 (0 when dry or snowing); remembered until the loops start. */
   weather(rain: number): void {
     this.rain = rain;
-    this.rainVoice?.setGain(MIX.rain * rain);
+    this.rainVoice?.setGain(MIX.rain * rain * (1 - this.under));
+  }
+
+  /**
+   * Every frame: how far the listener is underground (0..1: the city's ambience and the rain fade out down there) and
+   * the nearest train (distance, speed, whether the listener rides in it), or null.
+   */
+  transit(under: number, train: { dist: number; speed: number; inside: boolean } | null): void {
+    this.under = under;
+    this.ambience?.setGain(MIX.ambience * (1 - under));
+    this.rainVoice?.setGain(MIX.rain * this.rain * (1 - under));
+    if (!this.loaded || !this.unlocked) return;
+    const v = train ? trainVoices(train.dist, train.speed, train.inside) : null;
+    if (v && (v.roll > 0.003 || v.motor > 0.003)) {
+      this.trainRoll ??= this.d.mixer.loop('trainRoll', 'sfx');
+      this.trainMotor ??= this.d.mixer.loop('trainMotor', 'sfx');
+      this.trainRoll.setGain(MIX.train * v.roll);
+      this.trainRoll.setRate(v.rollRate);
+      this.trainMotor.setGain(MIX.train * 0.5 * v.motor);
+      this.trainMotor.setRate(v.motorRate);
+    } else if (this.trainRoll || this.trainMotor) {
+      this.trainRoll?.stop();
+      this.trainMotor?.stop();
+      this.trainRoll = this.trainMotor = null;
+    }
+  }
+
+  /**
+   * The announcement in a train: a chime, then "Nächster Halt" and the station's name from the recorded clips in
+   * /audio/stops/ (made by scripts/make-announcements.mjs). Without a clip for the station: spoken by the browser's
+   * speech synthesis (German voice if there is one; silent where the browser has none). null: the end of the line.
+   */
+  announceStop(name: string | null): void {
+    if (!this.loaded || !this.unlocked) return;
+    this.d.mixer.oneShot('trainChime', { gain: MIX.trainChime });
+    const turn = ++this.announcement;
+    void this.stopClips().then((clips) => {
+      if (turn !== this.announcement || this.muted) return;
+      const file = name === null ? 'end.ogg' : clips?.[name];
+      if (!file) return this.speakStop(name);
+      // after the chime: the prefix, then the name (the end-of-line clip stands alone)
+      const play = (f: string, then?: () => void): void => {
+        const a = new Audio(`/audio/stops/${f}`);
+        a.volume = 0.9;
+        this.clip = a;
+        a.onended = () => then?.();
+        a.onerror = () => { if (name !== null) this.speakStop(name); };
+        void a.play().catch(() => { /* not allowed to play yet: nothing is announced */ });
+      };
+      setTimeout(() => {
+        if (turn !== this.announcement) return;
+        this.clip?.pause();
+        if (name === null) play(file);
+        // (a short pause between "Nächster Halt" and the name)
+        else play('next.ogg', () => setTimeout(() => { if (turn === this.announcement) play(file); }, STOP_PAUSE_MS));
+      }, 900);
+    });
+  }
+
+  /** The recorded announcements: station name → file (index.json), fetched once; null if there are none. */
+  private stopClips(): Promise<Record<string, string> | null> {
+    this.clips ??= fetch('/audio/stops/index.json').then((r) => (r.ok ? r.json() as Promise<Record<string, string>> : null)).catch(() => null);
+    return this.clips;
+  }
+
+  private speakStop(name: string | null): void {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return;
+    // (spoken as written, but without what a voice stumbles over: "/" and abbreviations)
+    const spoken = name === null ? 'Endstation. Bitte alle aussteigen.' : `Nächster Halt: ${name.replace(/\//g, ', ').replace(/\bBf\b/g, 'Bahnhof').replace(/Str\./g, 'Straße')}.`;
+    const u = new SpeechSynthesisUtterance(spoken);
+    u.lang = 'de-DE';
+    u.rate = 0.95;
+    u.volume = 0.85;
+    const voice = synth.getVoices().find((v) => v.lang.startsWith('de'));
+    if (voice) u.voice = voice;
+    synth.cancel();
+    setTimeout(() => synth.speak(u), 900);
+  }
+
+  /** A train's doors start to open, or to close (three warning beeps first), at (x, z). */
+  trainDoors(opening: boolean, x: number, z: number): void {
+    this.d.mixer.oneShot(opening ? 'trainDoorOpen' : 'trainDoorClose', { gain: MIX.trainDoors, at: { x, z } });
   }
 
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
-    if (nearestTramStop && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
+    // (no bell from the street down in the underground)
+    if (nearestTramStop && this.under < 0.5 && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
       this.d.mixer.oneShot('tramBell', { gain: MIX.tramBell, at: { x: nearestTramStop.x, z: nearestTramStop.z } });
     }
   }
@@ -333,13 +473,13 @@ export class GameAudio {
     if (!this.loaded || !this.unlocked) return;
     if (!this.ambience) {
       this.ambience = this.d.mixer.loop('ambience', 'ambience');
-      this.ambience.setGain(MIX.ambience);
+      this.ambience.setGain(MIX.ambience * (1 - this.under));
     }
     if (!this.rainVoice) {
       this.rainVoice = this.d.mixer.loop('rain', 'ambience');
-      this.rainVoice.setGain(MIX.rain * this.rain);
+      this.rainVoice.setGain(MIX.rain * this.rain * (1 - this.under));
     }
-    if (this.inCar && this.engineOn) this.vehicle.start();
+    if (this.inCar && this.engineOn && !this.heliMode) this.vehicle.start();
     if (this.riding) this.bike.start();
   }
 }

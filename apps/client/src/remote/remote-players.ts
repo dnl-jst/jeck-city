@@ -9,6 +9,8 @@ import { poseOccupant, shutDoors, type SeatedIn } from '../occupant';
 import { BikeRig, RIDER_POSTURE } from '../bikes/rig';
 import { DrivenCar, lampPower, type CarModels, type WheelSource } from '../car';
 import { PlayerFigure } from '../player';
+import { sitOnBench } from '../transit';
+import type { Seated } from '@nn/shared';
 import { CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../ragdoll';
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
@@ -48,6 +50,8 @@ export interface CarView {
   seat?(i: number): Vector3 | null;
   grips?(): [Vector3, Vector3] | null;
   setDoor?(name: DoorName, k: number): void;
+  /** A helicopter's rotors turn while `on` (DrivenCar.setRotor). */
+  setRotor?(on: boolean, dt: number): number;
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
@@ -85,6 +89,8 @@ export type RemoteOptions = {
   /** Pitch and height so a remote bike's wheels sit on uneven ground (absent: shown level). */
   bikeGroundPose?(type: BikeType, s: BikeState): { pitch: number; dy: number };
   makeRig?: (type: BikeType) => RiderRig | null;
+  /** Someone at (x, y, z) who is in a train: where the train as drawn has them, and the bench they sit on (else null). */
+  aboard?(x: number, y: number, z: number): { x: number; y: number; z: number; seat: Seated | null } | null;
   makeLabel?: (name: string) => Label;
   makeCar?: () => CarView;
   /** The car the local player drives or the bike they ride, and its pose as drawn (someone on it is drawn on it), or null. */
@@ -203,6 +209,9 @@ export class RemotePlayers {
       const local = this.opts.localCar?.();
       const onIt = local ? this.opts.onOwnRoof?.(s.slot) ?? null : null;
       if (local && onIt) at = fromCarLocal(onIt, local.pose);
+      // in a train: with the train as it is drawn here
+      const train = onIt ? null : this.opts.aboard?.(s.x, s.y, s.z) ?? null;
+      if (train) at = train;
       let vx = 0, vz = 0;
       if (!w.fresh && dt > 1e-4) {
         if (onIt && w.roof) {
@@ -229,7 +238,8 @@ export class RemotePlayers {
       w.vz += (vz - w.vz) * k;
       w.px = s.x; w.pz = s.z;
       w.fig.setDown(s.state === 2 ? 1 : 0);
-      w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt, false, s.yaw);
+      if (train?.seat) sitOnBench(w.fig, train.seat);
+      else w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt, false, s.yaw);
       w.label = this.label(w.label, names.get(s.slot), at.x, at.y + FIGURE_H + LABEL_GAP, at.z, cp);
     }
     for (const [slot, w] of this.walkers) {
@@ -315,6 +325,7 @@ export class RemotePlayers {
         d.pose = pose;
         d.view.setPose(pose);
         if (c) d.view.setWheels(streamedWheels(c), dt);
+        d.view.setRotor?.((info?.level ?? 0) > 0, dt);
         // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
         d.view.setLights(night, c?.brakeLight ?? false, lampPower(info?.level ?? 0, Math.random));
         const who = others.map((o) => names.get(o.slot)).filter((n) => n !== undefined && n !== '').join(' · ');

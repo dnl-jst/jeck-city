@@ -12,6 +12,7 @@ import { InputQueue } from './inputs';
 import { JoinLimiter } from './join-limit';
 import { ipHash, log } from './log';
 import { BikeSlowState, CarState, LampState, NippesState, PlayerState } from './state';
+import { SERVER_VERSION } from './version';
 
 /** Metres a player moves before the coarse map position in the slow state is rewritten. */
 const MAP_POS_STEP = 4;
@@ -167,7 +168,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       slot, name, mode: MODE.walk, carId: -1, seat: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
     }));
     this.watchMessageSize(client);
-    client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick });
+    client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick, transitEpoch: this.sim.transitEpoch, version: SERVER_VERSION });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
   }
 
@@ -189,7 +190,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     seat.away = false;
     seat.interest = new Interest(); // the new connection knows nothing yet
     this.watchMessageSize(client);
-    this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick }));
+    this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick, transitEpoch: this.sim.transitEpoch, version: SERVER_VERSION }));
     log('info', 'reconnect', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash });
   }
 
@@ -233,8 +234,9 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
    * /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks, plus the totals since start
    * (ticks run, steps dropped) and the process' resident memory.
    */
-  health(): Health & { ticks: number; droppedTotal: number; rssMb: number } {
+  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; version: string } {
     return {
+      version: SERVER_VERSION,
       ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
       rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
     };

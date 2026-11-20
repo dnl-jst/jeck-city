@@ -14,6 +14,14 @@ test('fixture feature counts', () => {
   expect(f.greens).toHaveLength(1);
 });
 
+test('subway entrances and mainline rail bridges do not leak into roads, tracks, stops or shops', () => {
+  const f = parseOsm({ elements: [
+    { type: 'node', id: 1, lat: 50.9638, lon: 6.9538, tags: { railway: 'subway_entrance', name: 'Florastraße', level: '0;-2' } },
+    { type: 'way', id: 2, tags: { railway: 'rail', bridge: 'yes', layer: '1' }, geometry: [{ lat: 50.96, lon: 6.94 }, { lat: 50.961, lon: 6.94 }] },
+  ] });
+  expect([f.roads, f.tramTracks, f.tramStops, f.shops, f.greens]).toEqual([[], [], [], [], []]);
+});
+
 test('residential road without tags is 2 × 3.0 m wide, two-way, two lanes', () => {
   const r = loadFixture().roads.find((x) => x.name === 'Teststraße')!;
   expect(r).toMatchObject({ kind: 'residential', width: 6.0, oneway: false, lanes: 2 });

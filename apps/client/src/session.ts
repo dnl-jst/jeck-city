@@ -32,6 +32,8 @@ export interface Session {
   renderOffset(): RenderOffset;
   /** Online only: other players (on foot, driving, riding), cars and names as of this frame. */
   remote?(): { walkers: ReadonlyMap<string, SnapshotWalker>; cars: ReadonlyMap<string, SnapshotCar>; riders: ReadonlyMap<string, SnapshotRider> };
+  /** Online only: the server tick remote() is sampled at (trains are placed by the tick: where a remote passenger's train was then). */
+  readonly remoteTick?: number;
   /**
    * While the local player drives: where another player (slot) stands on the own car's roof, in the car's frame (from
    * the newest snapshot, where both are of one server tick); null if they are not on it.

@@ -2,7 +2,7 @@ import {
   ACESFilmicToneMapping, Mesh, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, Timer, WebGLRenderer,
 } from 'three';
 import {
-  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, sunState, surfaceY, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
+  CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, SECTION_STRIDE, sectionStates, sunState, surfaceY, withTransitCollision, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
   type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
@@ -21,6 +21,7 @@ import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
 import { CAMERA_FOV } from './camera';
 import { DebugOverlay } from './debug';
+import { setServerVersion } from './version-label';
 import { attachInput, Input } from './input';
 import { TouchControls, touchPreferred } from './touch';
 import { Game } from './game';
@@ -50,7 +51,7 @@ declare global {
      * height of the first static surface below 100 m above the terrain at (x, z).
      */
     __nnState?: () => {
-      mode: 'walk' | 'drive' | 'ride' | 'sit'; bikeType: string | null; flying: boolean; /** Fell off a bike: lying or getting up. */ fallen: boolean; x: number; y: number; z: number; speed: number; steps: number; radio: StationId | null;
+      mode: 'walk' | 'drive' | 'ride' | 'sit'; bikeType: string | null; flying: boolean; /** Fell off a bike: lying or getting up. */ fallen: boolean; x: number; y: number; z: number; /** The follow camera's yaw (forward = (sin, cos) in x/z). */ yaw: number; speed: number; steps: number; radio: StationId | null;
       engine: 'off' | 'starting' | 'running'; mapOpen: boolean; wheelOpen: boolean; wheelHighlighted: StationId | null;
       /** Online: how far (m) server corrections moved the rendered own pose in the last frame (0 offline). */
       correction: number;
@@ -62,6 +63,11 @@ declare global {
       reconciles: { replayed: number; skipped: number; hard: number } | null;
     };
     __nnSurfaceY?: (x: number, z: number) => number | null;
+    /**
+     * Read-only: the active train sections (underground Stadtbahn) nearest to (x, z), nearest first: centre at rail-top
+     * height, yaw, speed (m/s), doors open left/right (0..1), station stood at (index, −1 while driving).
+     */
+    __nnTrains?: (x: number, z: number, n?: number) => { x: number; y: number; z: number; yaw: number; speed: number; left: number; right: number; station: number }[];
     /** Dev/debug: the server connection (null offline). */
     __nnConn?: () => Connection | null;
     /** Online (read-only): the other players as sampled for the current frame; mode 'down' = knocked over. */
@@ -226,6 +232,9 @@ if (debug) {
 
 let lighting: Lighting | null = null;
 let precip: Precipitation | null = null;
+/** 0..1: the player is below the ground (eased), and the terrain to tell by. */
+let underground = 0;
+let terrainNow: TerrainGrid | null = null;
 let boundaryGlow: BoundaryGlow | null = null;
 /** Applies the current quality level to the renderer, lights, shadows, view distance, chunks, trees, cars and rain/snow (all live but MSAA). */
 function applyQuality(): void {
@@ -270,11 +279,17 @@ renderer.setAnimationLoop((t: number) => {
       hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
     }
     touch.update({
-      playing: true, mode: game.mode === 'sit' ? 'walk' : game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
+      playing: true, mode: game.mode === 'sit' ? 'walk' : game.mode, bikeType: game.bikeType(), heli: game.heli, radio: game.radioOn, disco: game.discoAvailable,
       mapOpen: game.map.open, muted: gameAudio.isMuted, flying: game.flying,
     });
     touch.tick(dt);
-    game.frame(dt, nightFactor);
+    // underground (a station, the tunnel): no rain or snow, no city ambience, and lights on as at night
+    {
+      const f = game.focus(), below = terrainNow && f.y < heightAt(terrainNow, f.x, f.z) - 2.5 ? 1 : 0;
+      underground += (below - underground) * Math.min(1, dt * 3);
+      game.underground = underground;
+    }
+    game.frame(dt, Math.max(nightFactor, underground));
     for (const i of game.takeFallenLamps()) {
       props.knockDown(i);
       lighting.lampOut(i);
@@ -320,7 +335,7 @@ renderer.setAnimationLoop((t: number) => {
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
-    precip?.update(dt, camera.position, look);
+    precip?.update(dt, camera.position, underground > 0.5 ? { ...look, rain: 0, snow: 0 } : look);
     const f = game.flying ? camera.position : game.focus();
     boundaryGlow?.update(dt, f.x, f.z, nightFactor);
     // the far plane at the fog's end: what the fog hides completely is culled, not drawn
@@ -348,7 +363,8 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundar
   // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain] = await Promise.all([
-    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => decodeCollision(await r.arrayBuffer())),
+    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
+      async (file) => (await fetchOk(`/world/${file}`, { cache: 'no-cache' })).arrayBuffer())),
     fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
@@ -390,6 +406,8 @@ async function connect(): Promise<Connection | null> {
     try {
       const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
       conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
+      setServerVersion(conn.welcome.version ?? null);
+      conn.onWelcome((w) => setServerVersion(w.version ?? null)); // a reconnect may reach a newer server
       dialog.close();
       lobby = null;
       return conn;
@@ -424,6 +442,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   hud.setAttribution(m.attribution);
   farGround.position.y = m.farGroundY;
   farGround.visible = true;
+  terrainNow = terrain;
   props = new Props(scene, m, terrain, await loadTreeVariants());
   lighting = new Lighting(
     scene, m.lamps, props.lampGlass, props.halo, world.facade.userData.nightFactor, world.facade.userData.sky,
@@ -444,6 +463,12 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   } else {
     sim.addPlayer(OFFLINE_ME, start);
     session = new OfflineSession(sim, OFFLINE_ME);
+    // offline with ?time=HH:MM: the trains' timetable runs from that time of today (the sun does too)
+    const at = parseTimeOverride(timeOverride);
+    if (at) {
+      const d = new Date();
+      sim.setTransitEpoch(Date.now() + (at.h * 3600 + at.m * 60 - (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds())) * 1000);
+    }
   }
   game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level
@@ -466,7 +491,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   window.__nnState = () => {
     const f = game!.focus();
     return {
-      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, fallen: game!.figure.busy, x: f.x, y: f.y, z: f.z, speed: game!.speed(), steps: game!.steps,
+      mode: game!.mode, bikeType: game!.bikeType(), flying: game!.flying, fallen: game!.figure.busy, x: f.x, y: f.y, z: f.z, yaw: game!.follow.yaw, speed: game!.speed(), steps: game!.steps,
       radio: gameAudio.station, fov: camera.fov,
       engine: game!.engine, mapOpen: game!.map.open, wheelOpen: game!.wheelState.open, wheelHighlighted: game!.wheelState.highlighted,
       correction: session instanceof OnlineSession ? session.correction : 0,
@@ -490,6 +515,14 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     return remoteList(onlineSession.remote(), roster.names, roster.cars, onlineSession.me);
   };
   window.__nnRemoteAudio = () => ({ ...remoteAudio.stats, levels: [...remoteAudio.engineLevels()] });
+  window.__nnTrains = (x, z, n = 6) => {
+    if (!sim.trains) return [];
+    const s = sectionStates(sim.trains.model, sim.transitTick), out = [];
+    for (let o = 0; o < s.length; o += SECTION_STRIDE) {
+      if (s[o] === 1) out.push({ x: s[o + 1]!, y: s[o + 2]!, z: s[o + 3]!, yaw: s[o + 4]!, speed: s[o + 8]!, left: s[o + 6]!, right: s[o + 7]!, station: s[o + 9]! });
+    }
+    return out.sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z)).slice(0, n);
+  };
   window.__nnSurfaceY = (x, z) => surfaceY(sim.pw, x, z, heightAt(terrain, x, z) + 100);
   stopDownloadMeter();
   hud.hideLoading();

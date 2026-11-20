@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import type { OsmFeatures } from './osm.js';
 import { placeShelter, SHELTER_OFFSET } from './stops.js';
 
-const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
+const empty: OsmFeatures = { boundary: [], roads: [], tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], platforms: [], greens: [], trees: [], lamps: [], shops: [], squares: [], bikeParking: [] };
 // track runs north (−z) along x = 0
 const track = [{ x: 0, z: 100 }, { x: 0, z: -100 }];
 

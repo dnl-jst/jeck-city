@@ -5,6 +5,8 @@ import { CAR_SPECS } from '../physics/cartypes';
 import { Character, type CharacterState } from '../physics/character';
 import { BikeRacks, dismountSpot, ParkedBikes, type BikePose } from '../physics/parkedbikes';
 import { StreetProps } from '../physics/props';
+import { Trains } from '../physics/trains';
+import { benchPlace } from '../transit';
 import { surfaceY } from '../physics/surface';
 import { TUNING } from '../physics/tuning';
 import type { VehicleState } from '../physics/vehicle';
@@ -33,7 +35,8 @@ export type SimEvent =
   /** E on foot next to a bike someone else rides (and nothing free in reach). */
   | { t: 'mountDenied'; id: PlayerId }
   | { t: 'exit'; id: PlayerId; car: number; seat: number }
-  | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' }
+  /** 'air': a helicopter that is not standing on the ground. */
+  | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' | 'air' }
   | { t: 'mount'; id: PlayerId; bike: number }
   /**
    * Off the bike: stepped (or jumped) off, or `crash`ed into something or hit by a car (the rider falls and lies for
@@ -126,6 +129,13 @@ export class WorldSim {
   private readonly horns: boolean[];
   private readonly resets = new ResetTimers();
   private readonly proxies: Proxies;
+  /** The underground trains (null in a world without transit). */
+  readonly trains: Trains | null;
+  /**
+   * The tick the trains run on. The server (and offline play): its own tick. The client's prediction: the server's
+   * tick its next input will be applied in (setTransitTick), so the train a player stands in is where the server has it.
+   */
+  private transitAt: number | null = null;
 
   private constructor(
     readonly pw: PhysicsWorld, readonly cars: CarPool, readonly props: StreetProps, readonly bikes: ParkedBikes, readonly racks: BikeRacks,
@@ -135,6 +145,31 @@ export class WorldSim {
     this.brakes = cars.poses.map(() => false);
     this.horns = cars.poses.map(() => false);
     this.proxies = new Proxies(pw, cars, bikes);
+    this.trains = a.manifest.transit ? new Trains(pw, a.manifest.transit) : null;
+  }
+
+  /** The tick the trains are at now (after the last step). */
+  get transitTick(): number {
+    return this.transitAt ?? this.tick;
+  }
+
+  /** The real time of the trains' tick 0 (ms since the epoch; the timetable runs on the clock), or null without trains. */
+  get transitEpoch(): number | null {
+    return this.trains?.model.epochMs ?? null;
+  }
+
+  /** The trains' clock: tick 0 was at `ms` (the client takes the server's; offline a chosen time of day). */
+  setTransitEpoch(ms: number): void {
+    if (!this.trains || this.trains.model.epochMs === ms) return;
+    this.trains.model.epochMs = ms;
+    this.trains.place(this.transitTick, this.playerPoints());
+  }
+
+  /** Client prediction: the trains run on the server's tick from here on (the next step moves them to tick + 1). */
+  setTransitTick(tick: number): void {
+    if (this.transitAt === tick) return;
+    this.transitAt = tick;
+    this.trains?.place(tick, this.playerPoints());
   }
 
   /**
@@ -147,7 +182,7 @@ export class WorldSim {
     a: WorldAssets, opts: { foci?: 'players' | { x: number; z: number }[]; sliceMs?: number; streamCity?: readonly XZ[] } = {},
   ): Promise<WorldSim> {
     const stream = opts.streamCity ? [a.manifest.spawn, ...opts.streamCity] : undefined;
-    const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs, stream });
+    const pw = await createPhysicsWorld(a.collision, a.terrain, { sliceMs: opts.sliceMs, stream, openings: a.manifest.transit?.openings });
     const slice = timeSlicer(opts.sliceMs);
     const props = new StreetProps(pw, a.manifest.lamps, a.manifest.trees, a.terrain);
     await slice();
@@ -259,7 +294,9 @@ export class WorldSim {
       this.cars.updateProximity(foci);
       this.bikes.updateProximity(foci);
     }
+    this.trains?.advance(this.transitTick + 1, this.playerPoints());
     this.pw.step();
+    if (this.transitAt !== null) this.transitAt++;
     this.cars.sync();
     this.bikes.sync();
     for (const pl of this.list.values()) if (pl.car === null && pl.bike === null && !pl.pass) this.turnFacing(pl);
@@ -335,9 +372,14 @@ export class WorldSim {
    * and every lamp is put back afterwards, so only the own entity ends up on the new state. onStep(k) runs after
    * input k.
    */
-  replay(id: PlayerId, from: OwnState, inputs: readonly PlayerInput[], onStep?: (k: number) => void): void {
+  replay(id: PlayerId, from: OwnState, inputs: readonly PlayerInput[], onStep?: (k: number) => void, transitTick?: number): void {
     const pl = this.list.get(id);
     if (!pl) throw new Error(`no player ${id}`);
+    // the trains as they were when the server made `from`; they run along with the replayed steps
+    if (transitTick !== undefined) {
+      this.transitAt = transitTick;
+      this.trains?.place(transitTick, this.playerPoints());
+    }
     this.setOwn(id, pl, from);
     // a correction may move the player far (a teleport, a respawn): the city there must exist before the replay
     this.pw.city?.update(this.playerPoints(), 0);
@@ -350,6 +392,10 @@ export class WorldSim {
       this.useEdge(id, pl, input, ev);
       if (pl.car !== null) this.ignitions[pl.car]!.update();
       this.applyInput(id, pl, input, ev);
+      if (transitTick !== undefined) {
+        this.trains?.advance(transitTick + k + 1);
+        this.transitAt = transitTick + k + 1;
+      }
       this.pw.step();
       onStep?.(k);
     });
@@ -483,7 +529,7 @@ export class WorldSim {
     if (input.use && !pl.use && pl.fallTicks === 0) {
       if (pl.car !== null || pl.pass) this.getOut(id, pl, ev);
       else if (pl.bike !== null) this.getOffBike(id, pl, ev);
-      else this.getIn(id, pl, ev);
+      else if (!this.useBench(pl)) this.getIn(id, pl, ev);
     }
     pl.use = input.use;
   }
@@ -514,12 +560,21 @@ export class WorldSim {
     } else if (pl.pass) {
       // riding along: nothing to control
     } else if (pl.car === null) {
-      pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
+      // sitting on a bench in a train, and not walking off it: at rest there
+      if (this.trains && input.forward === 0 && input.right === 0 && !jump && !pl.char.isDown() && this.seated(pl)) pl.char.rest();
+      else pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
       const v = this.cars.vehicle(pl.car)!;
-      const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
-      v.applyInput({ throttle, steer: input.right, brake: input.brake });
-      this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+      const running = this.ignitions[pl.car]!.state === 'running';
+      const throttle = running ? input.forward : 0;
+      if (v.spec.fly) {
+        // the helicopter: Space climbs, Shift sinks (once the rotor runs)
+        v.applyInput({ throttle, steer: input.right, brake: false, lift: running ? (input.brake ? 1 : 0) - (input.run ? 1 : 0) : 0 });
+        this.brakes[pl.car] = false;
+      } else {
+        v.applyInput({ throttle, steer: input.right, brake: input.brake });
+        this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+      }
       this.horns[pl.car] = input.horn === true;
     }
   }
@@ -591,6 +646,28 @@ export class WorldSim {
     pl.jump = s.jump ?? false;
   }
 
+  /**
+   * E in a train: onto the nearest bench (the feet on its cushion; the clients draw whoever is there sitting), or off
+   * it into the aisle. No state of its own: only where the person is. False if no bench is in reach.
+   */
+  private useBench(pl: Player): boolean {
+    if (!this.trains || pl.char.isDown()) return false;
+    const p = pl.char.position(), place = benchPlace(this.trains.states, p.x, p.y, p.z);
+    if (!place) return false;
+    if (place.on) pl.char.teleport({ x: place.aisle.x, y: place.aisle.y + DROP, z: place.aisle.z });
+    else {
+      pl.char.teleport({ x: place.seat.x, y: place.seat.y + DROP, z: place.seat.z });
+      pl.facing = place.seat.yaw;
+    }
+    return true;
+  }
+
+  /** Whether the person is on a bench of a train (see useBench). */
+  private seated(pl: Player): boolean {
+    const p = pl.char.position();
+    return benchPlace(this.trains!.states, p.x, p.y, p.z)?.on === true;
+  }
+
   private getIn(id: PlayerId, pl: Player, ev: SimEvent[]): void {
     if (pl.char.isDown()) return; // knocked down: no getting into a car
     const pos = pl.char.position();
@@ -641,6 +718,10 @@ export class WorldSim {
   private getOut(id: PlayerId, pl: Player, ev: SimEvent[]): void {
     const i = pl.car ?? pl.pass!.car, seat = pl.pass?.seat ?? DRIVER_SEAT;
     const v = this.cars.vehicle(i);
+    if (v?.spec.fly && v.wheelsInContact() < 2) {
+      ev.push({ t: 'exitDenied', id, reason: 'air' });
+      return;
+    }
     if (v && !canGetOut(v.speed())) {
       ev.push({ t: 'exitDenied', id, reason: 'speed' });
       return;

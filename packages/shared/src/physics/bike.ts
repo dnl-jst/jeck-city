@@ -91,6 +91,11 @@ export class RiddenBike {
     // light dynamic bodies (parked bikes) are not obstacles for the frame cast: the kinematic frame shoves them; nor
     // are people standing on the bike (a passenger in the cargo box)
     this.notMe = (c) => {
+      // in a stairwell down to the underground the terrain is open (see PhysicsWorld.terrain): the stairs carry the bike.
+      // First, and by the handle alone: inside the controller's query (it applies impulses, so it holds the collider
+      // set) every Collider method throws "recursive use", and a throwing predicate counts as a hit.
+      const t = this.pw.terrain;
+      if (t && c.handle === t.handle && t.open(this.s.x, this.s.z)) return false;
       if (c.isSensor()) return false;
       if (c.collisionGroups() >>> 16 === CHARACTER_GROUPS >>> 16) {
         const feet = c.translation().y - CHARACTER_CENTRE, bottom = this.body.translation().y + this.frameY - hy;

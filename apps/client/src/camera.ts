@@ -1,5 +1,5 @@
 import { Euler, Vector3, type PerspectiveCamera } from 'three';
-import { staticWorldFilter, VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
+import { staticWorldFilter, TRAIN_FLOOR_GROUPS, TRAIN_GROUPS, VEHICLE_REST_Y, type PhysicsWorld } from '@nn/shared';
 import type { Input } from './input';
 import { angleDelta } from './player';
 
@@ -8,6 +8,8 @@ export const CAMERA_WALK = { back: 5, up: 2.3, pivot: 1.5 };
 /** Vertical field of view (degrees). */
 export const CAMERA_FOV = 60;
 export const CAMERA_DRIVE = { back: 7, up: 2.5, pivot: 1.7 };
+/** In the helicopter: far enough back to see the rotor and the ground it flies over. */
+export const CAMERA_HELI = { back: 11, up: 4.2, pivot: 2.4 };
 /** On a bike: closer and lower than on foot; target y is the ground under the wheels. */
 export const CAMERA_RIDE = { back: 4.2, up: 1.9, pivot: 1.3 };
 const MOUSE = 0.0025;
@@ -28,6 +30,8 @@ const SHAKE = { bike: { m: 0.03, roll: 0.004 }, car: { m: 0.018, roll: 0.0025 } 
 const MIN_DIST = 0.9;
 /** The camera only collides with the static city (not cars, not the player). */
 const STATIC_ONLY = staticWorldFilter();
+/** Membership bits of a train's colliders (kinematic, so not part of the static world). */
+const IN_TRAIN = new Set([TRAIN_GROUPS >>> 16, TRAIN_FLOOR_GROUPS >>> 16]);
 
 const smooth01 = (x: number) => {
   const t = Math.min(1, Math.max(0, x));
@@ -85,7 +89,7 @@ export class FollowCamera {
   private idle = 0;
   private driving = false;
   /** While driving: a car (target = chassis centre) or a bike (target = ground under the wheels). */
-  private vehicle: 'car' | 'bike' = 'car';
+  private vehicle: 'car' | 'bike' | 'heli' = 'car';
   private readonly look = new Vector3();
   /** Smoothed speed widening (0..1) and shake strength, and the shake clock. */
   private widen = 0;
@@ -105,7 +109,7 @@ export class FollowCamera {
   }
 
   /** Switches between walk and drive framing (car or bike); getting in starts behind the vehicle. */
-  setDriving(on: boolean, carHeading = 0, vehicle: 'car' | 'bike' = 'car'): void {
+  setDriving(on: boolean, carHeading = 0, vehicle: 'car' | 'bike' | 'heli' = 'car'): void {
     this.vehicle = vehicle;
     if (on && !this.driving) {
       this.carYaw = carHeading;
@@ -138,8 +142,9 @@ export class FollowCamera {
    */
   update(target: { x: number; y: number; z: number }, carHeading: number, dt: number, speed = 0): void {
     const bike = this.driving && this.vehicle === 'bike';
-    const base = bike ? CAMERA_RIDE : this.driving ? CAMERA_DRIVE : CAMERA_WALK;
-    const kind: ShakeKind = bike ? 'bike' : this.driving ? 'car' : 'walk';
+    const heli = this.driving && this.vehicle === 'heli';
+    const base = bike ? CAMERA_RIDE : heli ? CAMERA_HELI : this.driving ? CAMERA_DRIVE : CAMERA_WALK;
+    const kind: ShakeKind = bike ? 'bike' : this.driving && !heli ? 'car' : 'walk'; // (no road under a helicopter: no shake)
     const kfx = 1 - Math.exp(-dt / SPEED_FX_TAU);
     this.widen += (speedWiden(speed) - this.widen) * kfx;
     this.shake += (shakeAmount(speed, kind) - this.shake) * kfx;
@@ -189,7 +194,11 @@ export class FollowCamera {
   /** How far the camera may sit from p along (dx, dy, dz) before hitting static geometry (≤ max). */
   private clearDistance(p: Vector3, dx: number, dy: number, dz: number, max: number): number {
     const { rapier: R, world } = this.pw;
-    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, undefined, undefined, undefined, undefined, STATIC_ONLY);
+    // in a stairwell the terrain is open (see PhysicsWorld.terrain): the heightfield must not pull the camera in
+    const t = this.pw.terrain, open = t?.open(p.x, p.z) ? t.handle : -1;
+    const hit = world.castRay(new R.Ray({ x: p.x, y: p.y, z: p.z }, { x: dx, y: dy, z: dz }), max + 0.3, true, undefined, undefined, undefined, undefined,
+      // (a train's walls and roof count too: inside one, the camera stays inside)
+      (c) => c.handle !== open && (IN_TRAIN.has(c.collisionGroups() >>> 16) || STATIC_ONLY(c)));
     return hit ? Math.max(MIN_DIST, Math.min(max, hit.timeOfImpact - 0.3)) : max;
   }
 }

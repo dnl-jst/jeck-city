@@ -1,4 +1,4 @@
-import { decodeCollision, type CollisionAsset } from '../assets/collision';
+import { decodeCollision, mergeCollision, type CollisionAsset } from '../assets/collision';
 import { parseManifest, type WorldManifest } from '../assets/manifest';
 import { decodeTerrain, type TerrainGrid } from '../assets/terrain';
 
@@ -11,7 +11,13 @@ export type WorldAssets = { manifest: WorldManifest; collision: CollisionAsset; 
 /** Reads manifest.json, collision.bin and terrain.bin through `read` (fetch in the browser, fs on the server). */
 export async function loadWorldAssets(read: (file: string) => Promise<ArrayBuffer>): Promise<WorldAssets> {
   const [m, c, t] = await Promise.all([read('manifest.json'), read('collision.bin'), read('terrain.bin')]);
-  return { manifest: parseManifest(JSON.parse(new TextDecoder().decode(m))), collision: decodeCollision(c), terrain: decodeTerrain(t) };
+  const manifest = parseManifest(JSON.parse(new TextDecoder().decode(m)));
+  return { manifest, collision: await withTransitCollision(manifest, decodeCollision(c), read), terrain: decodeTerrain(t) };
+}
+
+/** The city's collision with the Stadtbahn's own file added (manifest.transitCollision), if the world has one. */
+export async function withTransitCollision(manifest: WorldManifest, city: CollisionAsset, read: (file: string) => Promise<ArrayBuffer>): Promise<CollisionAsset> {
+  return manifest.transitCollision ? mergeCollision(city, decodeCollision(await read(manifest.transitCollision.file))) : city;
 }
 
 /**

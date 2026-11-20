@@ -1,5 +1,6 @@
 import { BIKE_TYPES, type BikeType } from '../physics/biketypes';
 import { CAR_TYPES, type CarType } from '../physics/cartypes';
+import type { Transit } from '../transit';
 
 /** Player character models (data/models/character, character_<variant>.glb). */
 export const CHARACTER_VARIANTS = ['man', 'woman'] as const;
@@ -95,6 +96,13 @@ export type WorldManifest = {
   datum: number;
   /** Height for the flat ground beyond the terrain grid: lowest grid-border height − 0.5 m. */
   farGroundY: number;
+  /** The underground Stadtbahn (tracks, stations, stairwells; see transit.ts). Missing in older manifests and worlds without one. */
+  transit?: Transit;
+  /**
+   * The Stadtbahn's own collision triangles (tunnel, platforms, stairs; same format as collision.bin, no boundary),
+   * added to collision.bin when the world is built. A file of its own so the Stadtbahn can be rebuilt without the city.
+   */
+  transitCollision?: { file: string; bytes: number };
   attribution: string;
 };
 
@@ -215,6 +223,42 @@ export function parseManifest(json: unknown): WorldManifest {
     terrain: { file: 'terrain.bin', bytes: num(t.bytes, 'terrain.bytes') },
     datum: num(o.datum, 'datum'),
     farGroundY: num(o.farGroundY, 'farGroundY'),
+    ...(o.transit === undefined ? {} : { transit: parseTransit(o.transit) }),
+    ...(o.transitCollision === undefined ? {} : {
+      transitCollision: { file: str(obj(o.transitCollision, 'transitCollision').file, 'transitCollision.file'), bytes: num(obj(o.transitCollision, 'transitCollision').bytes, 'transitCollision.bytes') },
+    }),
     attribution: str(o.attribution, 'attribution'),
+  };
+}
+
+function parseTimetable(v: unknown, p: string): NonNullable<Transit['tracks'][number]['timetable']> {
+  const o = obj(v, p), days = arr(o.days, `${p}.days`, (d, q) => arr(d, q, num));
+  if (days.length !== 3) fail(`${p}.days`, 'must hold three lists (weekday, Saturday, Sunday)');
+  return { patterns: arr(o.patterns, `${p}.patterns`, (x, q) => arr(x, q, num)), days: [days[0]!, days[1]!, days[2]!] };
+}
+
+function parseTransit(v: unknown): Transit {
+  const o = obj(v, 'transit');
+  return {
+    headway: num(o.headway, 'transit.headway'),
+    stations: arr(o.stations, 'transit.stations', (x, p) => ({ name: str(obj(x, p).name, `${p}.name`), ...nums(x, p, ['x', 'y', 'z']) })),
+    tracks: arr(o.tracks, 'transit.tracks', (x, p) => {
+      const t = obj(x, p), pts = arr(t.pts, `${p}.pts`, num);
+      if (pts.length < 6 || pts.length % 3 !== 0) fail(`${p}.pts`, 'must hold at least two x, y, z points');
+      return {
+        pts,
+        stops: arr(t.stops, `${p}.stops`, (y, q) => {
+          const s = nums(y, q, ['station', 's', 'side']);
+          if (s.side !== 1 && s.side !== -1) fail(`${q}.side`, 'must be 1 or -1');
+          return { ...s, side: s.side, ...(obj(y, q).under === true ? { under: true } : {}) };
+        }),
+        ...(t.line === undefined ? {} : { line: str(t.line, `${p}.line`) }),
+        ...(t.to === undefined ? {} : { to: str(t.to, `${p}.to`) }),
+        ...(t.headway === undefined ? {} : { headway: num(t.headway, `${p}.headway`) }),
+        ...(t.phase === undefined ? {} : { phase: num(t.phase, `${p}.phase`) }),
+        ...(t.timetable === undefined ? {} : { timetable: parseTimetable(t.timetable, `${p}.timetable`) }),
+      };
+    }),
+    openings: arr(o.openings, 'transit.openings', (x, p) => arr(x, p, num)),
   };
 }
