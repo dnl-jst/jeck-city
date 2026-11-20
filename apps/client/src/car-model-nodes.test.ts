@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { CAR_SEATS, CAR_TYPES } from '@nn/shared';
+import { CAR_SEATS, CAR_SPECS, CAR_TYPES } from '@nn/shared';
 import { describe, expect, it } from 'vitest';
 
 type Gltf = {
@@ -34,7 +34,8 @@ describe.each(CAR_TYPES)('%s model', (type) => {
 
   it('has the nodes the client uses by name', () => {
     for (const n of ['body', 'interior', 'steering', 'grip_l', 'grip_r', ...Object.keys(L.doors), ...L.seats.map((_, i) => `seat_${i}`),
-      'wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr', 'light_fl', 'light_fr', 'tail_l', 'tail_r']) {
+      // (the helicopter stands on skids and has rotors instead)
+      ...(CAR_SPECS[type].fly ? ['rotor_main', 'rotor_tail'] : ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr']), 'light_fl', 'light_fr', 'tail_l', 'tail_r']) {
       expect(names, n).toContain(n);
     }
   });
@@ -55,7 +56,7 @@ describe.each(CAR_TYPES)('%s model', (type) => {
   });
 });
 
-describe.each(CAR_TYPES)('%s model plates', (type) => {
+describe.each(CAR_TYPES.filter((t) => !CAR_SPECS[t].fly))('%s model plates', (type) => {
   it('has a node for each number plate, front ahead of the rear', () => {
     const g = readModel(type);
     const at = (name: string) => g.nodes.find((n) => n.name === name)?.translation;

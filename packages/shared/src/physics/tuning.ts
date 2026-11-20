@@ -11,6 +11,8 @@ export const TUNING = {
     /** Invisible boundary walls: one thin cuboid per boundary edge. */
     boundaryWallHeight: 4,
     boundaryWallThickness: 0.4,
+    /** The walls' colliders reach this far up (m above the terrain), so nothing flies out over them. */
+    boundarySkyHeight: 360,
     /** Longer triangle edges are subdivided before building the trimesh (precision, see world.ts). */
     maxTriangleEdge: 32,
   },
@@ -72,6 +74,28 @@ export const TUNING = {
    * Known limitation (v1, revisit in Plan 2): characters are kinematic, i.e. immovable for dynamic
    * bodies, so a car that hits a person stops dead as if against a post. Wheel rays ignore characters.
    */
+  /** The helicopter (CAR_SPECS.heli): an arcade flight model that holds itself level and hovers when let go. */
+  heli: {
+    /** Top speed forwards and backwards (m/s) and how fast it gets there / stops when let go (m/s²). */
+    maxSpeed: 38,
+    maxReverse: 10,
+    accel: 9,
+    drag: 5,
+    /** Climb and sink rate (m/s) and how fast they are reached (m/s²). */
+    climb: 9,
+    sink: 7,
+    liftAccel: 12,
+    /** Turn rate about the vertical (rad/s) and how fast the turn input builds up (1/s). */
+    yawRate: 1.3,
+    yawEase: 3,
+    /** Nose-down pitch at top speed and bank in a full turn at speed (rad); how fast the body tilts there (1/s). */
+    maxPitch: 0.3,
+    maxRoll: 0.35,
+    tiltRate: 6,
+    /** No climbing above this height (m; the snapshots carry heights up to 327 m). */
+    ceiling: 300,
+  },
+
   vehicle: {
     /** Chassis box (full sizes): length along heading, height, width. */
     length: 4.2,

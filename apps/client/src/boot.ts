@@ -271,7 +271,7 @@ renderer.setAnimationLoop((t: number) => {
       hud.flash(`Grafik: ${QUALITY_LABEL[qualityLevel]}${aa}`);
     }
     touch.update({
-      playing: true, mode: game.mode === 'sit' ? 'walk' : game.mode, bikeType: game.bikeType(), radio: game.radioOn, disco: game.discoAvailable,
+      playing: true, mode: game.mode === 'sit' ? 'walk' : game.mode, bikeType: game.bikeType(), heli: game.heli, radio: game.radioOn, disco: game.discoAvailable,
       mapOpen: game.map.open, muted: gameAudio.isMuted, flying: game.flying,
     });
     touch.tick(dt);
