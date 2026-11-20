@@ -2,7 +2,8 @@
 
 Replaces DENW37AL1000eZaq (No. 27) and DENW37AL1000eVXe (No. 29), which together are one front house of
 22.4 × 11 m between the fire walls of No. 25 and No. 33. Street face (south → north, as seen from the street):
-  rusticated sandstone strip · white field with one window axis · bay (Erker) with a round-arched gable ·
+  rusticated sandstone strip · cream field with one window axis · bay (Erker) over three storeys under a small
+  slate roof, above it a stone shoulder of the gable with one arched window ·
   white centre field framed by sandstone that rises into a curved gable above the eaves · three-sided oriel
   with a slate helm and dark blue edge lines · narrow white field · sandstone strip.
 Ground floor: shop fronts, and under the "ERFT-HAUS / NEUSSER-STRASSE 27-29" lettering the passage
@@ -21,7 +22,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 from graffiti import GLYPHS  # noqa: E402
-from nnmodel import (V, Builder, _blur_noise, _img, brick_texture, ccw, export_glb, material, prism,  # noqa: E402
+from nnmodel import (V, Builder, _blur_noise, _img, brick_texture, ccw, export_glb, grid_window_texture, material, prism,  # noqa: E402
                      reset_collection, slate_texture, tris, wall_frame)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -190,11 +191,19 @@ def make_materials():
     band_bg, gold = (0.80, 0.73, 0.60), (0.55, 0.40, 0.12)
     sign1 = text_image('tex_erft_sign1', 'ERFT-HAUS', 512, 64, gold, band_bg)
     sign2 = text_image('tex_erft_sign2', 'NEUSSER-STRASSE 27-29', 1024, 80, gold, band_bg)
+    hof = grid_window_texture('tex_erft_win_hof', cols=2, rows=3, arch=0.10, curtains=True, seed=1)
+    hof_lit = grid_window_texture('tex_erft_win_hof_lit', cols=2, rows=3, arch=0.10, curtains=True, seed=1, lit=True)
     return {
-        'Render': material('Render', image=render_texture('tex_erft_render', (0.92, 0.91, 0.86), 41, stain=0.06), rough=0.9),
+        # the courtyard face: yellow brick and arched casement windows, as the wings (../erft-haus-hof)
+        'Klinker': material('ErftKlinker', image=brick_texture('tex_erft_klinker', [(0.80, 0.64, 0.38), (0.74, 0.58, 0.34), (0.84, 0.70, 0.44),
+                                                                                   (0.68, 0.52, 0.31), (0.78, 0.60, 0.40)],
+                                                               (0.62, 0.57, 0.48), 71, soot=0.10), rough=0.9),
+        'WinHof': material('WinHof', image=hof, rough=0.2, clip=True),
+        'WinHofLit': material('WinHofLit', image=hof, emit_image=hof_lit, rough=0.2, clip=True),
+        'Render': material('Render', image=render_texture('tex_erft_render', (0.94, 0.91, 0.81), 41, stain=0.06), rough=0.9),
         'RenderBack': material('RenderBack', image=render_texture('tex_erft_render_back', (0.78, 0.76, 0.71), 42, stain=0.14),
                                rough=0.9),
-        'Stucco': material('Stucco', (0.95, 0.94, 0.90), 0.8),
+        'Stucco': material('Stucco', (0.96, 0.93, 0.85), 0.8),
         'Sandstone': material('Sandstone', image=brick_texture('tex_erft_rustica', [(0.63, 0.53, 0.40), (0.58, 0.49, 0.37),
                                                                                    (0.67, 0.57, 0.44), (0.60, 0.52, 0.41)],
                                                               (0.52, 0.45, 0.35), 43, nx=3, ny=6, soot=0.12), rough=0.95),
@@ -332,12 +341,12 @@ GABLE = (5.6, 17.5, 22.0)  # sandstone gable above the eaves: u0, u1, apex
 
 def body(B):
     """Masonry blocks left and right of the passage and the bridge over it."""
-    pw = ['Render', 'Render', 'PassageWall', 'RenderBack']  # south block: fire wall, street, passage side, back
+    pw = ['Render', 'Render', 'PassageWall', 'Klinker']  # south block: fire wall, street, passage side, back
     prism(B, [W(0), E(0), E(P0), W(P0)], SINK, Z_EAVE, 'Render', side_mats=pw)
     prism(B, [W(P1), E(P1), E(L_ST), W(L_ST)], SINK, Z_EAVE, 'Render',
-          side_mats=['PassageWall', 'Render', 'Render', 'RenderBack'])
+          side_mats=['PassageWall', 'Render', 'Render', 'Klinker'])
     prism(B, [W(P0), E(P0), E(P1), W(P1)], Z_PASS, Z_EAVE, 'Render',
-          side_mats=['Render', 'Render', 'Render', 'RenderBack'], bottom=True)
+          side_mats=['Render', 'Render', 'Render', 'Klinker'], bottom=True)
 
 
 def passage(B):
@@ -356,6 +365,19 @@ def passage(B):
     obox(B, south, 4.5, 6.1, -0.05, 0.08, 2.5, 2.62, 'Stucco')
     obox(B, north, north.L - 2.3, north.L - 1.3, -0.02, 0.12, 0.9, 1.9, 'Zinc')
     obox(B, north, north.L - 5.0, north.L - 3.6, -0.02, 0.06, 1.1, 2.1, 'Board')
+    # the red lattice gate: its two leaves stand open against the passage walls, a red beam over the opening
+    for w, a in ((south, 0.2), (north, north.L - 1.75)):
+        b = a + 1.55
+        for u in (a, b - 0.06):
+            obox(B, w, u, u + 0.06, 0.05, 0.11, 0.1, 3.3, 'DoorRed')
+        for z in (0.1, 1.7, 3.24):
+            obox(B, w, a, b, 0.05, 0.11, z, z + 0.06, 'DoorRed')
+        for k in range(1, 6):
+            obox(B, w, a + 1.55 * k / 6 - 0.012, a + 1.55 * k / 6 + 0.012, 0.065, 0.095, 0.1, 3.3, 'DoorRed')
+        for k in range(1, 12):
+            if k != 6:
+                obox(B, w, a, b, 0.065, 0.095, 0.1 + 3.2 * k / 12 - 0.012, 0.1 + 3.2 * k / 12 + 0.012, 'DoorRed')
+    obox(B, Wall(SE, NE), P0, P1, 0.0, 0.1, Z_PASS - 0.22, Z_PASS, 'DoorRed')
     # two ceiling lamps
     for f in (0.3, 0.7):
         c = V(lerp(lerp(E(P0), E(P1), 0.5), lerp(W(P0), W(P1), 0.5), f))
@@ -367,8 +389,8 @@ def passage(B):
         obox(B, st, u0, u0 + 0.35, -0.02, 0.12, 0.0, Z_PASS, 'Sandstone')
     back = Wall(NW, SW)
     for u0 in (back.L - P1 - 0.3, back.L - P0):
-        obox(B, back, u0, u0 + 0.3, -0.02, 0.08, 0.0, Z_PASS, 'Stucco')
-    obox(B, back, back.L - P1 - 0.3, back.L - P0 + 0.3, -0.02, 0.08, Z_PASS, Z_PASS + 0.3, 'Stucco')
+        obox(B, back, u0, u0 + 0.3, -0.02, 0.06, 0.0, Z_PASS, 'Klinker')
+    obox(B, back, back.L - P1 - 0.3, back.L - P0 + 0.3, -0.02, 0.06, Z_PASS, Z_PASS + 0.45, 'Klinker')
 
 
 def ground_floor(B, st):
@@ -408,40 +430,40 @@ def left_part(B, st):
     # white field with one window axis
     panel(B, st, 1.1, BAY[0], Z_BAND, 16.9, 'Render', 0.03)
     for zf in FLOORS:
-        window(B, st, 2.45, zf + 0.9, 1.15, 1.9, 'WinTall', d=0.03)
+        window(B, st, 2.45, zf + 0.9, 1.15, 1.9, 'WinTall', d=0.05)
         obox(B, st, 1.7, 3.2, -0.02, 0.07, zf + 0.25, zf + 0.75, 'Stucco')  # stucco panel under the sill
     blue_edge(B, st, 1.1, Z_BAND, 16.9, 0.03, 0.08)
 
-    # bay: console, box, blue edges, windows, round-arched gable
+    # bay over three storeys: console, box, blue edges, three windows a floor, a small slate roof
     u0, u1, dp = BAY
+    zc = FLOORS[3] + 0.15  # the bay's top
     obox(B, st, u0 - 0.25, u1 + 0.25, -0.02, dp + 0.25, Z_BAND - 0.55, Z_BAND, 'Stucco', bottom=True)
     obox(B, st, u0 - 0.25, u1 + 0.25, dp + 0.2, dp + 0.27, Z_BAND - 0.5, Z_BAND - 0.1, 'Stucco')
-    obox(B, st, u0, u1, -0.02, dp, Z_BAND, Z_EAVE, 'Render')
+    obox(B, st, u0, u1, -0.02, dp, Z_BAND, zc, 'Render')
     for u in (u0, u1):
-        blue_edge(B, st, u, Z_BAND, Z_EAVE, dp)
+        blue_edge(B, st, u, Z_BAND, zc, dp)
     bay = Wall(st.p(u0, dp), st.p(u1, dp))
     c = bay.L / 2
-    for k, zf in enumerate(FLOORS):
-        if k == 0:
-            for du in (-1.1, 1.1):
-                window(B, bay, c + du, zf + 0.9, 1.1, 1.9, 'WinTall')
-        elif k < 3:
-            for du in (-1.05, 0.0, 1.05):
-                (window if k == 1 else arched_window)(B, bay, c + du, zf + 0.9, 0.8, 1.9 if k == 1 else 1.55,
-                                                      'WinTall' if k == 1 else 'WinOld')
-        else:
-            for du in (-1.05, 0.0, 1.05):
-                arched_window(B, bay, c + du, zf + 0.8, 0.8, 1.45, 'WinOld')
+    for k, zf in enumerate(FLOORS[:3]):
+        for du in (-1.05, 0.0, 1.05):
+            if k == 0:
+                window(B, bay, c + du, zf + 0.9, 0.85, 1.9, 'WinTall', head=False)
+            else:
+                arched_window(B, bay, c + du, zf + 0.9, 0.8, 1.5 if k == 1 else 1.35, 'WinOld')
         obox(B, bay, 0.2, bay.L - 0.2, -0.02, 0.08, zf + 0.35, zf + 0.6, 'Stucco')  # stucco garland band
-    obox(B, st, u0 - 0.1, u1 + 0.1, -0.05, dp + 0.18, Z_EAVE - 0.3, Z_EAVE, 'Stucco')
-    r = (u1 - u0) / 2
-    spring = Z_EAVE + 0.5
-    outline = [(u0, Z_EAVE), (u1, Z_EAVE)] + [(c + u0 + r * math.cos(math.pi * k / 12), spring + r * math.sin(math.pi * k / 12))
-                                              for k in range(13)]
-    slab(B, st, outline, -2.5, dp, 'Render', side_mat='Stucco')
-    arched_window(B, bay, c, Z_EAVE + 0.4, 0.8, 1.0, 'WinOld')
-    for u in (u0, u1):
-        blue_edge(B, st, u, Z_EAVE, spring, dp)
+    obox(B, st, u0 - 0.1, u1 + 0.1, -0.05, dp + 0.18, zc - 0.3, zc, 'Stucco')
+    zr = zc + 1.15
+    f0, f1, b0, b1 = st.p(u0 - 0.1, dp + 0.18, zc), st.p(u1 + 0.1, dp + 0.18, zc), st.p(u0 + 0.5, 0.02, zr), st.p(u1 - 0.5, 0.02, zr)
+    B.face([f0, f1, b1, b0], 'Slate', out=st.out(1.0))
+    B.face([st.p(u0 - 0.1, 0.02, zc), f0, b0], 'Slate', out=(-st.t.x, -st.t.y, 0.8))
+    B.face([f1, st.p(u1 + 0.1, 0.02, zc), b1], 'Slate', out=(st.t.x, st.t.y, 0.8))
+    # above it the fourth floor in sandstone with one arched window, under a low shoulder of the stone gable
+    stone = Wall(st.p(0, 0.01), st.p(st.L, 0.01))
+    arched_window(B, stone, (u0 + u1) / 2, FLOORS[3] + 1.35, 1.0, 1.1, 'WinOld', frame='Stucco')
+    r = (u1 - u0) / 2 + 0.3
+    outline = [(u0 - 0.3, Z_EAVE - 0.01), (u1 + 0.3, Z_EAVE - 0.01)] + [
+        ((u0 + u1) / 2 + r * math.cos(math.pi * k / 12), Z_EAVE + 1.5 * math.sin(math.pi * k / 12)) for k in range(13)]
+    slab(B, st, outline, -0.6, 0.01, 'Sandstone', side_mat='Sandstone')
 
 
 def centre_part(B, st):
@@ -468,13 +490,14 @@ def centre_part(B, st):
                 st.p(ARCH_C + r1 * math.cos(a1), 0.06, ARCH_SPRING + r1 * math.sin(a1)),
                 st.p(ARCH_C + r0 * math.cos(a1), 0.06, ARCH_SPRING + r0 * math.sin(a1))], 'Blue', out=st.out())
     # two window axes, stucco ornament between them, arched windows on the top floor and in the arch
+    field = Wall(st.p(0, 0.04), st.p(st.L, 0.04))  # (the white field's plane: the arched windows stand in front of it)
     for k, zf in enumerate(FLOORS):
         for u in (10.25, 12.85):
             if k < 3:
                 window(B, st, u, zf + 0.9, 1.2, 1.9, 'WinTall', d=0.05)
             else:
-                arched_window(B, st, u, zf + 0.8, 1.05, 1.4, 'WinOld')
-    arched_window(B, st, ARCH_C, 17.2, 0.9, 0.9, 'WinOld')
+                arched_window(B, field, u, zf + 0.8, 1.05, 1.4, 'WinOld')
+    arched_window(B, field, ARCH_C, 17.2, 0.9, 0.9, 'WinOld')
     obox(B, st, ARCH_C - 0.2, ARCH_C + 0.2, -0.02, 0.1, 6.0, 15.6, 'Stucco')  # central pilaster strip
     for z in (7.4, 10.6):
         obox(B, st, ARCH_C - 0.45, ARCH_C + 0.45, -0.02, 0.14, z, z + 0.5, 'Stucco')
@@ -533,7 +556,7 @@ def oriel(B, st):
 def right_part(B, st):
     panel(B, st, 19.8, 21.2, Z_BAND, 17.0, 'Render', 0.03)
     for zf in FLOORS:
-        window(B, st, 20.5, zf + 0.9, 0.85, 1.9, 'WinTall', d=0.03)
+        window(B, st, 20.5, zf + 0.9, 0.85, 1.9, 'WinTall', d=0.05)
     blue_edge(B, st, 21.2, Z_BAND, 17.0, 0.03, 0.08)
 
 
@@ -569,18 +592,29 @@ def roof(B, st):
 
 
 def back_face(B):
+    """The courtyard face (photos from the yard): yellow brick, three storeys of arched windows over the passage and
+    a wide ground-floor window, a slate mansard with dormers as the top floor. The wings of the yard
+    (../erft-haus-hof) cover its ends."""
     back = Wall(NW, SW)  # u from the north end
     pa, pb = back.L - P1, back.L - P0
-    axes = [2.2, 5.0, 7.8, (pa + pb) / 2, 14.8, 17.6, 20.3]
-    for zf in FLOORS:
+    axes = [7.6, (pa + pb) / 2, 15.9]
+    z_m = FLOORS[3] + 0.2  # the mansard's foot
+    for u0, u1 in ((0.0, pa - 0.3), (pb + 0.3, back.L)):  # grey plinth, left and right of the passage
+        panel(B, back, u0, u1, 0.0, 1.0, 'Paving', 0.03)
+    for zf in FLOORS[:3]:
         for u in axes:
-            window(B, back, u, zf + 0.9, 1.1, 1.6, 'WinTall', sill='Stucco', frame=None)
-    for u in axes:
-        if pa - 0.8 < u < pb + 2.6:  # passage and the courtyard door next to it
-            continue
-        window(B, back, u, 1.0, 1.0, 1.4, 'WinTall', frame=None)
-    # stairwell windows above the passage are staggered: house door on the courtyard side of the passage
+            window(B, back, u, zf + 0.9, 1.25, 2.05, 'WinHof', 0.03, sill='Stucco', frame=None)
+        window(B, back, 5.2, zf + 1.5 - (zf - FLOORS[0]) * 0.12, 0.6, 1.6, 'WinHof', 0.03, sill='Stucco', frame=None)  # stairwell
+    panel(B, back, 6.4, 8.8, 1.1, 3.3, 'Shop', 0.03, UV01)  # the lit ground-floor window left of the passage
+    obox(B, back, 6.3, 8.9, -0.02, 0.1, 1.0, 1.1, 'Stucco')
     panel(B, back, pb + 1.2, pb + 2.2, 0.0, 2.3, 'DoorWood', 0.03)
+    # cornice, then the mansard: a slate skirt standing out at its foot, a dormer over every axis
+    obox(B, back, 0.0, back.L, -0.02, 0.5, z_m - 0.25, z_m, 'Klinker', top='Zinc')
+    B.face([back.p(0.0, 0.45, z_m), back.p(back.L, 0.45, z_m), back.p(back.L, 0.03, Z_EAVE), back.p(0.0, 0.03, Z_EAVE)], 'Slate',
+           out=back.out(0.3))
+    for u in axes:
+        obox(B, back, u - 0.75, u + 0.75, 0.0, 0.6, z_m + 0.5, z_m + 2.25, 'Zinc', top='Zinc')
+        panel(B, back, u - 0.62, u + 0.62, z_m + 0.62, z_m + 2.13, lit_mat('WinTall'), 0.62, UV01)
 
 
 def build(B):
@@ -625,12 +659,19 @@ def main():
     col = C.to_object(f'{NAME}_col', coll)
     col.display_type = 'WIRE'
     col.hide_render = True
-    return ob, col
+    # terrain cut under the passage floor (the service way draped on the terrain would lie on top of it otherwise)
+    T = Builder()
+    q = [W(P0), E(P0), E(P1), W(P1)]
+    T.face([(q[1][0], q[1][1], 0.12), (q[2][0], q[2][1], 0.12), (q[3][0], q[3][1], 0.0), (q[0][0], q[0][1], 0.0)], 'x', out=(0, 0, 1))
+    cut = T.to_object(f'{NAME}_cut', coll)
+    cut.display_type = 'WIRE'
+    cut.hide_render = True
+    return ob, col, cut
 
 
-ob, col = main()
+ob, col, cut = main()
 stats = {'tris': tris(ob), 'col_tris': tris(col)}
 print('STATS', stats)
 if globals().get('EXPORT', True):
-    export_glb(os.path.join(HERE, f'{NAME}.glb'), [ob, col])
+    export_glb(os.path.join(HERE, f'{NAME}.glb'), [ob, col, cut])
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(HERE, f'{NAME}.blend'), copy=True)

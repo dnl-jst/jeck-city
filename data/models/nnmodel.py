@@ -273,3 +273,49 @@ def export_glb(path, objects):
         export_apply=True, export_yup=True, export_image_format='JPEG', export_jpeg_quality=85,
         export_draco_mesh_compression_enable=False, export_cameras=False, export_lights=False,
         export_extras=False, export_animations=False, export_materials='EXPORT')
+
+
+def grid_window_texture(name, cols, rows, arch=0.0, frame=(0.93, 0.93, 0.91), bar=0.03, outer=0.07, glass=(0.08, 0.10, 0.12),
+                        lit=False, curtains=False, seed=0, w=128, h=256):
+    """Window as one image: a frame with cols × rows panes. arch > 0: a segmental head (its rise as a share of the
+    height) – the corners above it are transparent (use the material with clip=True). curtains: net curtains or a
+    blind behind the glass (flats). lit → the emission image (warm panes, black frame). Row 0 is the bottom."""
+    rng = np.random.default_rng(seed * 977 + cols * 31 + rows)
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    yy, xx = (yy + 0.5) / h, (xx + 0.5) / w
+    top = 1 - arch * (2 * xx - 1) ** 2  # the head's line
+    k = w / h  # frame widths are given in shares of the width
+    pane = (np.floor(xx * cols) + cols * np.floor(np.clip(yy / top, 0, 0.999) * rows)).astype(int)
+    tone = rng.uniform(0.75, 1.3, cols * rows).astype(np.float32)[pane]
+    img = np.array(glass, np.float32) * tone[..., None] + (0.14 * yy)[..., None] * np.array((0.8, 0.9, 1.0), np.float32)
+    img += (np.clip(1 - np.abs((xx + yy * 0.5) - 0.8) * 6, 0, 1) * 0.10)[..., None]
+    if curtains:
+        kind = rng.integers(0, 3)
+        cur = (xx < 0.24) | (xx > 0.76) if kind == 0 else (yy > rng.uniform(0.45, 0.8)) if kind == 1 else np.zeros_like(xx, bool)
+        fold = 0.9 + 0.1 * np.cos(xx * 110)
+        img = np.where(cur[..., None], np.array((0.82, 0.80, 0.74), np.float32) * fold[..., None], img)
+    if lit:
+        warm = np.array((1.0, 0.80, 0.50), np.float32) * (0.35 + 0.3 * rng.uniform(0.6, 1.0, cols * rows).astype(np.float32)[pane])[..., None]
+        img = warm * (0.75 + 0.25 * yy)[..., None]
+    fr = (xx < outer) | (xx > 1 - outer) | (yy < outer * k) | (yy > top - outer * k)
+    for c in range(1, cols):
+        fr |= np.abs(xx - c / cols) < bar / 2
+    for r in range(1, rows):
+        fr |= np.abs(yy - top * r / rows) < bar * k / 2
+    img[fr] = (0.0, 0.0, 0.0) if lit else frame
+    if not lit:
+        # the reveal's shadow along the top and one side: the pane looks set back
+        shade = np.clip(1 - (top - yy) / (0.05 * k), 0, 1) * 0.35 + np.clip(1 - xx / 0.05, 0, 1) * 0.2
+        img *= (1 - shade)[..., None]
+        img += rng.normal(0, 0.006, img.shape)
+    if arch > 0:
+        img = np.concatenate([img, (yy <= top).astype(np.float32)[..., None]], axis=2)
+    return _img(name, img)
+
+
+def see_through(m, alpha):
+    """Makes material m clear glass (glTF alphaMode BLEND) with this opacity."""
+    m.node_tree.nodes['Principled BSDF'].inputs['Alpha'].default_value = alpha
+    m.surface_render_method = 'BLENDED'
+    m.diffuse_color = (*m.diffuse_color[:3], alpha)
+    return m

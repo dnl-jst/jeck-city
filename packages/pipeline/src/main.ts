@@ -54,6 +54,8 @@ const SPAWN_BIKE_CLEAR = 3;
  */
 const SOUND_BIKE = { x: 35.0, z: -729.6, heading: -2.912, type: 5, color: 0xc0262d };
 const TREE_SEED = 2613766;
+/** The two trees in the planting beds of the Erft-Haus courtyard (data/models/erft-haus-hof; OSM has none there). */
+const YARD_TREES = [{ x: 286.3, z: 1203.0 }, { x: 263.5, z: 1202.4 }];
 /**
  * Terrain-following kerbs and sidewalks in the collision mesh (see followTerrain): xz edges ≤ 8 m, refined
  * adaptively until every triangle lies within 2 cm of the 1 m drape (edges down to 5 cm at sharp terrain kinks).
@@ -267,7 +269,7 @@ async function main() {
   const nearSpawn = lamps.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`lamps: ${f.lamps.length} OSM + ${extraLamps.length} generated = ${lamps.length} (${nearSpawn} within 100 m of spawn)`);
   const extraTrees = streetTrees(f, buildings, spawn, TREE_SEED, lamps, sidewalks);
-  const trees = [...f.trees, ...extraTrees].filter(offBridge);
+  const trees = [...f.trees, ...extraTrees, ...YARD_TREES].filter(offBridge);
   const treesNearSpawn = trees.filter((p) => Math.hypot(p.x - spawn.x, p.z - spawn.z) < 100).length;
   console.log(`trees: ${f.trees.length} OSM + ${extraTrees.length} street trees = ${trees.length} (${treesNearSpawn} within 100 m of spawn)`);
 

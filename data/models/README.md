@@ -54,4 +54,5 @@ cd data/models/<name> && blender -b --factory-startup --python-expr \
 | DENW37AL1000APxJ, …BdpH, …Bdpd | `wilhelmplatz-tribuene/` – Tribüne with WC and kiosk, Wilhelmplatz | LOD2 footprint/heights, street photos, aerial |
 | DENW37AL1000AJzb, …AKKj, …BVEZ, …AKt2 | `neusser-florastrasse/` – the four buildings round the square at U Florastraße, Neusser Str. | LOD2 footprints/heights, street photos |
 | DENW37AL1000eZaq, …eVXe | `erft-haus/` – Erft-Haus, Neusser Str. 27–29 (Agnesviertel), with the passage to the courtyard | LOD2 footprint/heights, street photo |
+| DENW37AL1000eYtc, …eTgk, …eapc, …eW6M | `erft-haus-hof/` – the Erft-Haus courtyard: stair tower with glass porch, lift shaft, the two wings, the white building with its roof terrace, garage ramp, beds; facades in front of the kept LOD2 neighbours | LOD2 footprints/heights, DGM1 (ramp), photos from the yard |
 | DENW37AL1000qmxq | `koelner-dom/` – Kölner Dom with the Domtreppe to the Bahnhofsvorplatz | plan (Commons, to scale), LOD2 axis/towers, DGM1 (Domplatte, stairs), photos (Commons) |
