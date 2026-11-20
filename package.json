@@ -14,6 +14,7 @@
     "start": "npm start -w @nn/server",
     "typecheck": "tsc --noEmit -p apps/client && tsc --noEmit -p packages/shared && tsc --noEmit -p packages/pipeline && tsc --noEmit -p apps/server",
     "pipeline": "node --max-old-space-size=10240 --import tsx packages/pipeline/src/main.ts",
+    "transit": "node --max-old-space-size=10240 --import tsx packages/pipeline/src/main.ts --transit-only",
     "board-shots": "node scripts/board-shots.mjs",
     "car-shots": "node scripts/car-shots.mjs",
     "ship-cars": "tsx packages/pipeline/src/ship-cars.ts",
@@ -24,6 +25,7 @@
     "heli-check": "node scripts/heli-check.mjs",
     "mp-check": "node scripts/mp-check.mjs",
     "ride-along-check": "node scripts/ride-along-check.mjs",
+    "transit-check": "node scripts/transit-check.mjs",
     "loadtest": "tsx apps/server/src/bots/loadtest.ts",
     "touch-check": "node scripts/touch-check.mjs"
   },

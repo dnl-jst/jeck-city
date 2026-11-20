@@ -27,7 +27,7 @@ function world() {
     road(4, 'residential', [[60, 40], [340, 40]], true), // a bridge=* way elsewhere that is not ours: also over the water
   ];
   const f: OsmFeatures = {
-    boundary: [], roads, tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [centreLine], tramStops: [], greens: [], trees: [], lamps: [],
+    boundary: [], roads, tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [centreLine], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], platforms: [], greens: [], trees: [], lamps: [],
     shops: [], squares: [], bikeParking: [],
   };
   return { t, w, f, plan: planBridges(f, t, w) };

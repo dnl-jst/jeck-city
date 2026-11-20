@@ -2,7 +2,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import { fetchOsm, LOD2_TILES, OVERPASS_URLS, tileNamesForBounds } from './fetch';
+import { fetchOsm, LOD2_TILES, OVERPASS_QUERY, OVERPASS_URLS, tileNamesForBounds } from './fetch';
+
+test('Overpass query fetches subway entrances and mainline rail (bridges, tunnels)', () => {
+  expect(OVERPASS_QUERY).toContain('node["railway"="subway_entrance"]');
+  expect(OVERPASS_QUERY).toContain('way["railway"="rail"]');
+});
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 

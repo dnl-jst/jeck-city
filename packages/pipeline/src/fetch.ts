@@ -128,6 +128,8 @@ out geom;
   nwr["railway"="tram"](${OSM_BBOX});
   nwr["railway"="light_rail"](${OSM_BBOX});
   nwr["railway"="tram_stop"](${OSM_BBOX});
+  node["railway"="subway_entrance"](${OSM_BBOX});
+  way["railway"="rail"](${OSM_BBOX});
   nwr["public_transport"](${OSM_BBOX});
   nwr["leisure"](${OSM_BBOX});
   nwr["landuse"](${OSM_BBOX});
@@ -146,12 +148,12 @@ out geom;`;
  * overload answers (429/5xx) and broken JSON move on to the next instance in OVERPASS_URLS after a pause; other HTTP
  * errors (e.g. 400, a broken query) fail at once.
  */
-export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number } = {}): Promise<string> {
-  const { urls = OVERPASS_URLS, attempts = OVERPASS_ATTEMPTS, retryMs = OVERPASS_RETRY_MS } = o;
+export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number; file?: string; query?: string } = {}): Promise<string> {
+  const { urls = OVERPASS_URLS, attempts = OVERPASS_ATTEMPTS, retryMs = OVERPASS_RETRY_MS, file = 'osm.json', query = OVERPASS_QUERY } = o;
   await mkdir(dir, { recursive: true });
-  const path = join(dir, 'osm.json');
+  const path = join(dir, file);
   if (await exists(path)) {
-    console.log('skip osm.json (cached)');
+    console.log(`skip ${file} (cached)`);
     return path;
   }
   const failures: string[] = [];
@@ -164,7 +166,7 @@ export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attem
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ data: OVERPASS_QUERY }),
+        body: new URLSearchParams({ data: query }),
         signal: AbortSignal.timeout(OVERPASS_REQUEST_MS),
       });
       if (res.ok) {
@@ -186,3 +188,13 @@ export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attem
   }
   throw new Error(`Overpass: all ${attempts} attempts failed:\n  ${failures.join('\n  ')}`);
 }
+
+/** The Stadtbahn's lines: route relations (their ways and stops in order, by id; the geometry is in osm.json). */
+export const TRANSIT_ROUTES_FILE = 'transit-routes.json';
+export const TRANSIT_ROUTES_QUERY = `[out:json][timeout:120];
+relation["type"="route"]["route"~"^(tram|light_rail|subway)$"](${OSM_BBOX});
+out body;`;
+
+/** Fetches the line relations into `dir` (as fetchOsm does osm.json), skipping an existing file. */
+export const fetchTransitRoutes = (dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number } = {}): Promise<string> =>
+  fetchOsm(dir, { ...o, file: TRANSIT_ROUTES_FILE, query: TRANSIT_ROUTES_QUERY });

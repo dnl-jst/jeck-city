@@ -1,6 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import type { CollisionAsset } from '../assets/collision';
 import { heightAt, type TerrainGrid } from '../assets/terrain';
+import { openingTest } from '../transit';
 import { TUNING } from './tuning';
 
 export type Rapier = typeof RAPIER;
@@ -10,7 +11,16 @@ export type Rapier = typeof RAPIER;
  * city: set when the city's colliders are streamed (see createPhysicsWorld's `stream`); then only the tiles around the
  * points passed to city.update() exist.
  */
-export type PhysicsWorld = { rapier: Rapier; world: RAPIER.World; step(): void; city?: CityTiles };
+export type PhysicsWorld = {
+  rapier: Rapier; world: RAPIER.World; step(): void; city?: CityTiles;
+  /**
+   * The terrain heightfield, and where the ground is open (stairwells down to the underground, see Transit.openings):
+   * there, people and the camera ignore the heightfield (it cannot have holes).
+   */
+  terrain?: { handle: number; open(x: number, z: number): boolean };
+  /** Collider handles of the trains' floors (see Trains): walking people leave them out of the character controller. */
+  trainFloors?: Set<number>;
+};
 
 /** The Rapier version this code is written for; must equal the dependency pinned in packages/shared/package.json. */
 export const EXPECTED_RAPIER = '0.21.0';
@@ -52,6 +62,16 @@ export const CAR_GROUPS = 0x0004_fff7;
 export const CHARACTER_GROUPS = 0x0008_fffb;
 /** Bikes (ridden and parked): bit 4, collide with everything. */
 export const BIKE_GROUPS = 0x0010_ffff;
+/** Train sections (kinematic): walls, roof and doors are bit 5, the floor bit 6 (people over it are carried along); both collide with everything. */
+export const TRAIN_GROUPS = 0x0020_ffff;
+export const TRAIN_FLOOR_GROUPS = 0x0040_ffff;
+/**
+ * The terrain heightfield: bits 0 and 7 only (the city's trimeshes keep Rapier's default, all bits). So a filter
+ * without those two bits (OFF_TERRAIN) sees the city but not the terrain: what a car in a stairwell down to the
+ * underground collides with (see PhysicsWorld.terrain; wheel rays take no predicate, only groups).
+ */
+export const TERRAIN_GROUPS = 0x0081_ffff;
+export const OFF_TERRAIN = 0xff7e;
 
 /**
  * Scene-query predicate for the static city: solid colliders on fixed bodies, plus dynamic bodies (other cars,
@@ -104,7 +124,7 @@ export const COLLISION_TILE = 100;
  * it (the server) the whole city is built.
  */
 export async function createPhysicsWorld(
-  c: CollisionAsset, terrain?: TerrainGrid, opts: { sliceMs?: number; stream?: readonly XZ[] } = {},
+  c: CollisionAsset, terrain?: TerrainGrid, opts: { sliceMs?: number; stream?: readonly XZ[]; openings?: readonly (readonly number[])[] } = {},
 ): Promise<PhysicsWorld> {
   await initRapier();
   const slice = timeSlicer(opts.sliceMs);
@@ -130,7 +150,7 @@ export async function createPhysicsWorld(
       await slice();
     }
   }
-  if (terrain) world.createCollider(terrainCollider(terrain), ground);
+  const terrainHandle = terrain ? world.createCollider(terrainCollider(terrain), ground).handle : null;
   await slice();
   addBoundaryWalls(world, ground, c.boundary, terrain);
   await slice();
@@ -149,6 +169,7 @@ export async function createPhysicsWorld(
     },
   };
   if (opts.stream) pw.city = city;
+  if (terrainHandle !== null && opts.openings?.length) pw.terrain = { handle: terrainHandle, open: openingTest(opts.openings) };
   beforeStep.set(pw, hooks);
   afterStep.set(pw, after);
   return pw;
@@ -355,6 +376,7 @@ function terrainCollider(t: TerrainGrid): RAPIER.ColliderDesc {
   const h = new Float32Array(cols * rows);
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) h[c * rows + r] = t.heights[r * cols + c]!;
   return RAPIER.ColliderDesc.heightfield(rows - 1, cols - 1, h, { x: cols - 1, y: 1, z: rows - 1 }, RAPIER.HeightFieldFlags.FIX_INTERNAL_EDGES)
+    .setCollisionGroups(TERRAIN_GROUPS)
     .setTranslation(t.x0 + (cols - 1) / 2, 0, t.z0 + (rows - 1) / 2);
 }
 

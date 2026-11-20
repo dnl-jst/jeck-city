@@ -1,5 +1,6 @@
 import { ImpactDetector, landed, skidAmount, StepClock, TramBell } from './cues';
 import { MIX, type AudioMixer, type LoopVoice, type PositionalLoopVoice, type ShotVoice } from './mixer';
+import { trainVoices } from './train-sound';
 import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
@@ -25,6 +26,9 @@ const STEPS: SoundId[] = ['step1', 'step2', 'step3', 'step4'];
  * The game's sound: turns player/car state into mixer cues and drives the car radio.
  * Loops (ambience, engine) start only once the sounds are loaded and the mixer is unlocked.
  */
+/** Pause between "Nächster Halt" and the station's name in a train's announcement (ms). */
+const STOP_PAUSE_MS = 280;
+
 export class GameAudio {
   /** Radio callbacks; main.ts hands these to the Radio. */
   readonly radioEvents = {
@@ -57,6 +61,14 @@ export class GameAudio {
   private rotorVoice: LoopVoice | null = null;
   private readonly rotors = new Map<number, PositionalLoopVoice>();
   private ambience: LoopVoice | null = null;
+  /** 0..1: how far underground the listener is (see transit()). */
+  private under = 0;
+  /** Recorded stop announcements (see stopClips), the clip playing and a counter: a newer announcement replaces an older one. */
+  private clips: Promise<Record<string, string> | null> | null = null;
+  private clip: HTMLAudioElement | null = null;
+  private announcement = 0;
+  private trainRoll: LoopVoice | null = null;
+  private trainMotor: LoopVoice | null = null;
   /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
   private rainVoice: LoopVoice | null = null;
   private rain = 0;
@@ -113,6 +125,7 @@ export class GameAudio {
     this.d.mixer.setMuted(this.muted);
     this.d.radio.setMuted(this.muted);
     this.d.remote?.setMuted(this.muted);
+    if (this.muted) this.clip?.pause();
     this.d.flash(this.muted ? 'Ton aus' : 'Ton an');
   }
 
@@ -339,13 +352,96 @@ export class GameAudio {
   /** Rain intensity 0..1 (0 when dry or snowing); remembered until the loops start. */
   weather(rain: number): void {
     this.rain = rain;
-    this.rainVoice?.setGain(MIX.rain * rain);
+    this.rainVoice?.setGain(MIX.rain * rain * (1 - this.under));
+  }
+
+  /**
+   * Every frame: how far the listener is underground (0..1: the city's ambience and the rain fade out down there) and
+   * the nearest train (distance, speed, whether the listener rides in it), or null.
+   */
+  transit(under: number, train: { dist: number; speed: number; inside: boolean } | null): void {
+    this.under = under;
+    this.ambience?.setGain(MIX.ambience * (1 - under));
+    this.rainVoice?.setGain(MIX.rain * this.rain * (1 - under));
+    if (!this.loaded || !this.unlocked) return;
+    const v = train ? trainVoices(train.dist, train.speed, train.inside) : null;
+    if (v && (v.roll > 0.003 || v.motor > 0.003)) {
+      this.trainRoll ??= this.d.mixer.loop('trainRoll', 'sfx');
+      this.trainMotor ??= this.d.mixer.loop('trainMotor', 'sfx');
+      this.trainRoll.setGain(MIX.train * v.roll);
+      this.trainRoll.setRate(v.rollRate);
+      this.trainMotor.setGain(MIX.train * 0.5 * v.motor);
+      this.trainMotor.setRate(v.motorRate);
+    } else if (this.trainRoll || this.trainMotor) {
+      this.trainRoll?.stop();
+      this.trainMotor?.stop();
+      this.trainRoll = this.trainMotor = null;
+    }
+  }
+
+  /**
+   * The announcement in a train: a chime, then "Nächster Halt" and the station's name from the recorded clips in
+   * /audio/stops/ (made by scripts/make-announcements.mjs). Without a clip for the station: spoken by the browser's
+   * speech synthesis (German voice if there is one; silent where the browser has none). null: the end of the line.
+   */
+  announceStop(name: string | null): void {
+    if (!this.loaded || !this.unlocked) return;
+    this.d.mixer.oneShot('trainChime', { gain: MIX.trainChime });
+    const turn = ++this.announcement;
+    void this.stopClips().then((clips) => {
+      if (turn !== this.announcement || this.muted) return;
+      const file = name === null ? 'end.ogg' : clips?.[name];
+      if (!file) return this.speakStop(name);
+      // after the chime: the prefix, then the name (the end-of-line clip stands alone)
+      const play = (f: string, then?: () => void): void => {
+        const a = new Audio(`/audio/stops/${f}`);
+        a.volume = 0.9;
+        this.clip = a;
+        a.onended = () => then?.();
+        a.onerror = () => { if (name !== null) this.speakStop(name); };
+        void a.play().catch(() => { /* not allowed to play yet: nothing is announced */ });
+      };
+      setTimeout(() => {
+        if (turn !== this.announcement) return;
+        this.clip?.pause();
+        if (name === null) play(file);
+        // (a short pause between "Nächster Halt" and the name)
+        else play('next.ogg', () => setTimeout(() => { if (turn === this.announcement) play(file); }, STOP_PAUSE_MS));
+      }, 900);
+    });
+  }
+
+  /** The recorded announcements: station name → file (index.json), fetched once; null if there are none. */
+  private stopClips(): Promise<Record<string, string> | null> {
+    this.clips ??= fetch('/audio/stops/index.json').then((r) => (r.ok ? r.json() as Promise<Record<string, string>> : null)).catch(() => null);
+    return this.clips;
+  }
+
+  private speakStop(name: string | null): void {
+    const synth = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+    if (!synth || typeof SpeechSynthesisUtterance === 'undefined') return;
+    // (spoken as written, but without what a voice stumbles over: "/" and abbreviations)
+    const spoken = name === null ? 'Endstation. Bitte alle aussteigen.' : `Nächster Halt: ${name.replace(/\//g, ', ').replace(/\bBf\b/g, 'Bahnhof').replace(/Str\./g, 'Straße')}.`;
+    const u = new SpeechSynthesisUtterance(spoken);
+    u.lang = 'de-DE';
+    u.rate = 0.95;
+    u.volume = 0.85;
+    const voice = synth.getVoices().find((v) => v.lang.startsWith('de'));
+    if (voice) u.voice = voice;
+    synth.cancel();
+    setTimeout(() => synth.speak(u), 900);
+  }
+
+  /** A train's doors start to open, or to close (three warning beeps first), at (x, z). */
+  trainDoors(opening: boolean, x: number, z: number): void {
+    this.d.mixer.oneShot(opening ? 'trainDoorOpen' : 'trainDoorClose', { gain: MIX.trainDoors, at: { x, z } });
   }
 
   /** Every frame: listener pose (yaw: forward = (sin, cos)) and the tram bell near the nearest stop. */
   listener(x: number, z: number, yaw: number, nearestTramStop: { x: number; z: number; dist: number } | null, dt: number): void {
     this.d.mixer.setListener(x, z, yaw);
-    if (nearestTramStop && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
+    // (no bell from the street down in the underground)
+    if (nearestTramStop && this.under < 0.5 && this.tramBell.update(Math.min(dt, MAX_DT), nearestTramStop.dist)) {
       this.d.mixer.oneShot('tramBell', { gain: MIX.tramBell, at: { x: nearestTramStop.x, z: nearestTramStop.z } });
     }
   }
@@ -377,11 +473,11 @@ export class GameAudio {
     if (!this.loaded || !this.unlocked) return;
     if (!this.ambience) {
       this.ambience = this.d.mixer.loop('ambience', 'ambience');
-      this.ambience.setGain(MIX.ambience);
+      this.ambience.setGain(MIX.ambience * (1 - this.under));
     }
     if (!this.rainVoice) {
       this.rainVoice = this.d.mixer.loop('rain', 'ambience');
-      this.rainVoice.setGain(MIX.rain * this.rain);
+      this.rainVoice.setGain(MIX.rain * this.rain * (1 - this.under));
     }
     if (this.inCar && this.engineOn && !this.heliMode) this.vehicle.start();
     if (this.riding) this.bike.start();

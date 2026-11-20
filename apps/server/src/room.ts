@@ -168,7 +168,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       slot, name, mode: MODE.walk, carId: -1, seat: -1, bikeId: -1, variant: auth.variant, mapX: Math.round(start.x), mapZ: Math.round(start.z),
     }));
     this.watchMessageSize(client);
-    client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick, version: SERVER_VERSION });
+    client.send('welcome', { slot, name, devMode: this.deps.cfg.dev, tick: this.sim.tick, transitEpoch: this.sim.transitEpoch, version: SERVER_VERSION });
     log('info', 'join', { slot, name, ipHash: auth.ipHash, players: this.seats.size });
   }
 
@@ -190,7 +190,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     seat.away = false;
     seat.interest = new Interest(); // the new connection knows nothing yet
     this.watchMessageSize(client);
-    this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick, version: SERVER_VERSION }));
+    this.outbound(seat, () => client.send('welcome', { slot: seat.slot, name: seat.name, devMode: this.deps.cfg.dev, tick: this.sim.tick, transitEpoch: this.sim.transitEpoch, version: SERVER_VERSION }));
     log('info', 'reconnect', { slot: seat.slot, name: seat.name, ipHash: seat.ipHash });
   }
 
