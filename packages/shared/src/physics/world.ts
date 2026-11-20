@@ -382,10 +382,10 @@ function terrainCollider(t: TerrainGrid): RAPIER.ColliderDesc {
 
 /**
  * One thin cuboid per boundary edge. With terrain, each segment reaches from 1 m below the lowest terrain point along
- * it (sampled every 1 m) to boundaryWallHeight above the highest, so it neither floats nor gets buried.
+ * it (sampled every 1 m) to boundarySkyHeight above the highest (the visible curtain is only boundaryWallHeight high), so it neither floats nor gets buried.
  */
 function addBoundaryWalls(world: RAPIER.World, body: RAPIER.RigidBody, b: Float32Array, terrain?: TerrainGrid): void {
-  const { boundaryWallHeight: h, boundaryWallThickness: t } = TUNING.world;
+  const { boundarySkyHeight: h, boundaryWallThickness: t } = TUNING.world;
   const n = b.length / 2;
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n; // ring is closed: the last point connects back to the first

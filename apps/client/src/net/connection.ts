@@ -16,7 +16,7 @@ export const STATUS_TEXTS = { connecting: 'Verbinde …', reconnecting: 'Verbind
 
 /** What the server answers in `welcome` (again after every reconnect). */
 /** transitEpoch: the real time of the server's tick 0 (ms): the trains' timetable runs on the clock, see WorldSim.setTransitEpoch. */
-export type Welcome = { slot: number; name: string; devMode: boolean; tick: number; transitEpoch?: number | null };
+export type Welcome = { slot: number; name: string; devMode: boolean; tick: number; transitEpoch?: number | null; /** the server's release version */ version?: string };
 
 /** online → (connection drops) reconnecting → online again, or lost for good (window over, kicked, closed). */
 export type NetStatus = 'online' | 'reconnecting' | 'lost';

@@ -50,6 +50,8 @@ export interface CarView {
   seat?(i: number): Vector3 | null;
   grips?(): [Vector3, Vector3] | null;
   setDoor?(name: DoorName, k: number): void;
+  /** A helicopter's rotors turn while `on` (DrivenCar.setRotor). */
+  setRotor?(on: boolean, dt: number): number;
 }
 
 /** What the slow state says about a car: who drives (slot) and the lamp level (0 off, 0.5 cranking, 1 on). */
@@ -323,6 +325,7 @@ export class RemotePlayers {
         d.pose = pose;
         d.view.setPose(pose);
         if (c) d.view.setWheels(streamedWheels(c), dt);
+        d.view.setRotor?.((info?.level ?? 0) > 0, dt);
         // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
         d.view.setLights(night, c?.brakeLight ?? false, lampPower(info?.level ?? 0, Math.random));
         const who = others.map((o) => names.get(o.slot)).filter((n) => n !== undefined && n !== '').join(' · ');

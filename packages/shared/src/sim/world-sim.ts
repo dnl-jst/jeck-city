@@ -35,7 +35,8 @@ export type SimEvent =
   /** E on foot next to a bike someone else rides (and nothing free in reach). */
   | { t: 'mountDenied'; id: PlayerId }
   | { t: 'exit'; id: PlayerId; car: number; seat: number }
-  | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' }
+  /** 'air': a helicopter that is not standing on the ground. */
+  | { t: 'exitDenied'; id: PlayerId; reason: 'speed' | 'blocked' | 'air' }
   | { t: 'mount'; id: PlayerId; bike: number }
   /**
    * Off the bike: stepped (or jumped) off, or `crash`ed into something or hit by a car (the rider falls and lies for
@@ -564,9 +565,16 @@ export class WorldSim {
       else pl.char.applyInput({ forward: input.forward, right: input.right, run: input.run, yaw: input.yaw, jump });
     } else {
       const v = this.cars.vehicle(pl.car)!;
-      const throttle = this.ignitions[pl.car]!.state === 'running' ? input.forward : 0;
-      v.applyInput({ throttle, steer: input.right, brake: input.brake });
-      this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+      const running = this.ignitions[pl.car]!.state === 'running';
+      const throttle = running ? input.forward : 0;
+      if (v.spec.fly) {
+        // the helicopter: Space climbs, Shift sinks (once the rotor runs)
+        v.applyInput({ throttle, steer: input.right, brake: false, lift: running ? (input.brake ? 1 : 0) - (input.run ? 1 : 0) : 0 });
+        this.brakes[pl.car] = false;
+      } else {
+        v.applyInput({ throttle, steer: input.right, brake: input.brake });
+        this.brakes[pl.car] = input.brake || (input.forward < 0 && v.speed() > 1);
+      }
       this.horns[pl.car] = input.horn === true;
     }
   }
@@ -710,6 +718,10 @@ export class WorldSim {
   private getOut(id: PlayerId, pl: Player, ev: SimEvent[]): void {
     const i = pl.car ?? pl.pass!.car, seat = pl.pass?.seat ?? DRIVER_SEAT;
     const v = this.cars.vehicle(i);
+    if (v?.spec.fly && v.wheelsInContact() < 2) {
+      ev.push({ t: 'exitDenied', id, reason: 'air' });
+      return;
+    }
     if (v && !canGetOut(v.speed())) {
       ev.push({ t: 'exitDenied', id, reason: 'speed' });
       return;

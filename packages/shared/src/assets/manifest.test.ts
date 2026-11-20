@@ -116,7 +116,7 @@ test('manifest parse: car types and car models, default and validated', () => {
   expect(m.parked[1]!.type).toBeUndefined();
   expect(m.carModels).toEqual(models);
   expect(parseManifest(valid()).carModels).toEqual([]);
-  expect(() => parseManifest({ ...valid(), parked: [{ ...car, type: 4 }] })).toThrow();
+  expect(() => parseManifest({ ...valid(), parked: [{ ...car, type: 5 }] })).toThrow();
   expect(() => parseManifest({ ...valid(), carModels: [{ ...models[0], type: 'bus' }] })).toThrow();
 });
 

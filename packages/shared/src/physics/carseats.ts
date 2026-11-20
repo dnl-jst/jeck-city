@@ -66,4 +66,16 @@ export const CAR_SEATS: Record<CarType, SeatLayout> = {
       door_fr: { hingeX: -0.765, hingeU: 1, rearU: -0.4, openAngle: 1.13, handleH: 0.86 },
     },
   },
+  // pilot and the seat beside them
+  heli: {
+    floor: 0.5,
+    seats: [
+      { x: 0.4, u: 0.5, h: 0.85, door: 'door_fl' },
+      { x: -0.4, u: 0.5, h: 0.85, door: 'door_fr' },
+    ],
+    doors: {
+      door_fl: { hingeX: 0.84, hingeU: 1.3, rearU: 0.1, openAngle: 1.13, handleH: 1.15 },
+      door_fr: { hingeX: -0.84, hingeU: 1.3, rearU: 0.1, openAngle: 1.13, handleH: 1.15 },
+    },
+  },
 };

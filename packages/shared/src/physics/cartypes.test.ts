@@ -3,9 +3,10 @@ import { CAR_SPECS, CAR_TYPE_WEIGHTS, CAR_TYPES, carTypeFor, carTypeOf } from '.
 import { chassisLayout, SUSPENSION_REST_LENGTH, VEHICLE_REST_Y } from './vehicle';
 
 test('carTypeFor splits [0, 1) by the weights; carTypeOf defaults to kleinwagen', () => {
-  expect(CAR_TYPE_WEIGHTS.reduce((a, b) => a + b, 0)).toBeCloseTo(1);
+  expect(CAR_TYPE_WEIGHTS.reduce((a: number, b) => a + b, 0)).toBeCloseTo(1);
   expect(carTypeFor(0)).toBe(0);
-  expect(carTypeFor(0.999)).toBe(CAR_TYPES.length - 1);
+  expect(CAR_TYPES[carTypeFor(0.999)]).toBe('smart'); // never the helicopter (weight 0)
+  expect(CAR_TYPES[carTypeFor(1)]).toBe('smart');
   expect(carTypeOf(undefined)).toBe('kleinwagen');
   expect(carTypeOf(2)).toBe('transporter');
 });

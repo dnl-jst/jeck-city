@@ -5,8 +5,8 @@ export type FileSoundId =
   | 'engineIdle' | 'engineMid' | 'engineHigh'
   | 'skid' | 'impact1' | 'impact2' | 'impact3'
   | 'ambience' | 'tramBell' | 'static' | 'rain';
-/** Sounds synthesised in the browser (bike, see bike-sound.ts; car horn, see horn.ts; underground train, see train-sound.ts); the mixer generates them on unlock. */
-export type SynthSoundId = 'bikeTick' | 'bikeBell' | 'carHorn' | 'trainRoll' | 'trainMotor' | 'trainDoorOpen' | 'trainDoorClose' | 'trainChime';
+/** Sounds synthesised in the browser (bike, see bike-sound.ts; car horn, see horn.ts; underground train, see train-sound.ts; helicopter, see rotor.ts); the mixer generates them on unlock. */
+export type SynthSoundId = 'bikeTick' | 'bikeBell' | 'carHorn' | 'heliRotor' | 'trainRoll' | 'trainMotor' | 'trainDoorOpen' | 'trainDoorClose' | 'trainChime';
 export type SoundId = FileSoundId | SynthSoundId;
 
 export interface SoundDef {

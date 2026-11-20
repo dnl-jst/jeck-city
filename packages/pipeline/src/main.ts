@@ -11,7 +11,7 @@ import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
-import { shipCarModels } from './ship-cars.js';
+import { shipCarModels, withHeli } from './ship-cars.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, fetchTransitRoutes, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { generatedLamps } from './lamps.js';
@@ -368,7 +368,7 @@ async function main() {
       ...[{ ...spawnBike, type: 3, color: SPAWN_BIKE_COLOR }, SOUND_BIKE, ...rackBikes].map((b) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading) })),
       ...scooters.map(({ down, ...b }) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading), ...(down ? { down } : {}) })),
     ],
-    parked: parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) })),
+    parked: withHeli(parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) }))),
     terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
     datum,
     farGroundY: r2(borderMin(terrain) - 0.5),

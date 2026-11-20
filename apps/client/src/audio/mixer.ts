@@ -1,6 +1,7 @@
 import { synthBell, synthTick } from './bike-sound';
 import { synthHorn } from './horn';
 import { synthTrainChime, synthTrainDoorClose, synthTrainDoorOpen, synthTrainMotor, synthTrainRoll } from './train-sound';
+import { synthRotor } from './rotor';
 import { REMOTE_RADIO_LOWPASS_HZ } from '@nn/shared';
 import { SOUNDS, type FileSoundId, type SoundId, type SynthSoundId } from './sounds';
 
@@ -22,6 +23,7 @@ export const MIX = {
   train: 0.55,
   trainDoors: 0.5,
   trainChime: 0.45,
+  heli: 0.55,
 } as const;
 
 /** Synthesised samples (made once the AudioContext exists): sample rate → mono samples. */
@@ -34,6 +36,7 @@ const SYNTH: Record<SynthSoundId, (rate: number) => Float32Array> = {
   trainDoorOpen: synthTrainDoorOpen,
   trainDoorClose: synthTrainDoorClose,
   trainChime: synthTrainChime,
+  heliRotor: synthRotor,
 };
 
 export interface LoopVoice {
