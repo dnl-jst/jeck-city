@@ -13,6 +13,8 @@ export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
 /** Bottom hint while driving a car. */
 export const DRIVE_HINT = 'W Gas · S bremsen/rückwärts · A/D lenken · Leertaste Handbremse · H hupen · R Radio (halten: Senderwahl) · Mausrad Sender · E aussteigen';
+/** Bottom hint while flying the helicopter. */
+export const HELI_HINT = 'Leertaste steigen · Shift sinken · W vorwärts · S rückwärts · A/D drehen · R Radio · E aussteigen (am Boden)';
 /** Bottom hint while riding along in a car. */
 export const PASSENGER_HINT = 'E aussteigen';
 /** Bottom hint while riding a bike. */

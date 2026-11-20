@@ -9,7 +9,7 @@ import { enterStage, leaveStage } from './boarding';
 import { poseOccupant, shutDoors } from './occupant';
 import { BikeLights, BikeRig, RIDER_POSTURE } from './bikes/rig';
 import { BikeView } from './bikes/parked';
-import { DRIVE_HINT, PASSENGER_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
+import { DRIVE_HINT, HELI_HINT, PASSENGER_HINT, RIDE_HINT, SCOOTER_RIDE_HINT, SOUND_RIDE_HINT } from './hud';
 import type { GameAudio } from './audio/game-audio';
 import { WheelControl, type WheelState } from './audio/wheel-control';
 import type { DevCam } from './devparams';
@@ -240,9 +240,24 @@ export class Game {
     return out;
   }
 
+  /** Whether car i is a helicopter. */
+  private isHeli(i: number): boolean {
+    return CAR_SPECS[this.session.sim.cars.types[i]!].fly !== undefined;
+  }
+
+  /** Flying the helicopter (mode 'drive'). */
+  get heli(): boolean {
+    return this.carId !== null && this.isHeli(this.carId);
+  }
+
+  /** Car `car` drawn by `driven` is a helicopter: its rotors turn (while `on`, else they run down) and are heard. */
+  private spinRotor(car: number, on: boolean, dt: number): void {
+    if (this.isHeli(car)) this.ctx.audio?.rotor(this.driven.setRotor(on, dt));
+  }
+
   /** Key hint for the current mode: car, bike, sound Long John, or none on foot. */
   get modeHint(): string {
-    if (this.mode === 'drive') return DRIVE_HINT;
+    if (this.mode === 'drive') return this.heli ? HELI_HINT : DRIVE_HINT;
     if (this.mode === 'sit') return PASSENGER_HINT;
     if (this.mode === 'ride') {
       const t = this.bikeType();
@@ -292,7 +307,7 @@ export class Game {
         this.rig.setDisco(!this.rig.discoOn);
         this.ctx.hud.flash(this.rig.discoOn ? 'Diskokugel an' : 'Diskokugel aus');
       }
-      honk = this.mode === 'drive' && (hPressed || input.held('KeyH'));
+      honk = this.mode === 'drive' && !this.heli && (hPressed || input.held('KeyH'));
       if (input.consume('KeyE') && !busy && !this.boarding) use = true;
       if (this.radioOn) for (let i = 0; i < Math.abs(notches); i++) audio?.radioStep(notches > 0 ? 1 : -1);
     }
@@ -392,7 +407,7 @@ export class Game {
       else if (e.t === 'knock') this.knockSound(e.id);
       else if (e.t === 'enter' && e.id === me) this.enteredCar(e.car, e.seat);
       else if (e.t === 'exit' && e.id === me) this.leftCar(e.car, e.seat);
-      else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
+      else if (e.t === 'exitDenied' && e.id === me) hud.flash(e.reason === 'air' ? 'Erst landen' : e.reason === 'speed' ? 'Erst anhalten' : 'Hier kannst du nicht aussteigen');
       else if (e.t === 'enterDenied' && e.id === me) hud.flash('Das Auto ist besetzt');
       else if (e.t === 'mountDenied' && e.id === me) hud.flash('Das Fahrrad ist besetzt');
       else if (e.t === 'mount' && e.id === me) this.mountedBike(e.bike);
@@ -436,10 +451,10 @@ export class Game {
     const at = this.figure.group.position;
     const from = toCarPoint({ x: pose.x, z: pose.z, heading: headingOf(pose) }, at.x, at.z);
     this.boarding = { kind: 'in', car, seat, path: boardingPath(CAR_SPECS[type], CAR_SEATS[type], seat, from), t: 0 };
-    this.follow.setDriving(true, headingOf(pose));
+    this.follow.setDriving(true, headingOf(pose), this.isHeli(car) ? 'heli' : 'car');
     this.mode = driver ? 'drive' : 'sit';
     this.ctx.hud.setHint(this.modeHint);
-    if (driver) this.ctx.audio?.enterCar();
+    if (driver) this.ctx.audio?.enterCar(this.isHeli(car));
   }
 
   private leftCar(car: number, seat: number): void {
@@ -488,6 +503,7 @@ export class Game {
     if (this.carId === null && !this.pass) {
       this.cars.setOwn(null);
       this.driven.hide();
+      this.ctx.audio?.rotor(0);
     }
   }
 
@@ -575,6 +591,7 @@ export class Game {
         out.t += dt;
         const st = leaveStage(out.t), at = this.leavingPose(out.car);
         this.driven.setPose(at);
+        this.spinRotor(out.car, false, dt);
         poseOccupant(this.figure, this.ctx.scene, this.driven, this.session.sim.cars.types[out.car]!, out.seat, at, st, dt);
         if (st.done) this.finishLeave();
       } else {
@@ -635,11 +652,12 @@ export class Game {
       const level = this.carId !== null ? sim.ignition(car).lightLevel() : this.session.roster?.().cars.get(car)?.level ?? 0;
       // (the brake lights of somebody else's car come with the stream, as for every other car)
       this.driven.setLights(night, streamed ? streamed.brakeLight : sim.braking(car), lampPower(level, Math.random));
+      this.spinRotor(car, level > 0, dt);
       const v = streamed ? { x: streamed.vx, y: streamed.vy, z: streamed.vz } : vehicle?.chassis.linvel() ?? { x: 0, y: 0, z: 0 };
       if (!this.flying) this.follow.update(pose, headingOf(pose), dt, Math.hypot(v.x, v.z));
       // riding along: the car's radio, as the driver hears it
       if (this.pass) audio?.rideAlong(this.session.roster?.().cars.get(car)?.radio ?? null);
-      if (audio && this.carId !== null) {
+      if (audio && this.carId !== null && !this.isHeli(car)) {
         // velocity along / across the car's heading (forward = (sin h, cos h))
         const h = headingOf(pose);
         const s = Math.sin(h), c = Math.cos(h);
@@ -653,7 +671,9 @@ export class Game {
       const { walkers, cars, riders } = this.session.remote!();
       const { names, variants, cars: info, seats } = this.session.roster!();
       this.remotes.update({ walkers, cars, riders }, names, info, this.ctx.camera, night, dt, variants, seats);
-      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null), dt);
+      // (helicopters have a rotor, not a car engine; the one ridden along in is the own view's)
+      audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null).filter((c) => !this.isHeli(c.id)), dt);
+      audio?.remoteRotors([...cars.values()].filter((c) => c.hasDriver && this.isHeli(c.id) && c.id !== this.pass?.car));
 
     }
     if (audio) {

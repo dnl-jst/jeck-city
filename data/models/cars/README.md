@@ -2,7 +2,10 @@
 
 Four parked/driveable car types (`CAR_TYPES` in `packages/shared/src/physics/cartypes.ts`): `kleinwagen` (compact
 hatchback), `mittelklasse` (saloon), `transporter` (panel van, sliding door on the right), `smart` (city two-seater).
-Each has a `build.py` that regenerates `<name>.blend`, `<name>.glb` and the distance version `<name>_lod.glb`
+A fifth type, `heli`, is the helicopter: flown like a car is driven, placed by hand (`HELI_SPOT` in
+`packages/pipeline/src/ship-cars.ts`), with its own stand-alone `build.py`, no wheel or plate nodes, and the nodes
+`rotor_main` (spins about the vertical) and `rotor_tail` (spins about X). `npm run heli-check -- <dev server url>`
+flies it. Each has a `build.py` that regenerates `<name>.blend`, `<name>.glb` and the distance version `<name>_lod.glb`
 (change the script, not the .blend).
 
 ```sh

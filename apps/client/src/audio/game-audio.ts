@@ -1,5 +1,5 @@
 import { ImpactDetector, landed, skidAmount, StepClock, TramBell } from './cues';
-import { MIX, type AudioMixer, type LoopVoice, type ShotVoice } from './mixer';
+import { MIX, type AudioMixer, type LoopVoice, type PositionalLoopVoice, type ShotVoice } from './mixer';
 import type { Radio } from './radio';
 import type { SoundId } from './sounds';
 import { stationLabel, type RadioTuner, type StationId } from './stations';
@@ -11,7 +11,9 @@ import type { RemoteAudio, RemoteCarIn } from './remote-audio';
 /** The parts of AudioMixer that GameAudio uses (fakes in tests). */
 export type AudioMixerLike = Pick<
   AudioMixer, 'unlock' | 'load' | 'setMuted' | 'setInCar' | 'oneShot' | 'loop' | 'setListener' | 'suspend' | 'resume'
->;
+>
+  // (positional loops: the other players' helicopters; optional, so the tests' fakes need not have it)
+  & Partial<Pick<AudioMixer, 'loopAt'>>;
 /** The parts of Radio that GameAudio uses (fakes in tests). */
 export type RadioLike = Pick<Radio, 'tune' | 'setMuted' | 'unlocked' | 'suspend' | 'resume'>;
 
@@ -50,6 +52,10 @@ export class GameAudio {
   private staticVoice: LoopVoice | null = null;
   private readonly hornState = new HornState();
   private hornVoice: LoopVoice | null = null;
+  /** In a helicopter (no car engine or starter sounds), its rotor loop, and the other players' rotors by car. */
+  private heliMode = false;
+  private rotorVoice: LoopVoice | null = null;
+  private readonly rotors = new Map<number, PositionalLoopVoice>();
   private ambience: LoopVoice | null = null;
   /** Rain loop on the ambience bus; keeps running at gain 0 when dry. */
   private rainVoice: LoopVoice | null = null;
@@ -124,8 +130,9 @@ export class GameAudio {
   }
 
   /** Getting in: door opens; the Ignition then calls doorClosed(), crank() and engineRunning(). */
-  enterCar(): void {
+  enterCar(heli = false): void {
     this.inCar = true;
+    this.heliMode = heli;
     this.impacts = new ImpactDetector();
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.setInCar(true);
@@ -136,6 +143,7 @@ export class GameAudio {
   }
 
   crank(): void {
+    if (this.heliMode) return; // the rotor spools up instead
     this.starter?.stop();
     this.starter = this.d.mixer.oneShot('engineStart', { gain: MIX.engine, bus: 'cabin' });
   }
@@ -183,7 +191,8 @@ export class GameAudio {
     this.d.tuner.exitCar();
     this.vehicle.stop();
     this.stopHorn();
-    if (running) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
+    if (running && !this.heliMode) this.d.mixer.oneShot('engineStop', { gain: MIX.engine });
+    this.heliMode = false;
     this.d.mixer.oneShot('doorOpen', { gain: MIX.doors });
     this.d.mixer.oneShot('doorClose', { gain: MIX.doors });
     this.d.mixer.setInCar(false);
@@ -270,6 +279,41 @@ export class GameAudio {
     this.d.mixer.oneShot('impact2', { gain: MIX.impact * 0.7 });
   }
 
+  /** The own helicopter's rotor, every frame while it is drawn: level 0..1 = how fast it turns (0: silent). */
+  rotor(level: number): void {
+    if (level > 0.01 && !this.rotorVoice && this.loaded && this.unlocked) this.rotorVoice = this.d.mixer.loop('heliRotor', 'cabin');
+    if (!this.rotorVoice) return;
+    if (level <= 0.01) {
+      this.rotorVoice.stop();
+      this.rotorVoice = null;
+      return;
+    }
+    this.rotorVoice.setGain(MIX.heli * level * level);
+    this.rotorVoice.setRate(0.4 + 0.6 * level);
+  }
+
+  /** Online, every frame: the helicopters other players fly, each heard from where it is. */
+  remoteRotors(helis: readonly { id: number; x: number; z: number }[]): void {
+    const loopAt = this.d.mixer.loopAt?.bind(this.d.mixer);
+    if (!loopAt || !this.loaded || !this.unlocked) return;
+    const seen = new Set<number>();
+    for (const h of helis) {
+      seen.add(h.id);
+      let v = this.rotors.get(h.id);
+      if (!v) {
+        v = loopAt('heliRotor');
+        v.setGain(MIX.heli * 1.6);
+        this.rotors.set(h.id, v);
+      }
+      v.setPosition(h.x, h.z);
+    }
+    for (const [id, v] of this.rotors) {
+      if (seen.has(id)) continue;
+      v.stop();
+      this.rotors.delete(id);
+    }
+  }
+
   /** Online, every frame: the other players' cars (engines, horns, radio) around `listener`. */
   remoteCars(listener: { x: number; z: number }, cars: readonly RemoteCarIn[], dt: number): void {
     if (this.loaded && this.unlocked) this.d.remote?.update(listener, cars, Math.min(dt, MAX_DT));
@@ -339,7 +383,7 @@ export class GameAudio {
       this.rainVoice = this.d.mixer.loop('rain', 'ambience');
       this.rainVoice.setGain(MIX.rain * this.rain);
     }
-    if (this.inCar && this.engineOn) this.vehicle.start();
+    if (this.inCar && this.engineOn && !this.heliMode) this.vehicle.start();
     if (this.riding) this.bike.start();
   }
 }

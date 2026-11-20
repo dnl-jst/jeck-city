@@ -4,7 +4,11 @@ import { TUNING } from './tuning';
 import { CAR_GROUPS, onBeforeStep, type PhysicsWorld } from './world';
 
 /** throttle −1..1 (negative = reverse / brake while rolling forward), steer −1..1 (positive = right). */
-export type VehicleInput = { throttle: number; steer: number; brake: boolean };
+export type VehicleInput = {
+  throttle: number; steer: number; brake: boolean;
+  /** Helicopters only: −1 (sink) … 1 (climb); 0 or absent holds the height. */
+  lift?: number;
+};
 
 /** Pose, velocities (linear, angular) and front-wheel steering angle: enough to replay the car from this instant. */
 export type VehicleState = {
@@ -83,6 +87,15 @@ export class Vehicle {
       ).setCollisionGroups(CAR_GROUPS),
       this.chassis,
     );
+    const tail = this.spec.fly?.tail;
+    if (tail) {
+      // the tail boom: weightless, so the mass properties above stay the whole helicopter's
+      world.createCollider(
+        R.ColliderDesc.cuboid(tail.halfX, tail.halfY, tail.halfZ).setTranslation(0, tail.y - VEHICLE_REST_Y, tail.z).setDensity(0)
+          .setCollisionGroups(CAR_GROUPS),
+        this.chassis,
+      );
+    }
 
     const c = world.createVehicleController(this.chassis);
     c.indexUpAxis = 1;
@@ -114,6 +127,7 @@ export class Vehicle {
   /** Driver input for one fixed step (TUNING.world.dt); call once per step before PhysicsWorld.step(). Ignored while unoccupied. */
   applyInput(i: VehicleInput): void {
     if (!this.occupied) return;
+    if (this.spec.fly) return this.flyInput(i);
     const c = this.ctrl;
     const v = this.speed();
     const kmh = Math.abs(v) / KMH;
@@ -152,6 +166,55 @@ export class Vehicle {
     if (throttle !== 0 || i.steer !== 0 || i.brake) this.chassis.wakeUp();
   }
 
+  /**
+   * The helicopter's step. On its skids with no lift it just stands (gravity, braked). Otherwise it flies: gravity is
+   * off and the velocity is steered directly – along the heading towards throttle × top speed (so it stops and hovers
+   * when let go), up or down with `lift`, turning about the vertical with `steer`. The body is held level except for a
+   * nose-down pitch with the forward speed and a bank into the turn. Everything derives from the body's state and
+   * steerAngle (here the eased turn input, −1..1, positive = left), so a saved state replays exactly.
+   */
+  private flyInput(i: VehicleInput): void {
+    const H = TUNING.heli, dt = TUNING.world.dt, b = this.chassis;
+    const clamp = (x: number, lo = -1, hi = 1): number => Math.max(lo, Math.min(hi, x));
+    const lift = clamp(i.lift ?? 0), throttle = clamp(i.throttle);
+    if (this.wheelsInContact() >= 2 && lift <= 0) {
+      b.setGravityScale(1, false);
+      this.steerAngle = 0;
+      return;
+    }
+    b.setGravityScale(0, true);
+
+    const turn = -clamp(i.steer);
+    this.steerAngle += clamp(turn - this.steerAngle, -H.yawEase * dt, H.yawEase * dt);
+
+    const q = b.rotation(), p = b.translation(), v = b.linvel();
+    const h = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y));
+    const fx = Math.sin(h), fz = Math.cos(h);
+    // horizontal: towards the wanted speed along the heading; whatever goes sideways is braked away
+    const want = throttle * (throttle > 0 ? H.maxSpeed : H.maxReverse);
+    const dx = fx * want - v.x, dz = fz * want - v.z, d = Math.hypot(dx, dz);
+    const step = (throttle !== 0 ? H.accel : H.drag) * dt, k = d > step ? step / d : 1;
+    // vertical: climb or sink, hold the height otherwise; no climbing above the ceiling
+    let up = lift * (lift > 0 ? H.climb : H.sink);
+    if (p.y >= H.ceiling) up = Math.min(up, 0);
+    const vy = v.y + clamp(up - v.y, -H.liftAccel * dt, H.liftAccel * dt);
+    b.setLinvel({ x: v.x + dx * k, y: vy, z: v.z + dz * k }, true);
+    b.setAngvel({ x: 0, y: this.steerAngle * H.yawRate, z: 0 }, true);
+
+    // attitude: yaw as it is, nose down with the forward speed, banked into the turn (more at speed)
+    const along = clamp((v.x * fx + v.z * fz) / H.maxSpeed);
+    const pitch = along * H.maxPitch, roll = -this.steerAngle * H.maxRoll * (0.25 + 0.75 * Math.abs(along));
+    const sy = Math.sin(h / 2), cy = Math.cos(h / 2), sp = Math.sin(pitch / 2), cp = Math.cos(pitch / 2), sr = Math.sin(roll / 2), cr = Math.cos(roll / 2);
+    // yaw(y) · pitch(x) · roll(z)
+    const ax = cy * sp, ay = sy * cp, az = -sy * sp, aw = cy * cp;
+    let tx = ax * cr + ay * sr, ty = ay * cr - ax * sr, tz = aw * sr + az * cr, tw = aw * cr - az * sr;
+    if (tx * q.x + ty * q.y + tz * q.z + tw * q.w < 0) { tx = -tx; ty = -ty; tz = -tz; tw = -tw; }
+    const e = 1 - Math.exp(-H.tiltRate * dt);
+    const nx = q.x + (tx - q.x) * e, ny = q.y + (ty - q.y) * e, nz = q.z + (tz - q.z) * e, nw = q.w + (tw - q.w) * e;
+    const n = Math.hypot(nx, ny, nz, nw);
+    b.setRotation({ x: nx / n, y: ny / n, z: nz / n, w: nw / n }, true);
+  }
+
   /** Chassis centre and orientation. */
   pose(): { x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number } {
     const p = this.chassis.translation();
@@ -177,7 +240,7 @@ export class Vehicle {
     b.setLinvel({ x: s.vx, y: s.vy, z: s.vz }, true);
     b.setAngvel({ x: s.ax, y: s.ay, z: s.az }, true);
     this.steerAngle = s.steer;
-    for (let w = 0; w < 2; w++) this.ctrl.setWheelSteering(w, s.steer);
+    if (!this.spec.fly) for (let w = 0; w < 2; w++) this.ctrl.setWheelSteering(w, s.steer);
     b.wakeUp();
   }
 
@@ -201,6 +264,7 @@ export class Vehicle {
       return;
     }
     this.steerAngle = 0;
+    if (this.spec.fly) this.chassis.setGravityScale(1, true); // left in the air: it falls
     for (let w = 0; w < 4; w++) {
       this.ctrl.setWheelEngineForce(w, 0);
       this.ctrl.setWheelSteering(w, 0);

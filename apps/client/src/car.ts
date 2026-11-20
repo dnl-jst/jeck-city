@@ -1,6 +1,6 @@
 import {
-  type BufferGeometry, Color, Group, type Material, type Object3D,
-  DataTexture, DataUtils, EquirectangularReflectionMapping, FrontSide, HalfFloatType, SRGBColorSpace, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, type Mesh, MeshStandardMaterial, Quaternion, SpotLight,
+  type BufferGeometry, CircleGeometry, Color, DoubleSide, Group, type Material, Mesh, MeshBasicMaterial, type Object3D,
+  DataTexture, DataUtils, EquirectangularReflectionMapping, FrontSide, HalfFloatType, SRGBColorSpace, InstancedMesh, LinearFilter, RGBAFormat, Matrix4, MeshStandardMaterial, Quaternion, SpotLight,
   Vector3, type Scene,
 } from 'three';
 import {
@@ -194,6 +194,9 @@ const STEERING_RATIO = 6, STEERING_WHEEL_MAX = 2.2;
 /** How far the suspension may visibly move a wheel from its rest position (m). */
 const WHEEL_TRAVEL = 0.12;
 
+/** Helicopter rotor: turns per second at full speed, seconds to spool up and to run down, blade length (m). */
+const ROTOR_TURNS = 5.5, ROTOR_SPOOL_UP = 2, ROTOR_RUN_DOWN = 9, ROTOR_RADIUS = 4.4;
+
 /** Whether textures can be painted (a browser; not the unit tests' plain Node). */
 const canDraw = (): boolean => typeof document !== 'undefined';
 
@@ -212,6 +215,8 @@ type Rig = {
   seats: Object3D[];
   steering: { node: Object3D; rest: Quaternion; grips: [Object3D, Object3D] | null } | null;
   doors: Map<DoorName, { node: Object3D; rest: Quaternion; side: number; open: number }>;
+  /** A helicopter's rotors (nodes rotor_main: about y, rotor_tail: about x) and the blur disc of the turning blades. */
+  rotors: { main: Object3D; tail: Object3D | null; disc: Mesh<CircleGeometry, MeshBasicMaterial> } | null;
 };
 
 function makeRig(model: Object3D, type: CarType): Rig {
@@ -240,7 +245,8 @@ function makeRig(model: Object3D, type: CarType): Rig {
     if ([m.material].flat().some(isClearGlass)) glassMesh(m);
     m.material = Array.isArray(m.material) ? m.material.map(own) : own(m.material);
   });
-  const wheels = WHEEL_NODES.map((n) => {
+  // (a helicopter stands on skids)
+  const wheels = CAR_SPECS[type].fly ? [] : WHEEL_NODES.map((n) => {
     const node = root.getObjectByName(n);
     if (!node) throw new Error(`car model ${type}: node ${n} missing`);
     return { node, rest: node.position.clone() };
@@ -270,10 +276,20 @@ function makeRig(model: Object3D, type: CarType): Rig {
     const node = root.getObjectByName(name);
     if (node) doors.set(name as DoorName, { node, rest: node.quaternion.clone(), side: Math.sign(d.hingeX), open: d.openAngle });
   }
+  const main = root.getObjectByName('rotor_main');
+  let rotors: Rig['rotors'] = null;
+  if (main) {
+    const disc = new Mesh(new CircleGeometry(ROTOR_RADIUS, 48), new MeshBasicMaterial({ color: 0x14161a, transparent: true, opacity: 0, depthWrite: false, side: DoubleSide }));
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.y = 0.03;
+    disc.visible = false;
+    main.add(disc);
+    rotors = { main, tail: root.getObjectByName('rotor_tail') ?? null, disc };
+  }
   const sp = CAR_SPECS[type];
   const fz = sp.bodyZ + sp.length / 2, rz = sp.bodyZ - sp.length / 2;
   return {
-    root, paint, head, tail, wheels, plates, seats, steering, doors,
+    root, paint, head, tail, wheels, plates, seats, steering, doors, rotors,
     lamps: {
       fl: lamp('light_fl', new Vector3(0.6, G + 0.75, fz)), fr: lamp('light_fr', new Vector3(-0.6, G + 0.75, fz)),
       rl: lamp('tail_l', new Vector3(0.7, G + 0.85, rz)), rr: lamp('tail_r', new Vector3(-0.7, G + 0.85, rz)),
@@ -296,6 +312,9 @@ export class DrivenCar {
   private readonly rigs = new Map<CarType, Rig>();
   private current: Rig | null = null;
   private spin = 0;
+  /** Helicopter: how fast the rotor turns (0..1; −1: not known yet, the first setRotor() sets it) and its angle. */
+  private rotor = -1;
+  private rotorAngle = 0;
   private radius: number = TUNING.vehicle.wheelRadius;
   private shown = false;
   private readonly qSteer = new Quaternion();
@@ -363,6 +382,7 @@ export class DrivenCar {
       this.rigs.set(type, r);
     }
     if (this.current) this.group.remove(this.current.root);
+    if (!this.shown || this.current !== r) this.rotor = -1;
     this.current = r ?? null;
     this.radius = CAR_SPECS[type].wheelRadius;
     if (r) {
@@ -414,6 +434,25 @@ export class DrivenCar {
     if (!d) return;
     // hinged at the front: the rear edge of a left door swings out to the left
     d.node.quaternion.copy(d.rest).multiply(this.qSteer.setFromAxisAngle(this.axisY, -d.side * d.open * Math.max(0, Math.min(1, k))));
+  }
+
+  /**
+   * A helicopter's rotors: they spool up while `on` (someone has started it) and run down otherwise. Returns how fast
+   * they turn now (0..1; 0 for a car). A helicopter first seen with its rotor on is at full speed at once.
+   */
+  setRotor(on: boolean, dt: number): number {
+    const r = this.current?.rotors;
+    if (!r) return 0;
+    if (this.rotor < 0) this.rotor = on ? 1 : 0;
+    this.rotor = on ? Math.min(1, this.rotor + dt / ROTOR_SPOOL_UP) : Math.max(0, this.rotor - dt / ROTOR_RUN_DOWN);
+    this.rotorAngle = (this.rotorAngle + this.rotor * ROTOR_TURNS * 2 * Math.PI * dt) % (Math.PI * 2);
+    r.main.rotation.y = this.rotorAngle;
+    if (r.tail) r.tail.rotation.x = this.rotorAngle * 4;
+    // fast blades blur into a disc
+    const blur = Math.max(0, (this.rotor - 0.35) / 0.65);
+    r.disc.visible = blur > 0;
+    r.disc.material.opacity = 0.22 * blur;
+    return this.rotor;
   }
 
   /** Wheels: spin with the speed (m/s), steer and follow each wheel's suspension; dt = frame time. */
