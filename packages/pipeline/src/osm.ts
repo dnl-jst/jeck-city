@@ -2,6 +2,7 @@ import { wgs84ToLocal } from '@nn/shared';
 import { withProfiles, type Profile } from './roadprofile.js';
 import { crossSectionFromTags, reversed, type CrossSection, type SeparateSides } from './crosssection.js';
 import { separateParkingSides, type ParkingArea } from './separateparking.js';
+import { pointInPolygon } from './polyline.js';
 
 export type Pt = { x: number; z: number };
 /**
@@ -48,7 +49,8 @@ function bikeParkingOf(pos: Pt, t: Tags, outline?: Pt[]): BikeParking {
   return b;
 }
 
-export type Shop = { pos: Pt; name?: string; type: string; street?: string; housenumber?: string };
+/** district: name of the Stadtteil (boundary relation, BOUNDARY_IDS) the shop lies in. */
+export type Shop = { pos: Pt; name?: string; type: string; street?: string; housenumber?: string; district?: string };
 
 type LL = { lat: number; lon: number };
 type Tags = Record<string, string>;
@@ -155,6 +157,8 @@ export function parseOsm(json: unknown): OsmFeatures {
   /** Outer ways of the boundary relations by way id; a way shared by two of them is an inner border (count 2). */
   const borderWays = new Map<number, { pts: Pt[]; count: number }>();
   const seenBoundaries = new Set<number>();
+  /** Outer ways per Stadtteil name: its ring tells which shops lie in it. */
+  const districtWays = new Map<string, Pt[][]>();
   for (const el of elements) {
     const t = el.tags ?? {};
     if (el.type === 'relation') {
@@ -162,12 +166,15 @@ export function parseOsm(json: unknown): OsmFeatures {
       if (BOUNDARY_IDS.includes(el.id)) {
         if (seenBoundaries.has(el.id)) continue;
         seenBoundaries.add(el.id);
+        const ways = t.name ? (districtWays.get(t.name) ?? districtWays.set(t.name, []).get(t.name)!) : [];
         (el.members ?? []).forEach((m, i) => {
           if (m.type !== 'way' || m.role !== 'outer' || !m.geometry) return;
           const key = m.ref ?? -(el.id * 10000 + i);
+          const pts = toPts(m.geometry);
+          ways.push(pts);
           const w = borderWays.get(key);
           if (w) w.count++;
-          else borderWays.set(key, { pts: toPts(m.geometry), count: 1 });
+          else borderWays.set(key, { pts, count: 1 });
         });
       } else if (GREEN(t)) f.greens.push(...joinRings(outers));
       else if (t.highway === 'pedestrian' || t.place === 'square') f.squares.push(...joinRings(outers).map((outline) => ({ name: t.name ?? '', outline })));
@@ -224,6 +231,10 @@ export function parseOsm(json: unknown): OsmFeatures {
   // union of the Stadtteile: their common border ways cancel out, the rest joins into the outer ring
   const outerBorder = [...borderWays.values()].filter((w) => w.count === 1).map((w) => w.pts);
   f.boundary = joinRings(outerBorder).sort((a, b) => b.length - a.length)[0] ?? [];
+  for (const [name, ways] of districtWays) {
+    const ring = joinRings(ways).sort((a, b) => b.length - a.length)[0];
+    if (ring) for (const s of f.shops) if (!s.district && pointInPolygon(s.pos, ring)) s.district = name;
+  }
   f.tramStops = dedupeStops(stops);
   // parking:*=separate becomes a strip where a street-side parking area runs alongside
   for (const p of pending) f.roads[p.index] = parseRoad(p.el, p.pts, p.t, separateParkingSides(p.pts, parkingAreas))!;

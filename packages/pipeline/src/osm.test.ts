@@ -112,3 +112,15 @@ test('a pedestrian multipolygon (e.g. Kardinal-Höffner-Platz) becomes a square'
   expect(f.squares[0]!.name).toBe('Kardinal-Höffner-Platz');
   expect(f.squares[0]!.outline.length).toBeGreaterThanOrEqual(4);
 });
+
+test('shops get the name of the Stadtteil they lie in', () => {
+  const way = (ref: number, pts: [number, number][]) => ({ type: 'way', ref, role: 'outer', geometry: pts.map(([lat, lon]) => ({ lat, lon })) });
+  const rel = (id: number, name: string, members: unknown[]) => ({ type: 'relation', id, tags: { boundary: 'administrative', name }, members });
+  const shop = (id: number, lat: number) => ({ type: 'node', id, lat, lon: 6.955, tags: { shop: 'bakery' } });
+  const f = parseOsm({ elements: [
+    shop(10, 50.965), shop(11, 50.955), shop(12, 50.945),
+    rel(2613766, 'Nippes', [way(1, [[50.96, 6.95], [50.97, 6.95], [50.97, 6.96]]), way(2, [[50.97, 6.96], [50.96, 6.96]]), way(3, [[50.96, 6.96], [50.96, 6.95]])]),
+    rel(2613763, 'Neustadt/Nord', [way(3, [[50.96, 6.96], [50.96, 6.95]]), way(4, [[50.96, 6.95], [50.95, 6.95], [50.95, 6.96], [50.96, 6.96]])]),
+  ] });
+  expect(f.shops.map((s) => s.district)).toEqual(['Nippes', 'Neustadt/Nord', undefined]);
+});
