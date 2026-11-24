@@ -1,5 +1,5 @@
 import { CanvasTexture, Sprite, SpriteMaterial, SRGBColorSpace } from 'three';
-import { labelOpacity } from './name-label';
+import { H as LABEL_PX_H, labelOpacity, WORLD_H as LABEL_H } from './name-label';
 
 type Vec3 = { x: number; y: number; z: number };
 type Parent = { add(o: Sprite): unknown; remove(o: Sprite): unknown };
@@ -7,7 +7,6 @@ type Parent = { add(o: Sprite): unknown; remove(o: Sprite): unknown };
 /** Fade-out at the end of a bubble's lifetime (s). */
 export const BUBBLE_FADE_S = 0.5;
 /** Height of a name label (m) and the gap between it and a bubble (m): the bubble sits above the label. */
-const LABEL_H = 0.55;
 const BUBBLE_GAP = 0.1;
 const BUBBLE_LIFT = LABEL_H + BUBBLE_GAP;
 
@@ -48,14 +47,13 @@ export interface Bubble {
   dispose(): void;
 }
 
-const PX = 40, PAD = 18, TAIL = 22, LINE = 52, WORLD_PER_PX = 0.55 / 96;
+const PX = 40, PAD = 18, TAIL = 22, LINE = 52, WORLD_PER_PX = LABEL_H / LABEL_PX_H;
 
 /** A chat line as a white speech bubble sprite (depth-tested like NameLabel), anchored at the tip of its tail. */
 export class BubbleSprite implements Bubble {
   private readonly sprite: Sprite;
   private readonly tex: CanvasTexture;
   private parent: Parent | null = null;
-  private opacity = 1;
 
   constructor(lines: string[]) {
     const font = `bold ${PX}px system-ui, sans-serif`;
@@ -101,7 +99,6 @@ export class BubbleSprite implements Bubble {
   }
 
   setOpacity(o: number): void {
-    this.opacity = o;
     this.sprite.visible = o > 0.01;
     this.sprite.material.opacity = o;
   }

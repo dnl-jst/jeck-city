@@ -24,7 +24,7 @@ export interface Label {
   dispose(): void;
 }
 
-const W = 384, H = 96, WORLD_H = 0.55;
+export const W = 384, H = 96, WORLD_H = 0.55;
 
 /** A player's name as a sprite (CanvasTexture, depth-tested so walls hide it), 0.55 m high, anchored at its lower edge. */
 export class NameLabel implements Label {

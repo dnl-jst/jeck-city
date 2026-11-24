@@ -335,10 +335,10 @@ export class RemotePlayers {
         // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
         d.view.setLights(night, c?.brakeLight ?? false, lampPower(info?.level ?? 0, Math.random));
         const who = others.map((o) => names.get(o.slot)).filter((n) => n !== undefined && n !== '').join(' · ');
-        for (const o of others) anchors.set(o.slot, { x: pose.x, y: pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, z: pose.z });
         d.label = this.label(d.label, who === '' ? undefined : who, pose.x, pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, pose.z, cp);
         view = d.view;
       }
+      for (const o of others) anchors.set(o.slot, { x: pose.x, y: pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, z: pose.z });
       if (!view || !seatable(view)) continue;
       const type = this.opts.typeOf(id);
       for (const o of others) {

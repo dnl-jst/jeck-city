@@ -72,6 +72,19 @@ function setup(me = 0) {
 }
 
 describe('RemotePlayers', () => {
+  test('anchorOf also covers other players in the local player\'s car', () => {
+    const scene = new Scene();
+    const rp = new RemotePlayers(scene, { setHidden: () => {} }, {
+      me: 0, colorOf: () => 0, typeOf: () => 'kleinwagen',
+      localCar: () => ({ id: 7, pose: car(7) }),
+      makeLabel: (n) => new FakeLabel(n, []),
+    });
+    const sample = { walkers: new Map(), cars: new Map<string, SnapshotCar>() };
+    rp.update(sample, new Map([[1, 'Zed']]), new Map(), new PerspectiveCamera(), 0, 1 / 60, new Map(), new Map([[7, [0, 1]]]));
+    expect(rp.anchorOf(1)).not.toBeNull();
+    expect(rp.anchorOf(0)).toBeNull();
+  });
+
   test('anchorOf gives the label position of a seen slot, null once gone', () => {
     const { frame, rp } = setup();
     frame([walker(2, 4)], [], new Map([[2, 'Zed']]));
