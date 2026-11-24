@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  censorChat, CHARACTER_VARIANTS, CHAT_TEXTS, checkChat, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
+  censorChat, CHARACTER_VARIANTS, CHAT_TEXTS, checkChat, checkName, decodeInputs, dedupeName, encodeSnapshot, fallOf, FixedStepper, Interest, MAX_MESSAGE_BYTES,
   parseChatSend, parseStationId, PROTOCOL_VERSION, SAY_RANGE_M, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
   type ChatLineMsg, type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
@@ -430,6 +430,8 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       if (fresh || (rider === null && !rolling.has(i))) {
         const p = bikes.poses[i]!;
         for (const k of ['x', 'y', 'z', 'heading'] as const) if (e[k] !== p[k]) e[k] = p[k];
+        const fall = fallOf(p);
+        if (e.fall !== fall) e.fall = fall;
       }
     }
 

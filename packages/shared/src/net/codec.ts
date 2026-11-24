@@ -91,8 +91,8 @@ export type SnapshotRider = {
   slot: number; bikeId: number; x: number; y: number; z: number; heading: number; speed: number; steer: number;
   pedalling: boolean; airborne: boolean;
 };
-/** An unridden bike that moves (shoved, rolling out): ground under it and heading. */
-export type SnapshotBike = { id: number; x: number; y: number; z: number; heading: number };
+/** An unridden bike that moves (shoved, rolling out): ground under it, heading and fall (BikePose.fall: 1, 0, −1). */
+export type SnapshotBike = { id: number; x: number; y: number; z: number; heading: number; fall: number };
 export type SnapshotLamp = { i: number; x: number; y: number; z: number; qx: number; qy: number; qz: number; qw: number };
 export type SnapshotEvent =
   | { t: 'knock'; slot: number }
@@ -132,7 +132,7 @@ const OWN_BASE = 10 + 4 * CHAR_FIELDS.length; // mode, engine, carId u16, flags,
 const WALKER_SIZE = 13;
 const CAR_SIZE = 24;
 const RIDER_SIZE = 17;
-const BIKE_SIZE = 12;
+const BIKE_SIZE = 13;
 const LAMP_SIZE = 17;
 const EVENT_SIZE = { knock: 2, impact: 8, lamp: 3, bell: 8 } as const;
 
@@ -269,6 +269,7 @@ export function encodeSnapshot(full: Snapshot): Uint8Array {
     w.i16(qPos(b.y));
     w.i24(qPos(b.z));
     w.u16(qAngle(b.heading));
+    w.i8(b.fall);
   }
   for (const l of s.lamps) {
     w.u16(l.i);
@@ -380,7 +381,7 @@ export function decodeSnapshot(b: Uint8Array): Snapshot | null {
   const bikes: SnapshotBike[] = [];
   for (let n = 0; n < nBikes; n++) {
     const id = r.u16();
-    bikes.push({ id, x: dqPos(r.i24()), y: dqPos(r.i16()), z: dqPos(r.i24()), heading: dqHeading(r.u16()) });
+    bikes.push({ id, x: dqPos(r.i24()), y: dqPos(r.i16()), z: dqPos(r.i24()), heading: dqHeading(r.u16()), fall: Math.sign(r.i8()) });
   }
   const lamps: SnapshotLamp[] = [];
   for (let n = 0; n < nLamps; n++) {

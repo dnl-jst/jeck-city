@@ -41,7 +41,7 @@ const makeSnapshot = (nWalkers: number, nCars: number, nLamps: number, withEvent
       slot: 50 + i, bikeId: 300 + i, x: pos(3000), y: 30 + rnd() * 30, z: pos(3000), heading: pos(3), speed: pos(12), steer: pos(0.6),
       pedalling: i % 2 === 0, airborne: i % 3 === 0,
     })),
-    bikes: Array.from({ length: nBikes }, (_, i): SnapshotBike => ({ id: 10 + i, x: pos(3000), y: 30 + rnd() * 30, z: pos(3000), heading: pos(3) })),
+    bikes: Array.from({ length: nBikes }, (_, i): SnapshotBike => ({ id: 10 + i, x: pos(3000), y: 30 + rnd() * 30, z: pos(3000), heading: pos(3), fall: (i % 3) - 1 })),
     lamps: Array.from({ length: nLamps }, (_, i) => ({ i: 500 + i, x: pos(3000), y: 40, z: pos(3000), ...unitQuat() })),
     events: withEvents ? [
       { t: 'knock', slot: 3 }, { t: 'impact', x: -12.34, z: 56.78, strength: 200 }, { t: 'lamp', i: 501 }, { t: 'bell', slot: 7, x: 1.25, z: -2.5 },

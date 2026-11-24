@@ -367,7 +367,7 @@ export class Game {
     if (this.mode === 'drive' && audio && audio.station !== this.sentRadio) radio = this.sentRadio = audio.station;
     this.handle(this.session.frame(dt, cmd, radio));
     this.cars.update(this.ctx.camera.position.x, this.ctx.camera.position.z);
-    this.bikeView?.update(this.ctx.camera.position.x, this.ctx.camera.position.z);
+    for (const at of this.bikeView?.update(this.ctx.camera.position.x, this.ctx.camera.position.z, dt) ?? []) audio?.bikeFallAt(at.x, at.z);
     this.render(dt, night);
   }
 
