@@ -269,22 +269,20 @@ Umsetzende zwischen überlappenden Feldern und einem mitwandernden Fenster und h
 Jede Stufe ist ein eigener Plan und ein eigener Pull Request, und nach jeder ist das Spiel lauffähig.
 
 **Stufe 1 – Pipeline und Rohdaten-Spiegel, Ausgabe unverändert.**
-Zwei Schritte, in dieser Reihenfolge:
+Die schweren Daten (Gebäude-Netze, gedrapte Straßenflächen, Bodennetze) entstehen Chunk für Chunk und werden nach
+dem Schreiben freigegeben; geplant wird global auf leichten Daten. Rohdaten kommen aus dem festgehaltenen Stand.
+**Prüfstein: Die erzeugte Welt ist Datei für Datei bytegleich mit der Referenzwelt** – das ist die heutige Welt,
+gebaut aus demselben Rohdatenstand, ergänzt um den Fahrplan mit festen Stichtagen. Spitzen-RAM unter 4 GB. Client
+und Server ändern sich nicht. „Nur Geändertes bauen“ gehört noch nicht dazu (Stufe 3); `--transit-only` bleibt bis
+dahin.
 
-1. *Die alte Pipeline flächenunabhängig machen.* Kleine, einzeln geprüfte Änderungen am bestehenden Code, die
-   Ergebnisse von der Sicht auf die ganze Welt lösen: absolute Rundung der Höhen, Stichtage des Fahrplans aus dem
-   Rohdatenstand, und Reihenfolgen, die heute vom ersten Auftreten in der ganzen Welt abhängen (etwa die Sortierung
-   der Markierungsarten). Jede Änderung wird mit einem Vergleich alt gegen neu belegt (wie viele Höhen, Dreiecke,
-   Dateien sich ändern). Das Ergebnis ist die **Referenzwelt**.
-2. *Umbauen.* Die Pipeline arbeitet in den fünf Stufen. Die Darstellungs-Chunks entstehen kachelweise; die
-   Kollision darf in dieser Baustufe noch als ein leichter Schritt über die ganze Welt entstehen (sie umfasst nur
-   die grob verfeinerten Bordsteine und Gehwege und die Gebäude, nicht die 73 Mio. gedrapten Dreiecke), ebenso das
-   Zusammensetzen von `terrain.bin`, `manifest.json` und `map.json`. **Prüfstein: Die erzeugte Welt ist Datei für
-   Datei bytegleich mit der Referenzwelt.** Wo das aus gutem Grund nicht geht, wird die Abweichung benannt,
-   begründet und der Inhalt stattdessen inhaltlich verglichen.
-
-Spitzen-RAM unter 4 GB. Client und Server ändern sich nicht. „Nur Geändertes bauen“ gehört noch nicht dazu
-(Stufe 3); `--transit-only` bleibt bis dahin.
+*Beim Planen geändert (24.11.2026):* In dieser Stufe bleiben das Gelände ein Raster im Speicher (152 MB beim
+heutigen Gebiet) und die Kollision ein globaler Schritt. Die kachelweise Erzeugung des Geländes („Gelände in
+Durchgängen“, „Rundung ohne Blick auf die ganze Welt“) ist der riskanteste Teil des Pipeline-Umbaus und bringt beim
+heutigen Gebiet keinen messbaren Gewinn; sie wird **ein eigener Schritt vor der Gebietserweiterung** (unten
+„Stufe 4“). Die übrigen Abhängigkeiten vom Ganzen (tiefster Punkt für die Rundung, Reihenfolge der Markierungsarten)
+bleiben als ausdrückliche globale Vorberechnung erhalten, sodass Bytegleichheit ohne Änderung der Ergebnisse möglich
+ist.
 
 **Stufe 2 – Kachelformat, Zugriffsschicht, breitere IDs; Client lädt nach Position.**
 Die Pipeline schreibt das neue Format; die alten Sammeldateien entfallen. Client und Server benutzen die gemeinsame
@@ -295,6 +293,11 @@ Verhalten nicht, und der Vergleich mit vorher bleibt möglich. Der Versuch zur N
 Aktive Menge um Spieler, keine Schleifen über die Welt, Laden in Zeitscheiben. Die Pipeline überspringt Gebautes
 anhand der Vermerke (lokal und im Bucket) und lädt Kacheln beim Bau hoch; die CI nutzt das, wenn `WORLD_URL`
 gesetzt ist.
+
+**Stufe 4 – Gelände kachelweise erzeugen (vor der Gebietserweiterung).**
+Gelände in Durchgängen pro Kachel mit Rand, nachladende Quelle für die globalen Schritte, Wasser und Brücken auf
+Fenstern, absolute Rundung. Erst damit hängt der Speicherbedarf der ganzen Pipeline nicht mehr von der Fläche ab. Bis
+dahin schneiden die Stufen 2 und 3 das Gelände der `sim`-Kacheln aus dem Raster im Speicher.
 
 ## Prüfungen und Budgets
 
