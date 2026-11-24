@@ -3,6 +3,7 @@ export * from './assets/manifest';
 export * from './assets/map';
 export * from './assets/collision';
 export * from './assets/terrain';
+export * from './assets/world-index';
 export * from './sun';
 export * from './weather';
 export * from './transit';
