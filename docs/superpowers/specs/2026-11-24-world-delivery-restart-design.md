@@ -103,8 +103,18 @@ das nicht. *(Vom Prüfer gefunden; die Lösung ist mein Vorschlag.)*
 **Erste Aufgabe, bevor irgendetwas gebaut wird:** mit einer Testdatei prüfen, dass Hetzner Object Storage ein
 gespeichertes `Content-Encoding: br` und die CORS-Regel wie erwartet ausliefert. Liefert Hetzner `Content-Encoding`
 nicht zuverlässig aus, ist der Ausweichweg: Objekte gzip-komprimiert speichern, ohne `Content-Encoding`, mit Endung
-`.gz`, und der Client entpackt mit `DecompressionStream('gzip')`. Das Ergebnis der Prüfung wird in diesem Dokument
-nachgetragen.
+`.gz`, und der Client entpackt mit `DecompressionStream('gzip')`.
+
+**Ergebnis der Prüfung (24.11.2026, Bucket `jeck-city` in `nbg1`, Adresse
+`https://jeck-city.nbg1.your-objectstorage.com/`):**
+
+- `Content-Encoding: br`, `Content-Type` und `Cache-Control` werden so ausgeliefert, wie sie beim Hochladen gesetzt
+  wurden; ein anonymer Abruf funktioniert, und `fetch` entpackt die Datei korrekt. **Der Ausweichweg über gzip
+  entfällt.** Hetzner liefert die Brotli-Fassung unabhängig von `Accept-Encoding` aus – für Browser unkritisch.
+- Die Signatur-Region ist `nbg1` (aus der Endpunkt-Adresse), nicht frei wählbar.
+- **CORS ist noch offen:** Ohne Regel sendet der Bucket keine `Access-Control-Allow-Origin`-Kopfzeile, und das Setzen
+  der Regel wurde mit dem bereitgestellten Schlüssel abgelehnt (`AccessDenied`). Die Regel muss gesetzt sein, bevor
+  der Client Dateien aus dem Bucket laden kann.
 
 ## Veröffentlichen (`npm run world:publish`)
 
