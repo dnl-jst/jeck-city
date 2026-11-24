@@ -16,15 +16,18 @@ export const CATEGORY_LABELS: Record<DownloadCategory, string> = {
 /** Rows in this order (categories without any download are left out). */
 const ORDER: readonly DownloadCategory[] = ['physics', 'city', 'models', 'map', 'sound', 'other'];
 
-/** Which part of the game a URL belongs to (by file name). */
-export function categoryOf(url: string): DownloadCategory {
+/** Logical file name of a URL (a bucket URL carries only a content hash); null = use the URL's own file name. */
+export type NameOf = (url: string) => string | null;
+
+/** Which part of the game a URL belongs to (by file name, or the logical name `nameOf` gives). */
+export function categoryOf(url: string, nameOf?: NameOf): DownloadCategory {
   const path = url.split(/[?#]/)[0]!;
-  const file = path.slice(path.lastIndexOf('/') + 1);
+  const file = nameOf?.(url) ?? path.slice(path.lastIndexOf('/') + 1);
   if (path.includes('/audio/')) return 'sound';
   if (file === 'collision.bin' || file === 'terrain.bin' || file === 'transit-collision.bin') return 'physics';
   if (file.startsWith('chunk_') || file.startsWith('model_')) return 'city';
   if (/^(car|bike|rack|character)_/.test(file)) return 'models';
-  if (file === 'map.json' || file === 'manifest.json' || file === 'roadgraph.json') return 'map';
+  if (file === 'map.json' || file === 'manifest.json' || file === 'index.json' || file === 'roadgraph.json') return 'map';
   return 'other';
 }
 
@@ -71,10 +74,13 @@ export class DownloadMeter {
   private decodedDone = 0;
   private readonly samples: { t: number; bytes: number }[] = [];
 
+  /** `nameOf` names world files fetched from the bucket (asked when a download begins). */
+  constructor(private readonly nameOf?: NameOf) {}
+
   /** A response's headers arrived; returns its id for data() and end(). */
   begin(url: string, total: number | null, encoded: boolean): number {
     const id = this.nextId++;
-    this.entries.set(id, { cat: categoryOf(url), total, encoded, decoded: 0, done: false, complete: false });
+    this.entries.set(id, { cat: categoryOf(url, this.nameOf), total, encoded, decoded: 0, done: false, complete: false });
     return id;
   }
 

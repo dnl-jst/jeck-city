@@ -3,9 +3,11 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CHUNK_SIZE, parseManifest, type BikeType, type CarType, type WorldManifest } from '@nn/shared';
 import { CharacterModels } from './characters';
-import { FetchError } from './errors';
+import type { WorldFiles } from './world-files';
 import { addEaveAttribute, createFacadeMaterial, FLAG_SIGNED } from './materials/facade';
 import { createStreetMaterials, STREET_RENDER_ORDER } from './materials/street';
+
+export { fetchOk } from './world-files';
 
 export const LOAD_RADIUS = 600;
 /** Only chunks this close are awaited before the game is playable; the rest streams in afterwards. */
@@ -42,18 +44,6 @@ export function chunksToUnload(manifest: WorldManifest, pos: XZ, loaded: Readonl
   return manifest.chunks.filter((c) => loaded.has(c.key) && centreDistance(c, pos) > radius).map((c) => c.key);
 }
 
-/** fetch that turns network failures (offline, DNS) and non-ok statuses into FetchError (status 0 for the former). */
-export async function fetchOk(url: string, init?: RequestInit): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(url, init);
-  } catch {
-    throw new FetchError(url, 0);
-  }
-  if (!res.ok) throw new FetchError(url, res.status);
-  return res;
-}
-
 /** Streams world chunks around the player into `scene`. */
 export class WorldLoader {
   private manifest: WorldManifest | null = null;
@@ -77,7 +67,7 @@ export class WorldLoader {
   private readonly glow = new Set<MeshStandardMaterial>();
   readonly street = createStreetMaterials();
 
-  constructor(private readonly scene: Scene, private readonly baseUrl: string) {}
+  constructor(private readonly scene: Scene, private readonly files: WorldFiles) {}
 
   /** Load and unload radius (m) of a quality level; takes effect on the next update(). */
   setRadii(load: number, unload: number): void {
@@ -92,7 +82,7 @@ export class WorldLoader {
     onProgress: (p: number) => void, start?: XZ, onStatus: (text: string) => void = () => {}, manifestLoad?: Promise<WorldManifest>,
   ): Promise<WorldManifest> {
     onStatus('Karte …');
-    const manifest = await (manifestLoad ?? fetchOk(`${this.baseUrl}manifest.json`, { cache: 'no-cache' }).then(async (r) => parseManifest(await r.json())));
+    const manifest = await (manifestLoad ?? this.files.fetch('manifest.json').then(async (r) => parseManifest(await r.json())));
     this.manifest = manifest;
     this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;
@@ -146,8 +136,8 @@ export class WorldLoader {
     if (!chunk) throw new Error(`unknown chunk ${key}`);
     this.pending.add(key);
     try {
-      const buf = await (await fetchOk(`${this.baseUrl}${chunk.file}`)).arrayBuffer();
-      const gltf = await this.gltf.parseAsync(buf, this.baseUrl);
+      const buf = await (await this.files.fetch(chunk.file)).arrayBuffer();
+      const gltf = await this.gltf.parseAsync(buf, ''); // self-contained GLBs: no resource path
       const root = gltf.scene;
       // the player may have moved away while this chunk was downloading
       if (centreDistance(chunk, this.lastPos) > this.radii.unload) {
@@ -181,7 +171,7 @@ export class WorldLoader {
 
   /** Bike and rack models of the manifest (bike_<type>.glb, rack_*.glb), parsed once; templates to clone or instance. */
   async loadBikeModels(m: WorldManifest): Promise<{ bikes: Map<BikeType, Object3D>; racks: Map<0 | 1, Object3D> }> {
-    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    const parse = (file: string): Promise<Object3D> => this.parseModel(file);
     const [bikes, racks] = await Promise.all([
       Promise.all(m.bikeModels.map(async (b) => [b.type, await parse(b.file)] as const)),
       Promise.all(m.rackModels.map(async (r) => [r.kind, await parse(r.file)] as const)),
@@ -191,21 +181,24 @@ export class WorldLoader {
 
   /** Car models of the manifest (car_<type>.glb + car_<type>_lod.glb), parsed once; templates to clone or instance. */
   async loadCarModels(m: WorldManifest): Promise<Map<CarType, { full: Object3D; lod: Object3D }>> {
-    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
+    const parse = (file: string): Promise<Object3D> => this.parseModel(file);
     const all = await Promise.all(m.carModels.map(async (c) => [c.type, { full: await parse(c.file), lod: await parse(c.lod) }] as const));
     return new Map(all);
   }
 
   /** Player character models of the manifest (character_<variant>.glb), each downloaded when first asked for. */
   characterModels(m: WorldManifest): CharacterModels {
-    const parse = async (file: string) => (await this.gltf.parseAsync(await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer(), this.baseUrl)).scene;
-    return new CharacterModels(new Map(m.characterModels.map((c) => [c.variant, c.file])), parse);
+    return new CharacterModels(new Map(m.characterModels.map((c) => [c.variant, c.file])), (file) => this.parseModel(file));
+  }
+
+  /** Downloads and parses a self-contained GLB world file. */
+  private async parseModel(file: string): Promise<Object3D> {
+    return (await this.gltf.parseAsync(await (await this.files.fetch(file)).arrayBuffer(), '')).scene;
   }
 
   /** A replacement model (world space, own materials); marked so unload() frees its materials too. */
   private async loadModel(file: string): Promise<Object3D> {
-    const buf = await (await fetchOk(`${this.baseUrl}${file}`)).arrayBuffer();
-    const model = (await this.gltf.parseAsync(buf, this.baseUrl)).scene;
+    const model = await this.parseModel(file);
     model.name = file;
     model.userData.ownMaterials = true;
     model.traverse((o) => {

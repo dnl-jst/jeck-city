@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import { BufferAttribute, BufferGeometry, Group, Mesh, MeshStandardMaterial, Scene, Texture } from 'three';
-import type { WorldManifest } from '@nn/shared';
+import type { WorldIndex, WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
 import { chunksToLoad, chunksToUnload, disposeGltf, fetchOk, markSigned, nextRetryAt, WorldLoader } from './loader';
+import { WorldFiles } from './world-files';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
 function gridManifest(): WorldManifest {
@@ -15,6 +16,12 @@ function gridManifest(): WorldManifest {
     spawn: { x: 0, y: 0, z: 0, heading: 0 }, boundary: [], lamps: [], trees: [], tramStops: [],
     shops: [], parked: [], models: [], bikeRacks: [], bikes: [], bikeModels: [], rackModels: [], carModels: [], characterModels: [], terrain: { file: 'terrain.bin', bytes: 1 }, datum: 0, farGroundY: -0.5, attribution: '',
   };
+}
+/** World files of gridManifest() without a bucket (loaded from /world/). */
+function gridFiles(): WorldFiles {
+  const files: WorldIndex['files'] = { 'manifest.json': { hash: '0'.repeat(32), bytes: 1 } };
+  for (const c of gridManifest().chunks) files[c.file] = { hash: '1'.repeat(32), bytes: 1 };
+  return new WorldFiles({ version: 1, files }, null);
 }
 const centreDist = (key: string, px: number, pz: number): number => {
   const [ix, iz] = key.split('_').map(Number) as [number, number];
@@ -69,7 +76,7 @@ describe('WorldLoader', () => {
 
   it('starts at the spawn and ignores update() until init has finished', async () => {
     const urls = stubFetch();
-    const loader = new WorldLoader(new Scene(), '/world/');
+    const loader = new WorldLoader(new Scene(), gridFiles());
     void loader.init(() => {});
     await new Promise((r) => setTimeout(r, 0));
     loader.update({ x: 0, z: 0 });
@@ -79,7 +86,7 @@ describe('WorldLoader', () => {
 
   it('loads around an explicit start position', async () => {
     const urls = stubFetch();
-    void new WorldLoader(new Scene(), '/world/').init(() => {}, { x: -900, z: -900 });
+    void new WorldLoader(new Scene(), gridFiles()).init(() => {}, { x: -900, z: -900 });
     await new Promise((r) => setTimeout(r, 0));
     expect(urls.slice(1)).toEqual(['/world/chunk_-5_-5.glb', expect.stringMatching(/chunk_(-4_-5|-5_-4)\.glb/)]);
   });
@@ -94,7 +101,7 @@ describe('WorldLoader', () => {
       return Promise.resolve({ ok: false, status: 503 });
     });
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const loader = new WorldLoader(new Scene(), '/world/');
+    const loader = new WorldLoader(new Scene(), gridFiles());
     await loader.init(() => {}, { x: 5000, z: 5000 }); // nothing within READY_RADIUS
     const tick = () => new Promise((r) => setTimeout(r, 0));
     const attempts = (): number => urls.filter((u) => u.endsWith('chunk_0_0.glb')).length;
@@ -116,7 +123,7 @@ describe('WorldLoader', () => {
 
   it('rejects with FetchError when the manifest request fails', async () => {
     stubFetch(404);
-    await expect(new WorldLoader(new Scene(), '/world/').init(() => {})).rejects.toBeInstanceOf(FetchError);
+    await expect(new WorldLoader(new Scene(), gridFiles()).init(() => {})).rejects.toBeInstanceOf(FetchError);
   });
 });
 

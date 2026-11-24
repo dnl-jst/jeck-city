@@ -10,7 +10,8 @@ import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
-import { fetchOk, WorldLoader } from './loader';
+import { WorldLoader } from './loader';
+import { loadWorldFiles, type WorldFiles } from './world-files';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { CLEAR_LOOK, WeatherBlend } from './weather/look';
@@ -99,8 +100,11 @@ const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = new Hud(document.body);
+/** Where the world files come from; set once index.json and /config.json have loaded (before any world file download). */
+let worldFiles: WorldFiles | null = null;
 // every download while the game boots is counted; if loading takes a while the loading screen shows the details
-const downloads = new DownloadMeter();
+// (world files from the bucket are named by their content hash only: the index gives their logical names)
+const downloads = new DownloadMeter((url) => worldFiles?.nameOf(url) ?? null);
 const untrackFetch = trackFetch(downloads);
 /** The detailed download panel appears once booting has taken this long and bytes are still on their way. */
 const DOWNLOAD_DETAILS_AFTER_MS = 1500;
@@ -171,7 +175,10 @@ attachInput(input, canvas, (locked) => {
   game?.map.onLockChange(locked);
 }, touchOn);
 const touch = new TouchControls(document.body, input, touchOn);
-const world = new WorldLoader(scene, '/world/');
+// the world index (and the bucket the server names, if any) before anything of the world can be loaded
+const worldLoad = await loadWorldFiles().catch(bootFailed);
+const files = worldFiles = worldLoad.files;
+const world = new WorldLoader(scene, files);
 
 // sound: nothing plays before the first user gesture; the recordings load in parallel with the world
 const mixer = new AudioMixer();
@@ -349,23 +356,19 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/**
- * The raw bytes of manifest.json: parsed for the chunk loader and the simulation, hashed for the join. It and the
- * simulation's world files are always revalidated: a stale copy after a deploy would not match the server's world.
- */
-const manifestBytes: Promise<ArrayBuffer> = fetchOk('/world/manifest.json', { cache: 'no-cache' }).then((r) => r.arrayBuffer());
-const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseManifest(JSON.parse(new TextDecoder().decode(b))));
+/** manifest.json, parsed for the chunk loader and the simulation. */
+const manifestLoad: Promise<WorldManifest> = files.fetch('manifest.json').then(async (r) => parseManifest(await r.json()));
 /** manifest + collision.bin + terrain.bin → the simulated world (built while the spawn chunks stream in). */
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
 async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundary: Float32Array }> {
-  // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
+  // the manifest first: it gates the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain] = await Promise.all([
-    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
-      async (file) => (await fetchOk(`/world/${file}`, { cache: 'no-cache' })).arrayBuffer())),
-    fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
+    files.fetch('collision.bin').then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
+      async (file) => (await files.fetch(file)).arrayBuffer())),
+    files.fetch('terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
   // only the city around the player gets colliders (the whole city takes far too long and too much memory on a phone)
@@ -378,7 +381,7 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundar
 /** map.json → minimap and big map; a failure only means no map. */
 async function loadMap(): Promise<MapData | null> {
   try {
-    const res = await fetchOk('/world/map.json');
+    const res = await files.fetch('map.json');
     return parseMapData(await res.json());
   } catch (err) {
     console.error(err);
@@ -395,9 +398,8 @@ let connection: Connection | null = null;
 async function connect(): Promise<Connection | null> {
   if (offline) return null;
   const dialog = lobby = new Lobby(document.body, CHARACTER_VARIANTS.map((v) => `/portraits/${v}.webp`), CHARACTER_VARIANTS.indexOf(storedCharacter()));
-  // the dialog shows at once; the world hash (needs the whole manifest) is only awaited on joining
-  const hashing = manifestBytes.then((b) => worldHash(b));
-  hashing.catch(() => undefined); // a failed manifest download fails the boot elsewhere
+  // the world hash is the hash of index.json: it names the content of every world file
+  const hashing = worldHash(worldLoad.indexBytes);
   for (;;) {
     const name = await dialog.ask();
     storeCharacter(CHARACTER_VARIANTS[dialog.variant] ?? CHARACTER_VARIANTS[0]);

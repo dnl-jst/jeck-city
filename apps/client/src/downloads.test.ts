@@ -13,6 +13,20 @@ describe('download categories', () => {
     expect(categoryOf('/audio/step-1.ogg')).toBe('sound');
     expect(categoryOf('/foo.txt')).toBe('other');
   });
+
+  test('categoryOf classifies a bucket URL by its logical name', () => {
+    expect(categoryOf('https://b.example/objects/ab/ab0123.glb', () => 'chunk_0_1.glb')).toBe('city');
+    expect(categoryOf('https://b.example/objects/cd/cd0123.bin', () => 'collision.bin')).toBe('physics');
+    // no logical name: the URL's own file name
+    expect(categoryOf('/world/map.json', () => null)).toBe('map');
+  });
+
+  test('the meter classifies through its name resolver', () => {
+    const m = new DownloadMeter((url) => (url.includes('/objects/') ? 'car_smart.glb' : null));
+    m.begin('https://b.example/objects/ef/ef0123.glb', 100, false);
+    m.begin('/world/terrain.bin', 50, false);
+    expect(m.snapshot(0).categories.map((c) => c.cat)).toEqual(['physics', 'models']);
+  });
 });
 
 describe('download meter', () => {
