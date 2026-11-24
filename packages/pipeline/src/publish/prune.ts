@@ -14,9 +14,9 @@ async function worldObjects(store: ObjectStore, hash: string): Promise<string[]>
 
 /**
  * Keeps the live world and the newest `keep` worlds (by the upload time of worlds/<hash>.json), removes every other
- * world and the objects only removed worlds name. Objects no world names (left by an interrupted publish) stay.
- * With `delete: false` it only reports. Must not run while a publish is in progress: a world being published may
- * already count on an object that only a removed world names.
+ * world and every object no kept world names (also orphans left by an interrupted publish).
+ * With `delete: false` it only reports. Must not run while a publish is in progress: the objects of a world being
+ * published are named by no kept world yet.
  */
 export async function pruneWorlds(
   store: ObjectStore,
@@ -39,12 +39,8 @@ export async function pruneWorlds(
 
   const kept = new Set<string>();
   for (const hash of keptWorlds) for (const key of await worldObjects(store, hash)) kept.add(key);
-  const candidates = new Set<string>();
-  for (const hash of removedWorlds) {
-    for (const key of await worldObjects(store, hash)) if (!kept.has(key)) candidates.add(key);
-  }
-  // Only what is actually there (an earlier, interrupted prune may have removed some already).
-  const removedObjects = (await store.list('objects/')).map((x) => x.key).filter((key) => candidates.has(key)).sort();
+  // Every object no kept world names, including orphans an interrupted publish left behind.
+  const removedObjects = (await store.list('objects/')).map((x) => x.key).filter((key) => !kept.has(key)).sort();
 
   if (o.delete) {
     // Objects first: should this stop halfway, the world files are still there and the next run removes the rest.

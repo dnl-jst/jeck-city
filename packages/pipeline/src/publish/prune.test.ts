@@ -74,6 +74,22 @@ describe('pruneWorlds', () => {
     expect(dry.removedObjects.sort()).toEqual([key('two.glb', 'w2'), key('three.glb', 'w3')].sort());
   });
 
+  it('removes an orphan object no world names, only with delete: true', async () => {
+    const orphan = key('lost.glb', 'left by an interrupted publish');
+    await store.put(orphan, Buffer.from('left by an interrupted publish'), {
+      contentType: 'model/gltf-binary',
+      cacheControl: 'public, max-age=31536000, immutable',
+    });
+    const dry = await pruneWorlds(store, { liveHash: w4, keep: 5, delete: false });
+    expect(dry.removedWorlds).toEqual([]);
+    expect(dry.removedObjects).toEqual([orphan]);
+    expect(await keys('objects/')).toContain(orphan);
+    const real = await pruneWorlds(store, { liveHash: w4, keep: 5, delete: true });
+    expect(real.removedObjects).toEqual([orphan]);
+    expect(await keys('objects/')).not.toContain(orphan);
+    expect(await keys('worlds/')).toHaveLength(4);
+  });
+
   it('throws when the live world has no worlds/<hash>.json in the store', async () => {
     await expect(pruneWorlds(store, { liveHash: 'ffffffffffff', keep: 5, delete: true })).rejects.toThrow(/live/);
     expect(await keys('worlds/')).toHaveLength(4);
