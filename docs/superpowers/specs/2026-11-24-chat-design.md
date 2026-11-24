@@ -64,12 +64,12 @@ Entschieden: **A**.
   leer → abgelehnt; länger als **120 Codepoints** → gekürzt (nicht abgelehnt).
 - `censorChat(text): string` – pro Wort (Trennung an Whitespace) wird das Wort normalisiert wie bei Namen (Umlaute,
   Leetspeak, nur a–z). **Enthält** es einen Eintrag aus `CHAT_BAD_WORDS`, wird das **ganze Wort** durch `*` gleicher
-  Länge ersetzt (fängt Plural und Komposita: „Arschlöcher“). Die Nachricht wird zugestellt, nicht verworfen.
+  Länge ersetzt (fängt Endungen und Komposita: „Vollidioten“, „Arschlochkind“; Umlaut-Formen wie „Arschlöcher“ nicht – bewusst einfach). Die Nachricht wird zugestellt, nicht verworfen.
 - `CHAT_BAD_WORDS` (in `badwords.ts`, entschieden vom Auftraggeber: nur echte Beleidigungen): `BAD_WORDS` **ohne**
   die milden Flüche und neutralen Begriffe `scheisse`, `scheisser`, `shit`, `fuck`, `vagina`, `porno`, `dildo`.
   Beleidigungen, Slurs und Nazi-Begriffe bleiben gefiltert. Die Namensprüfung nutzt weiter die volle `BAD_WORDS`.
   *(Welche Einträge genau herausfallen, ist Entscheidung des Designers nach dieser Regel.)*
-  Tests: „scheißegal“, „shit“, „Marsch“, „Kölsch“ bleiben; „Arschlöcher“, „Hurens0hn“ werden gesternt.
+  Tests: „scheißegal“, „shit“, „Marsch“, „Kölsch“ bleiben; „Vollidioten“, „Hurens0hn“ werden gesternt.
 - `PROTOCOL_VERSION` wird auf **4** erhöht: ein neuer Client darf nicht in einen alten Server, sonst würde er für
   `chat` als unbekannte Nachricht gekickt (und umgekehrt).
 - Konstanten: `CHAT_MAX_LEN = 120`, `SAY_RANGE_M = 50` (= `LABEL_GONE`), Drosselung siehe unten.
