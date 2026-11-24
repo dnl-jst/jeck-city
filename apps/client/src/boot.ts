@@ -17,6 +17,7 @@ import { Lighting } from './lighting';
 import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
+import { RestartBanner, restartSecondsLeft } from './restart-banner';
 import { Props } from './props';
 import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
@@ -262,6 +263,7 @@ let sunAge = 0;
 let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
 const weatherBadge = new WeatherBadge(document.body);
+const restartBanner = new RestartBanner(document.body);
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -339,6 +341,7 @@ renderer.setAnimationLoop((t: number) => {
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
     weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5, onlineSession ? onlineSession.stats().players : null);
+    restartBanner.set(connection?.clock.ready ? restartSecondsLeft(connection.state.restartTick, connection.clock.estimate(performance.now())) : null);
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
