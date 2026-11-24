@@ -8,7 +8,7 @@ type Parent = { add(o: Sprite): unknown; remove(o: Sprite): unknown };
 export const BUBBLE_FADE_S = 0.5;
 /** Height of a name label (m) and the gap between it and a bubble (m): the bubble sits above the label. */
 const BUBBLE_GAP = 0.1;
-const BUBBLE_LIFT = LABEL_H + BUBBLE_GAP;
+export const BUBBLE_LIFT = LABEL_H + BUBBLE_GAP;
 
 /** How long a bubble with `text` stays (s), the fade-out not included. */
 export function bubbleSeconds(text: string): number {

@@ -27,7 +27,7 @@ import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
 import { FIGURE_H, RemotePlayers, RIDER_H, ROOF_H, streamedWheels } from './remote/remote-players';
 import { LABEL_GAP } from './remote/name-label';
-import { SpeechBubbles } from './remote/speech-bubble';
+import { BUBBLE_LIFT, SpeechBubbles } from './remote/speech-bubble';
 import { RemoteCarFeed } from './audio/remote-audio';
 import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
@@ -113,7 +113,7 @@ export class Game {
   /** The own car's or bike's pose as drawn this frame (while driving or riding; others on it are drawn on it). */
   private drawnPose: CarPose | null = null;
   /** The own feet as drawn this frame (on foot). */
-  private drawnFeet: Vec3 = { x: 0, y: 0, z: 0 };
+  private drawnFeet: Vec3 | null = null;
   /** Chat speech bubbles over players (online only). */
   private readonly bubbles: SpeechBubbles | null;
   /** Tumbling figures (own and other players') fall in a physics world of their own. */
@@ -214,12 +214,18 @@ export class Game {
     return this.bubbles?.size ?? 0;
   }
 
-  /** Where the own name label would sit as drawn this frame (lower edge), as RemotePlayers anchors other players. */
-  ownAnchor(): Vec3 {
-    const p = this.mode === 'walk' || !this.drawnPose ? null : this.drawnPose;
-    if (!p) return { x: this.drawnFeet.x, y: this.drawnFeet.y + FIGURE_H + LABEL_GAP, z: this.drawnFeet.z };
-    if (this.mode === 'ride') return { x: p.x, y: p.y + RIDER_H + LABEL_GAP, z: p.z };
-    return { x: p.x, y: p.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, z: p.z };
+  /**
+   * The own bubble's anchor as drawn this frame (null before the first frame of the mode). Other players' bubbles sit
+   * above their name label; the own player has none, so the label's height comes off: the bubble starts where the
+   * label would (head or roof + LABEL_GAP).
+   */
+  ownAnchor(): Vec3 | null {
+    const lift = LABEL_GAP - BUBBLE_LIFT;
+    if (this.mode === 'walk') return this.drawnFeet ? { x: this.drawnFeet.x, y: this.drawnFeet.y + FIGURE_H + lift, z: this.drawnFeet.z } : null;
+    const p = this.drawnPose;
+    if (!p) return null;
+    if (this.mode === 'ride') return { x: p.x, y: p.y + RIDER_H + lift, z: p.z };
+    return { x: p.x, y: p.y - VEHICLE_REST_Y + ROOF_H + lift, z: p.z };
   }
 
   /** Type of the bike being ridden, else null. */

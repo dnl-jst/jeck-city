@@ -18,7 +18,7 @@ export class ChatController {
   private readonly sheet: ChatSheet;
   private readonly touch: TouchControls;
 
-  constructor(conn: Connection, opts: { root: HTMLElement; touch: TouchControls; touchOn: boolean; me: number }) {
+  constructor(conn: Connection, opts: { root: HTMLElement; touch: TouchControls }) {
     const send = (c: ChatChannel, text: string): void => {
       // the window and the sheet share the channel
       this.window.channel = this.sheet.channel = c;

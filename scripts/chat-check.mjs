@@ -3,6 +3,7 @@
 // Two headless Chromium contexts join as "Chat A" and "Chat B" (name dialog) and must both see (at least) 2 players. Then:
 //  1. A: Enter, "/w treffen am Dom?", Enter → B gets the world line.
 //  2. A: Enter, "wasd", Enter → A did not move (the keys went to the chat field), the channel stayed world (B gets it as 'w').
+//  2b. A: Enter, a click into the game → the window closes; Enter → its field has the focus again; Esc.
 //  3. A is teleported in front of B's camera; A: Enter, "/s hallo", Enter → B gets the say line and shows 1 bubble.
 //     Screenshots shots/chat-a.png, shots/chat-b.png.
 //  4. B leaves; a touch context "Chat C" (?touch=1): the chat button is visible, gets the unread dot on a new line, its tap opens
@@ -104,6 +105,20 @@ try {
   await waitLine(b.page, 'w', 'wasd', 'Chat A', '2. channel stays world');
   check(true, '2. channel stayed world');
 
+  // 2b. a click into the game while the window is open closes it (the field lost its focus); Enter opens it again
+  await a.page.keyboard.press('Enter');
+  await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+  await a.page.mouse.click(480, 150);
+  await a.page.waitForFunction(() => !document.querySelector('.nn-chat')?.classList.contains('nn-chat-open'), null, { timeout: 5_000 })
+    .catch(() => undefined);
+  check(await a.page.evaluate(() => !document.querySelector('.nn-chat').classList.contains('nn-chat-open')), '2b. a click into the game closes the window');
+  await a.page.keyboard.press('Enter');
+  const refocused = await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 })
+    .then(() => true, () => false);
+  check(refocused, '2b. Enter opens the window again after the click');
+  await a.page.keyboard.press('Escape');
+  await a.page.waitForFunction(() => !document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+
   // 3. say line and bubble: A stands 6 m in front of B's camera first (dev server teleport)
   const sb = await b.page.evaluate(() => window.__nnState());
   const tx = sb.x + Math.sin(sb.yaw) * 6, tz = sb.z + Math.cos(sb.yaw) * 6;
@@ -113,12 +128,12 @@ try {
   await chat(a.page, '/s hallo');
   await waitLine(b.page, 's', 'hallo', 'Chat A', '3. say line');
   check(true, '3. B got the say line');
-  const bubbles = await b.page.evaluate(() => window.__nnChat.bubbles());
-  check(bubbles === 1, `3. B shows ${bubbles} bubble(s) (want 1)`);
-  // screenshots once a frame has drawn the line and the bubble, B's first: the bubble lasts only about 6 s, and a
+  // B's screenshot first, once a frame has drawn the line and the bubble: the bubble lasts only about 6 s, and a
   // busy machine renders the game at a frame or so per second (a screenshot then takes seconds)
   await frames(b.page, 1);
+  const bubbles = await b.page.evaluate(() => window.__nnChat.bubbles());
   await b.page.screenshot({ path: `${SHOTS}/chat-b.png` });
+  check(bubbles === 1, `3. B shows ${bubbles} bubble(s) (want 1)`);
   await a.page.screenshot({ path: `${SHOTS}/chat-a.png` });
 
   // 4. touch: button, unread dot, sheet, send on the world channel. B leaves first: a third game in the same

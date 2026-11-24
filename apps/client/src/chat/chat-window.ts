@@ -58,6 +58,8 @@ export class ChatWindow {
     root.append(this.el);
 
     this.input.addEventListener('keydown', (e) => this.onKey(e));
+    // focus gone (a click into the game): closed as with Esc, else the window would stay open and swallow every Enter
+    this.input.addEventListener('blur', () => this.close());
     this.log.onChange(() => {
       this.lastActivity = performance.now();
       this.render();

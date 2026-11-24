@@ -500,7 +500,7 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
   }
   if (params.get('map') === 'open') game.map.toggle();
   if (conn) {
-    const c = chat = new ChatController(conn, { root: document.body, touch, touchOn, me: conn.welcome.slot });
+    const c = chat = new ChatController(conn, { root: document.body, touch });
     c.onSay = (slot, text) => game!.say(slot, text);
     // keys held when the chat opens would never see their key-up (it goes to the text field)
     c.onOpen = () => input.releaseAll();
