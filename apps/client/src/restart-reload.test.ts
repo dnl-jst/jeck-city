@@ -54,6 +54,17 @@ it('a health answer without a numeric ticks field counts as no answer', async ()
   expect(f.reloads()).toBe(0);
 });
 
+it('an answer just below the last known tick is still the old server (estimate runs ahead): no reload', async () => {
+  const f = fake([{ ticks: 49_999 }, { ticks: 49_701 }]);
+  await expect(reloadWhenRestarted(f.deps)).resolves.toBe(false);
+  expect(f.reloads()).toBe(0);
+});
+
+it('an answer more than 5 s of ticks below the last known tick is a new server', async () => {
+  const f = fake([{ ticks: 49_699 }]);
+  await expect(reloadWhenRestarted(f.deps)).resolves.toBe(true);
+});
+
 it('a failing health request counts as no answer', async () => {
   const f = fake([{ ticks: 120 }]);
   let first = true;
