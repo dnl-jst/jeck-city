@@ -66,7 +66,7 @@ Entschieden: **A**.
   Leetspeak, nur a–z). **Enthält** es einen Eintrag aus `CHAT_BAD_WORDS`, wird das **ganze Wort** durch `*` gleicher
   Länge ersetzt (fängt Endungen und Komposita: „Vollidioten“, „Arschlochkind“; Umlaut-Formen wie „Arschlöcher“ nicht – bewusst einfach). Die Nachricht wird zugestellt, nicht verworfen.
 - `CHAT_BAD_WORDS` (in `badwords.ts`, entschieden vom Auftraggeber: nur echte Beleidigungen): `BAD_WORDS` **ohne**
-  die milden Flüche und neutralen Begriffe `scheisse`, `scheisser`, `shit`, `fuck`, `vagina`, `porno`, `dildo`.
+  die milden Flüche `scheisse`, `scheisser`, `shit`, `fuck`.
   Beleidigungen, Slurs und Nazi-Begriffe bleiben gefiltert. Die Namensprüfung nutzt weiter die volle `BAD_WORDS`.
   *(Welche Einträge genau herausfallen, ist Entscheidung des Designers nach dieser Regel.)*
   Tests: „scheißegal“, „shit“, „Marsch“, „Kölsch“ bleiben; „Vollidioten“, „Hurens0hn“ werden gesternt.
