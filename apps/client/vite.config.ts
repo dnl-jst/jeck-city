@@ -9,9 +9,11 @@ import { measureDownload } from "./src/build/download-size";
 const clientPort = Number(process.env.NN_CLIENT_PORT ?? 5173);
 const target = `http://localhost:${process.env.PORT ?? 2567}`;
 // Colyseus 0.18 talks to the page's own origin: POST /matchmake/<method>/<room>, then a WebSocket to /<processId>/<roomId>
-// (two url-safe ids); plus /healthz. The regex keeps Vite's own paths (/src/..., /@vite/..., /world/...) out of it.
+// (two url-safe ids); plus /healthz and /config.json (where the world files come from). The regex keeps Vite's own
+// paths (/src/..., /@vite/..., /world/...) out of it.
 const proxy = {
   '/healthz': { target },
+  '/config.json': { target },
   '/matchmake': { target },
   '^/[A-Za-z0-9_-]{8,}/[A-Za-z0-9_-]{8,}(\\?.*)?$': { target, ws: true },
 };

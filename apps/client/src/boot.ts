@@ -10,12 +10,15 @@ import { fadeOutIntroMusic } from './intro-music';
 import { bootErrorMessage, Hud } from './hud';
 import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, nextQuality, QUALITY, QUALITY_LABEL, storedQuality, storeQuality, type QualityLevel } from './quality';
 import { DownloadMeter, downloadSummary, trackFetch } from './downloads';
-import { fetchOk, WorldLoader } from './loader';
+import { WorldLoader } from './loader';
+import { loadWorldFiles, type WorldFiles } from './world-files';
 import { devAllowed, parseCamParam, withDateParam } from './devparams';
 import { Lighting } from './lighting';
 import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
+import { RestartBanner, restartSecondsLeft } from './restart-banner';
+import { reloadWhenRestarted, RESTART_TEXT, restartPending } from './restart-reload';
 import { Props } from './props';
 import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
@@ -103,8 +106,11 @@ const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const hud = new Hud(document.body, !offline);
+/** Where the world files come from; set once index.json and /config.json have loaded (before any world file download). */
+let worldFiles: WorldFiles | null = null;
 // every download while the game boots is counted; if loading takes a while the loading screen shows the details
-const downloads = new DownloadMeter();
+// (world files from the bucket are named by their content hash only: the index gives their logical names)
+const downloads = new DownloadMeter((url) => worldFiles?.nameOf(url) ?? null);
 const untrackFetch = trackFetch(downloads);
 /** The detailed download panel appears once booting has taken this long and bytes are still on their way. */
 const DOWNLOAD_DETAILS_AFTER_MS = 1500;
@@ -170,12 +176,19 @@ const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
 // phones and tablets: sticks and buttons on screen (?touch=1 forces them, ?touch=0 hides them)
 const touchOn = touchPreferred(params.get('touch'), window.matchMedia('(pointer: coarse)').matches);
+// declared before the first top-level await: the lock callback below may run while the world index loads
+let game: Game | null = null;
+/** Minimap and big map; stay null when map.json fails to load (the game runs without a map). */
+let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 attachInput(input, canvas, (locked) => {
   hud.setHint(locked ? (game?.modeHint ?? '') : LOOK_HINT);
   game?.map.onLockChange(locked);
 }, touchOn);
 const touch = new TouchControls(document.body, input, touchOn);
-const world = new WorldLoader(scene, '/world/');
+// the world index (and the bucket the server names, if any) before anything of the world can be loaded
+const worldLoad = await loadWorldFiles().catch(bootFailed);
+const files = worldFiles = worldLoad.files;
+const world = new WorldLoader(scene, files);
 
 // sound: nothing plays before the first user gesture; the recordings load in parallel with the world
 const mixer = new AudioMixer();
@@ -205,11 +218,8 @@ farGround.receiveShadow = true;
 farGround.visible = false; // until the manifest says how low it lies
 scene.add(farGround);
 
-let game: Game | null = null;
 /** The chat (online only). */
 let chat: ChatController | null = null;
-/** Minimap and big map; stay null when map.json fails to load (the game runs without a map). */
-let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 let bigMapOpen = false;
 let fps = 0;
 /** The game's session once online (the debug overlay's net lines). */
@@ -261,6 +271,7 @@ let sunAge = 0;
 let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
 const weatherBadge = new WeatherBadge(document.body);
+const restartBanner = new RestartBanner(document.body);
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -344,6 +355,11 @@ renderer.setAnimationLoop((t: number) => {
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
     weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5, onlineSession ? onlineSession.stats().players : null);
+    {
+      const serverTick = connection?.clock.ready ? connection.clock.estimate(performance.now()) : null;
+      const left = connection && serverTick !== null ? restartSecondsLeft(connection.state.restartTick, serverTick) : null;
+      restartBanner.set(left);
+    }
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
@@ -361,23 +377,19 @@ renderer.setAnimationLoop((t: number) => {
   renderer.render(scene, camera);
 });
 
-/**
- * The raw bytes of manifest.json: parsed for the chunk loader and the simulation, hashed for the join. It and the
- * simulation's world files are always revalidated: a stale copy after a deploy would not match the server's world.
- */
-const manifestBytes: Promise<ArrayBuffer> = fetchOk('/world/manifest.json', { cache: 'no-cache' }).then((r) => r.arrayBuffer());
-const manifestLoad: Promise<WorldManifest> = manifestBytes.then((b) => parseManifest(JSON.parse(new TextDecoder().decode(b))));
+/** manifest.json, parsed for the chunk loader and the simulation. */
+const manifestLoad: Promise<WorldManifest> = files.fetch('manifest.json').then(async (r) => parseManifest(await r.json()));
 /** manifest + collision.bin + terrain.bin → the simulated world (built while the spawn chunks stream in). */
 let physicsLoading = true;
 let worldStatus = '';
 const showStatus = (): void => hud.setStatus(physicsLoading ? `${worldStatus} · Physik …` : worldStatus);
 async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundary: Float32Array }> {
-  // the manifest first: it gates the name dialog's join and the spawn chunks, so it gets the bandwidth to itself
+  // the manifest first: it gates the spawn chunks, so it gets the bandwidth to itself
   const manifest = await manifestLoad;
   const [collision, terrain] = await Promise.all([
-    fetchOk('/world/collision.bin', { cache: 'no-cache' }).then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
-      async (file) => (await fetchOk(`/world/${file}`, { cache: 'no-cache' })).arrayBuffer())),
-    fetchOk('/world/terrain.bin', { cache: 'no-cache' }).then(async (r) => decodeTerrain(await r.arrayBuffer())),
+    files.fetch('collision.bin').then(async (r) => withTransitCollision(manifest, decodeCollision(await r.arrayBuffer()),
+      async (file) => (await files.fetch(file)).arrayBuffer())),
+    files.fetch('terrain.bin').then(async (r) => decodeTerrain(await r.arrayBuffer())),
   ]);
   // in slices: the page (name field, loading screen) stays responsive while the city's colliders are built
   // only the city around the player gets colliders (the whole city takes far too long and too much memory on a phone)
@@ -390,7 +402,7 @@ async function loadSim(): Promise<{ sim: WorldSim; terrain: TerrainGrid; boundar
 /** map.json → minimap and big map; a failure only means no map. */
 async function loadMap(): Promise<MapData | null> {
   try {
-    const res = await fetchOk('/world/map.json');
+    const res = await files.fetch('map.json');
     return parseMapData(await res.json());
   } catch (err) {
     console.error(err);
@@ -400,6 +412,10 @@ async function loadMap(): Promise<MapData | null> {
 
 /** The server connection (online mode, once joined); the game then plays on an OnlineSession. */
 let connection: Connection | null = null;
+const LOST_TEXT = 'Verbindung verloren – bitte Seite neu laden.';
+/** An announced restart happened: the page polls for the new server and reloads (see reloadWhenRestarted; only once). */
+let waitingForRestart = false;
+let restartPolled = false;
 /**
  * Name dialog → join. Resolves with the connection (null offline). The world keeps loading meanwhile; a version
  * conflict leaves the dialog showing its text and never resolves.
@@ -407,9 +423,8 @@ let connection: Connection | null = null;
 async function connect(): Promise<Connection | null> {
   if (offline) return null;
   const dialog = lobby = new Lobby(document.body, CHARACTER_VARIANTS.map((v) => `/portraits/${v}.webp`), CHARACTER_VARIANTS.indexOf(storedCharacter()));
-  // the dialog shows at once; the world hash (needs the whole manifest) is only awaited on joining
-  const hashing = manifestBytes.then((b) => worldHash(b));
-  hashing.catch(() => undefined); // a failed manifest download fails the boot elsewhere
+  // the world hash is the hash of index.json: it names the content of every world file
+  const hashing = worldHash(worldLoad.indexBytes);
   for (;;) {
     const name = await dialog.ask();
     storeCharacter(CHARACTER_VARIANTS[dialog.variant] ?? CHARACTER_VARIANTS[0]);
@@ -417,7 +432,28 @@ async function connect(): Promise<Connection | null> {
     const hash = await hashing;
     try {
       const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
-      conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
+      conn.onStatus((s) => {
+        // after an announced restart: wait for the new server and reload (the ticks keep the old one from counting)
+        // judged from the live state at the drop: a hidden tab renders no frames, so the render loop may have seen nothing
+        if (s !== 'online' && !restartPolled && restartPending(conn.state.restartTick, conn.clock.ready)) {
+          restartPolled = waitingForRestart = true;
+          void reloadWhenRestarted({
+            lastServerTick: conn.clock.estimate(performance.now()),
+            fetchHealth: async () => {
+              const r = await fetch('/healthz', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+              return r.ok ? ((await r.json()) as { ticks: number }) : null;
+            },
+            reload: () => location.reload(),
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          }).then((reloaded) => {
+            if (reloaded) return;
+            waitingForRestart = false;
+            hud.setNetStatus(conn.status === 'online' ? '' : LOST_TEXT);
+          });
+        }
+        if (waitingForRestart) hud.setNetStatus(s === 'online' ? '' : RESTART_TEXT);
+        else hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? LOST_TEXT : '');
+      });
       setServerVersion(conn.welcome.version ?? null);
       conn.onWelcome((w) => setServerVersion(w.version ?? null)); // a reconnect may reach a newer server
       dialog.close();

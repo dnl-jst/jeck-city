@@ -34,6 +34,8 @@ export type NetState = {
   bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number; fall?: number }>;
   lamps: StateMap<StatePose>;
   weather: Weather;
+  /** Server tick of an announced restart; 0 or absent = none. */
+  restartTick?: number;
 };
 
 /** Why a join did not work, from the error the SDK throws. */

@@ -12,6 +12,7 @@ import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
+import { writeWorldIndex } from './worldindex.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, fetchTransitRoutes, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { generatedLamps } from './lamps.js';
@@ -378,6 +379,7 @@ async function main() {
     attribution: ATTRIBUTION,
   };
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
+  await writeWorldIndex(OUT_DIR); // (last write: the dev script restarts the game server when index.json changes)
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;
@@ -452,8 +454,8 @@ async function transitOnly(): Promise<void> {
   manifest.models = [...manifest.models.filter((m) => !m.id.startsWith('transit_')), ...files.models];
   manifest.transit = build.transit;
   manifest.transitCollision = files.collision;
-  // (last: the dev script restarts the game server when the manifest changes)
   await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
+  await writeWorldIndex(OUT_DIR); // (last: the dev script restarts the game server when index.json changes)
 }
 
 /**

@@ -11,9 +11,12 @@ services:
     environment:
       MAX_PLAYERS: ${MAX_PLAYERS:-60}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORLD_URL: ${WORLD_URL:-}
+      RESTART_NOTICE_S: ${RESTART_NOTICE_S:-60}
     expose:
       - "2567"
-    stop_grace_period: 10s
+    # on SIGTERM the server first shows players a countdown (RESTART_NOTICE_S), then shuts down
+    stop_grace_period: 90s
 
   caddy:
     image: caddy:2

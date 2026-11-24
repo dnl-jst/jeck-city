@@ -11,3 +11,5 @@ docs
 **/__pycache__
 **/*.blend1
 .DS_Store
+# local credentials and deploy settings: never part of the build context
+**/.env
