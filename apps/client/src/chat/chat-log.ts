@@ -4,7 +4,12 @@ export type ChatLine = { c: ChatChannel | 'sys'; slot: number; name: string; tex
 
 export const CHANNEL_LABEL: Record<ChatChannel, string> = { s: 'Sagen', w: 'Welt' };
 
-const PREFIX: Record<string, ChatChannel> = { w: 'w', welt: 'w', s: 's', sagen: 's' };
+const PREFIX = new Map<string, ChatChannel>([
+  ['w', 'w'],
+  ['welt', 'w'],
+  ['s', 's'],
+  ['sagen', 's'],
+]);
 
 /** Rolling chat history with an unread flag and change subscribers. */
 export class ChatLog {
@@ -38,8 +43,8 @@ export class ChatLog {
 /** Splits an optional /w, /welt, /s, /sagen prefix off the input; text is null when nothing sendable remains. */
 export function parseChatInput(raw: string, current: ChatChannel): { channel: ChatChannel; text: string | null } {
   const m = /^\s*\/(\S+)(?:\s+([\s\S]*))?$/.exec(raw);
-  const channel = m ? PREFIX[(m[1] ?? '').toLowerCase()] : undefined;
-  const body = channel ? (m![2] ?? '') : raw;
+  const channel = m ? PREFIX.get((m[1] ?? '').toLowerCase()) : undefined;
+  const body = m && channel ? (m[2] ?? '') : raw;
   const res = checkChat(body);
   return { channel: channel ?? current, text: res.ok ? res.text : null };
 }

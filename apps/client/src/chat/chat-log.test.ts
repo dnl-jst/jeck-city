@@ -29,6 +29,11 @@ describe('parseChatInput', () => {
     expect(parseChatInput('/wurst ist lecker', 's')).toEqual({ channel: 's', text: '/wurst ist lecker' });
   });
 
+  it('does not treat Object.prototype names as commands', () => {
+    expect(parseChatInput('/constructor x', 's')).toEqual({ channel: 's', text: '/constructor x' });
+    expect(parseChatInput('/toString', 'w')).toEqual({ channel: 'w', text: '/toString' });
+  });
+
   it('rejects blank input', () => {
     expect(parseChatInput('   ', 's')).toEqual({ channel: 's', text: null });
   });
