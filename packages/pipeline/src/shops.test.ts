@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { assignShopLabels, GENERIC_NAMES, isNeusserAddress } from './shops.js';
+import { assignShopLabels, GENERIC_NAMES, isNeusserAddress, DISTRICT_NAMES } from './shops.js';
 
 test('real OSM name never shown', () => {
   const out = assignShopLabels([{ name: 'Echter Laden', type: 'bakery' }], {}, 1);
@@ -32,4 +32,17 @@ test('Neusser Str. addresses in OSM and NRW spelling', () => {
   expect(isNeusserAddress('Neusser Str.')).toBe(true);
   expect(isNeusserAddress('Neusser Wall')).toBe(false);
   expect(isNeusserAddress(undefined)).toBe(false);
+});
+
+test('city-wide names never allude to Nippes; every Nippes name does; district types exist city-wide', () => {
+  for (const [t, names] of Object.entries(GENERIC_NAMES)) for (const n of names) expect(n, t).not.toMatch(/N[ie]pp?es/i);
+  for (const [t, names] of Object.entries(DISTRICT_NAMES.Nippes!)) for (const n of names) expect(n, t).toMatch(/N[ie]pp?es/i);
+  for (const [d, types] of Object.entries(DISTRICT_NAMES)) for (const t of Object.keys(types)) expect(GENERIC_NAMES[t], `${d}/${t}`).toBeDefined();
+});
+
+test('only shops in a Stadtteil get its names', () => {
+  const nippes = DISTRICT_NAMES.Nippes!.bakery!;
+  const many = (district?: string) => Array.from({ length: 40 }, () => ({ type: 'bakery', ...(district ? { district } : {}) }));
+  for (const d of [undefined, 'Deutz']) expect(assignShopLabels(many(d), {}, 3).filter((s) => nippes.includes(s.label)), d).toEqual([]);
+  expect(new Set(assignShopLabels(many('Nippes'), {}, 3).map((s) => s.label))).toEqual(new Set([...nippes, ...GENERIC_NAMES.bakery!]));
 });
