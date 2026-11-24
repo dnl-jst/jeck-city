@@ -46,7 +46,8 @@ const OVERRIDES = 'data/building-overrides.json';
 /** Curated shop names: OSM name → invented allusion (user-approved). */
 const SHOP_NAMES = 'data/shop-names.json';
 const SHOP_SEED = 2613766;
-const OUT_DIR = 'apps/client/public/world';
+/** Where the world is written unless `--out <dir>` says otherwise. */
+const DEFAULT_OUT_DIR = 'apps/client/public/world';
 /** What the full run remembers for `--transit-only` (the city above the tunnels, see transitenv.ts). */
 const TRANSIT_ENV = 'data/cache/transit-env.bin';
 const TRANSIT_COLLISION = 'transit-collision.bin';
@@ -91,11 +92,21 @@ async function ensureRaw(skipFetch: boolean): Promise<void> {
   await fetchTransitRoutes(RAW_DIR);
 }
 
+/** `--out <dir>`: the world folder to write (and, with `--transit-only`, to read); default DEFAULT_OUT_DIR. */
+function parseOutDir(args: string[]): string {
+  const i = args.indexOf('--out');
+  if (i < 0) return DEFAULT_OUT_DIR;
+  const dir = args[i + 1];
+  if (!dir || dir.startsWith('--')) throw new Error('--out needs a folder');
+  return dir;
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const outDir = parseOutDir(args);
   await ensureRaw(args.includes('--skip-fetch'));
   if (args.includes('--fetch-only')) return;
-  if (args.includes('--transit-only')) return transitOnly();
+  if (args.includes('--transit-only')) return transitOnly(outDir);
 
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
@@ -230,8 +241,8 @@ async function main() {
   const graph = buildRoadGraph(f);
   const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 
-  await mkdir(OUT_DIR, { recursive: true });
-  for (const file of await readdir(OUT_DIR)) if (/^(chunk|model|transit)_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
+  await mkdir(outDir, { recursive: true });
+  for (const file of await readdir(outDir)) if (/^(chunk|model|transit)_.*\.glb$/.test(file)) await rm(join(outDir, file));
 
   const chunks: WorldManifest['chunks'] = [];
   for (const c of buildChunks(buildings, streets, overrides, area, terrain, decks)) {
@@ -243,7 +254,7 @@ async function main() {
       for (const name of STREET_MESHES) if (c.streets[name]) c.streets[name] = punchMesh(c.streets[name], holes);
     }
     const glb = await encodeChunkGlb(c);
-    await writeFile(join(OUT_DIR, file), glb);
+    await writeFile(join(outDir, file), glb);
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
   }
 
@@ -261,14 +272,14 @@ async function main() {
     const chunk = chunkKey(b.centroid.x, b.centroid.z);
     if (!chunks.some((c) => c.key === chunk)) throw new Error(`override ${id}: chunk ${chunk} does not exist`);
     const file = `model_${basename(path, '.glb')}.glb`;
-    await writeFile(join(OUT_DIR, file), m.glb);
+    await writeFile(join(outDir, file), m.glb);
     models.push({ id, chunk, file, bytes: m.glb.byteLength });
     modelCollision.push(m.collision);
     console.log(`model ${file} for ${ids.join(', ')}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid, lift ${lift.toFixed(2)} m`);
   }
 
   if (transitBuild) await withTimetable(transitBuild, area);
-  const transitFiles = transitBuild ? await writeTransit(transitBuild, new Set(chunks.map((c) => c.key))) : null;
+  const transitFiles = transitBuild ? await writeTransit(outDir, transitBuild, new Set(chunks.map((c) => c.key))) : null;
   if (transitFiles) models.push(...transitFiles.models);
 
   // collision: the 1 m drape would put millions of kerb triangles into the trimesh; a coarse terrain-following copy
@@ -286,18 +297,18 @@ async function main() {
   const spawnGround = heightAt(terrain, spawn.x, spawn.z);
   const spawnY = topSurface(collision, spawn.x, spawn.z, spawnGround);
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) on the Domplatte, ${(spawnY - spawnGround).toFixed(2)} m above the terrain`);
-  await writeFile(join(OUT_DIR, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
-  await writeFile(join(OUT_DIR, 'terrain.bin'), new Uint8Array(terrainBin));
+  await writeFile(join(outDir, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
+  await writeFile(join(outDir, 'terrain.bin'), new Uint8Array(terrainBin));
 
   const roundPt = (p: { x: number; z: number }) => ({ x: r2(p.x), z: r2(p.z) });
-  await writeFile(join(OUT_DIR, 'roadgraph.json'), JSON.stringify({
+  await writeFile(join(outDir, 'roadgraph.json'), JSON.stringify({
     nodes: graph.nodes.map((n) => ({ id: n.id, pos: roundPt(n.pos) })),
     edges: graph.edges,
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
 
   const map = buildMapData(f, buildings, waterOutlines(terrain, water));
-  await writeFile(join(OUT_DIR, 'map.json'), JSON.stringify(map));
+  await writeFile(join(outDir, 'map.json'), JSON.stringify(map));
   console.log(`map: ${map.roads.length} roads (${map.roads.filter((r) => r.name).length} named), ${map.buildings.length} buildings, ${map.greens.length} greens`);
 
   const extraLamps = generatedLamps(f, buildings); // overridden footprints keep lamps out too
@@ -316,19 +327,19 @@ async function main() {
   for (const type of BIKE_TYPES) {
     const glb = await prepareProp(await readFile(join(BIKE_MODELS, type, `${type}.glb`)));
     const file = `bike_${type}.glb`;
-    await writeFile(join(OUT_DIR, file), glb);
+    await writeFile(join(outDir, file), glb);
     bikeModels.push({ type, file, bytes: glb.byteLength });
   }
   const rackModels: WorldManifest['rackModels'] = [];
   for (const [kind, name] of [[0, 'rack_hoop'], [1, 'rack_wall']] as const) {
     const glb = await prepareProp(await readFile(join(BIKE_MODELS, 'racks', `${name}.glb`)));
-    await writeFile(join(OUT_DIR, `${name}.glb`), glb);
+    await writeFile(join(outDir, `${name}.glb`), glb);
     rackModels.push({ kind, file: `${name}.glb`, bytes: glb.byteLength });
   }
-  const characterModels = await shipCharacterModels(OUT_DIR);
+  const characterModels = await shipCharacterModels(outDir);
 
   // car models (data/models/cars, built by their build.py): full detail and the distance version
-  const carModels = await shipCarModels(OUT_DIR);
+  const carModels = await shipCarModels(outDir);
   console.log(`car models: ${carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 
   const racks = layoutRacks(f, buildings).filter((r) => r.hoops.every(offBridge) && r.hoops.every(offHoles));
@@ -378,14 +389,14 @@ async function main() {
     ...(transitBuild && transitFiles ? { transit: transitBuild.transit, transitCollision: transitFiles.collision } : {}),
     attribution: ATTRIBUTION,
   };
-  await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
-  await writeWorldIndex(OUT_DIR); // (last write: the dev script restarts the game server when index.json changes)
+  await writeFile(join(outDir, 'manifest.json'), JSON.stringify(manifest));
+  await writeWorldIndex(outDir); // (last write: the dev script restarts the game server when index.json changes)
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
 
   let total = 0;
   const sizes: [string, number][] = [];
-  for (const file of (await readdir(OUT_DIR)).sort()) {
-    const size = (await stat(join(OUT_DIR, file))).size;
+  for (const file of (await readdir(outDir)).sort()) {
+    const size = (await stat(join(outDir, file))).size;
     sizes.push([file, size]);
     total += size;
   }
@@ -414,17 +425,17 @@ async function withTimetable(build: TransitBuild, area: Rect): Promise<void> {
 }
 
 /** Writes the Stadtbahn's files (its models per chunk, its collision) and returns their manifest entries. */
-async function writeTransit(build: TransitBuild, chunkKeys: Set<string>): Promise<{ models: WorldManifest['models']; collision: NonNullable<WorldManifest['transitCollision']> }> {
+async function writeTransit(outDir: string, build: TransitBuild, chunkKeys: Set<string>): Promise<{ models: WorldManifest['models']; collision: NonNullable<WorldManifest['transitCollision']> }> {
   const models: WorldManifest['models'] = [];
   for (const [key, glb] of build.models) {
     if (!chunkKeys.has(key)) throw new Error(`transit: chunk ${key} does not exist`);
     const file = `transit_${key}.glb`;
-    await writeFile(join(OUT_DIR, file), glb);
+    await writeFile(join(outDir, file), glb);
     models.push({ id: `transit_${key}`, chunk: key, file, bytes: glb.byteLength });
   }
   // its collision as a soup of its own: three vertices per triangle (collision.bin's format, no boundary)
   const col = new Uint8Array(encodeCollision({ vertices: build.collision, indices: Uint32Array.from({ length: build.collision.length / 3 }, (_, i) => i), boundary: new Float32Array() }));
-  await writeFile(join(OUT_DIR, TRANSIT_COLLISION), col);
+  await writeFile(join(outDir, TRANSIT_COLLISION), col);
   console.log(`transit: ${build.models.size} models, ${build.collision.length / 9} collision triangles, ${build.openings.length} openings in the ground`);
   return { models, collision: { file: TRANSIT_COLLISION, bytes: col.byteLength } };
 }
@@ -434,28 +445,28 @@ async function writeTransit(build: TransitBuild, chunkKeys: Set<string>): Promis
  * in seconds: from the cached OSM data, the world's terrain.bin and the city raster the last full run left
  * (TRANSIT_ENV). The stairwells are cut out of the ground and the pavement by the full run only: if they moved, it warns.
  */
-async function transitOnly(): Promise<void> {
-  for (const file of [join(OUT_DIR, 'manifest.json'), join(OUT_DIR, 'terrain.bin'), TRANSIT_ENV]) {
+async function transitOnly(outDir: string): Promise<void> {
+  for (const file of [join(outDir, 'manifest.json'), join(outDir, 'terrain.bin'), TRANSIT_ENV]) {
     if (!existsSync(file)) throw new Error(`--transit-only: ${file} is missing; run the full pipeline once`);
   }
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
-  const bin = await readFile(join(OUT_DIR, 'terrain.bin'));
+  const bin = await readFile(join(outDir, 'terrain.bin'));
   const terrain = decodeTerrain(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength) as ArrayBuffer);
-  const manifest = JSON.parse(await readFile(join(OUT_DIR, 'manifest.json'), 'utf8')) as WorldManifest;
+  const manifest = JSON.parse(await readFile(join(outDir, 'manifest.json'), 'utf8')) as WorldManifest;
   const build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
     { terrain, area: worldRect(f.boundary), ...decodeEnv(await readFile(TRANSIT_ENV)) });
   if (!build) throw new Error('--transit-only: the OSM data has no transit line');
   await withTimetable(build, worldRect(f.boundary));
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);
   if (before !== after) console.warn('transit: the stairwells moved; the ground and the pavement are only cut out for them by a full pipeline run');
-  for (const file of await readdir(OUT_DIR)) if (/^transit_.*\.glb$/.test(file)) await rm(join(OUT_DIR, file));
-  const files = await writeTransit(build, new Set(manifest.chunks.map((c) => c.key)));
+  for (const file of await readdir(outDir)) if (/^transit_.*\.glb$/.test(file)) await rm(join(outDir, file));
+  const files = await writeTransit(outDir, build, new Set(manifest.chunks.map((c) => c.key)));
   manifest.models = [...manifest.models.filter((m) => !m.id.startsWith('transit_')), ...files.models];
   manifest.transit = build.transit;
   manifest.transitCollision = files.collision;
-  await writeFile(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest));
-  await writeWorldIndex(OUT_DIR); // (last: the dev script restarts the game server when index.json changes)
+  await writeFile(join(outDir, 'manifest.json'), JSON.stringify(manifest));
+  await writeWorldIndex(outDir); // (last: the dev script restarts the game server when index.json changes)
 }
 
 /**

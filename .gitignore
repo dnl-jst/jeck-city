@@ -14,6 +14,8 @@ deploy/.env
 # local credentials (S3 for publishing the world)
 .env
 data/cache/
+# reference worlds and test runs of the pipeline (npm run world:compare, scripts/pipeline-peak.mjs)
+data/reference/
 
 # compressed world variants reused by the image build (scripts/precompress.mjs --cache)
 .precompress-cache/

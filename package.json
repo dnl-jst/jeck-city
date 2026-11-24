@@ -19,6 +19,7 @@
     "car-shots": "node scripts/car-shots.mjs",
     "ship-cars": "tsx packages/pipeline/src/ship-cars.ts",
     "world:index": "tsx packages/pipeline/src/write-index.ts",
+    "world:compare": "tsx packages/pipeline/src/compare-worlds.ts",
     "world:publish": "node --env-file-if-exists=.env --import tsx packages/pipeline/src/publish-world.ts",
     "world:prune": "node --env-file-if-exists=.env --import tsx packages/pipeline/src/prune-world.ts",
     "screenshot": "node scripts/screenshot.mjs",
