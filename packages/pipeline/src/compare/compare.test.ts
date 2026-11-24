@@ -66,6 +66,34 @@ describe('compareWorlds', () => {
     expect(r.diffs).toEqual([{ name: 'terrain.bin', kind: 'different', detail: '1 heights differ, max 3 cm' }]);
   });
 
+  it('hashes the files on disk: a file changed after index.json was written is different', async () => {
+    await worlds({ 'a.bin': 'a', 'b.bin': 'bb' });
+    await writeFile(join(b, 'b.bin'), 'bc'); // index.json of b still lists the old hash
+    const r = await compareWorlds(a, b);
+    expect(r.same).toBe(false);
+    expect(r.worldHashA).toBe(r.worldHashB); // the stored indexes are still equal
+    expect(r.diffs).toContainEqual({ name: 'b.bin', kind: 'different' });
+    expect(r.diffs).toContainEqual({ name: 'index.json', kind: 'different', detail: 'stored index.json does not match the files on disk (side B)' });
+  });
+
+  it('sees a file on disk that the stored index does not list', async () => {
+    await worlds({ 'a.bin': 'a' });
+    await writeFile(join(a, 'extra.bin'), 'x');
+    const r = await compareWorlds(a, b);
+    expect(r.same).toBe(false);
+    expect(r.diffs).toContainEqual({ name: 'extra.bin', kind: 'missing-b' });
+    expect(r.diffs).toContainEqual({ name: 'index.json', kind: 'different', detail: 'stored index.json does not match the files on disk (side A)' });
+  });
+
+  it('a folder without index.json (an aborted run) is a difference, not an exception', async () => {
+    await worlds({ 'a.bin': 'a' });
+    await rm(join(b, 'index.json'));
+    const r = await compareWorlds(a, b);
+    expect(r.same).toBe(false);
+    expect(r.worldHashB).toBe('none');
+    expect(r.diffs).toEqual([{ name: 'index.json', kind: 'missing-b', detail: 'no index.json on side B (aborted run?)' }]);
+  });
+
   it('explains a manifest.json difference by top-level key', async () => {
     const m = { chunks: [{ key: '0_0' }], lamps: [{ x: 1, z: 2 }], shops: [] };
     await worlds({ 'manifest.json': JSON.stringify(m) }, { 'manifest.json': JSON.stringify({ ...m, lamps: [{ x: 1, z: 3 }] }) });
