@@ -95,8 +95,9 @@ das nicht. *(Vom Prüfer gefunden; die Lösung ist mein Vorschlag.)*
 - Kopfzeilen jedes Objekts und des Index: `Cache-Control: public, max-age=31536000, immutable`, passender
   `Content-Type`.
 - **Kompression:** Objekte werden Brotli-komprimiert gespeichert und mit `Content-Encoding: br` ausgeliefert; ist
-  die komprimierte Fassung nicht kleiner, wird die Datei roh gespeichert. Der bestehende Kompressions-Cache
-  (`scripts/precompress.mjs`, `.precompress-cache`) wird wiederverwendet. Der Index selbst ebenso.
+  die komprimierte Fassung nicht kleiner, wird die Datei roh gespeichert. Das Veröffentlichen komprimiert selbst
+  (Brotli 5, rund 40 MB/s pro Kern) und nur, was im Bucket fehlt; der Kompressions-Cache der Image-Erstellung wird
+  dafür nicht gebraucht.
 - **CORS:** Der Bucket erlaubt `GET` und `HEAD` von jedem Ursprung (`*`). Die Daten sind offen, und so funktionieren
   auch lokale Tests gegen den echten Bucket.
 
@@ -184,8 +185,8 @@ prüft zusätzlich `worldPublished: true`, wenn er mit `WORLD_URL` läuft.
 **Ablauf**
 
 1. Der Server bekommt `SIGTERM` (oder `SIGINT`).
-2. Er setzt im Raum-Zustand `restartAt` (Server-Zeit in ms; 0 = kein Neustart angekündigt) auf jetzt +
-   `RESTART_NOTICE_S` Sekunden. Der Wert liegt im Zustand, nicht in einer Nachricht, damit auch Spieler ihn sehen,
+2. Er setzt im Raum-Zustand `restartTick` (Server-Tick; 0 = kein Neustart angekündigt) auf den Tick in
+   `RESTART_NOTICE_S` Sekunden. *(Ticks statt Uhrzeit: Die Server-Uhr des Clients rechnet in Ticks.)* Der Wert liegt im Zustand, nicht in einer Nachricht, damit auch Spieler ihn sehen,
    die während des Countdowns beitreten.
 3. Das Spiel läuft unverändert weiter. Nach Ablauf fährt der Server wie heute geordnet herunter.
 4. Ein zweites Signal während des Countdowns beendet sofort.
@@ -198,7 +199,7 @@ Server künftig selbst.
 
 **Anzeige im Client**
 
-Ein Banner oben in der Mitte, über dem Spiel, solange `restartAt` gesetzt ist:
+Ein Banner oben in der Mitte, über dem Spiel, solange `restartTick` gesetzt ist:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -206,7 +207,7 @@ Ein Banner oben in der Mitte, über dem Spiel, solange `restartAt` gesetzt ist:
 └──────────────────────────────────────────────┘
 ```
 
-Die Restzeit rechnet der Client aus `restartAt` und seiner Server-Uhr (`apps/client/src/net/clock.ts`). In den
+Die Restzeit rechnet der Client aus `restartTick` und seiner Server-Uhr (`apps/client/src/net/clock.ts`). In den
 letzten 10 Sekunden wird das Banner hervorgehoben. Als eigenes Bauteil gebaut, wie die Wetteranzeige.
 
 **Nach dem Neustart**
@@ -231,7 +232,7 @@ sich wie heute.
   nichts; bricht ab, wenn `--live` nicht antwortet.
 - Welt-Hash: ändert sich, wenn sich nur `collision.bin` oder nur ein Chunk bei gleicher Größe ändert.
 - Client-Auflösung: mit und ohne `worldUrl`; fehlender Name im Index ergibt einen Fehler.
-- Server: `SIGTERM` setzt `restartAt` und beendet erst nach Ablauf; zweites Signal beendet sofort; ohne Spieler
+- Server: `SIGTERM` setzt `restartTick` und beendet erst nach Ablauf; zweites Signal beendet sofort; ohne Spieler
   kein Warten.
 - Ein durchgehender Test mit Browser (wie `scripts/mp-check.mjs`): Countdown erscheint, nach Neustart lädt die Seite neu.
 
