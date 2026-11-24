@@ -23,7 +23,7 @@ export type Config = {
   logLevel: LogLevel;
   /** NODE_ENV !== 'production': dev hooks (devTeleport, fake lag, client fly mode) allowed. */
   dev: boolean;
-  /** Directory with manifest.json, collision.bin and terrain.bin. */
+  /** Directory with index.json, manifest.json, collision.bin and terrain.bin. */
   worldDir: string;
   /** Built client to serve (apps/client/dist), or null when there is none. */
   clientDir: string | null;
@@ -33,6 +33,13 @@ export type Config = {
   /** Joins allowed per address in a sliding 60 s window; NN_JOIN_PER_MIN raises it, in dev only (load test: all bots share one address). */
   joinPerMin: number;
   weather: WeatherSource;
+  /**
+   * Base URL the world files are fetched from (object storage), always ending in exactly one '/'; from WORLD_URL.
+   * null: the client loads them by name from /world/ as before.
+   */
+  worldUrl: string | null;
+  /** Seconds between the restart notice to the players and the shutdown; RESTART_NOTICE_S, 60 in production, 0 in dev. */
+  restartNoticeS: number;
 };
 
 type Env = Record<string, string | undefined>;
@@ -81,6 +88,14 @@ function parseWeather(raw: string | undefined, dev: boolean): WeatherSource {
   return dev ? { fixed } : 'live';
 }
 
+/** WORLD_URL: http(s) URL with exactly one trailing '/', or null when unset or empty. */
+function parseWorldUrl(raw: string | undefined): string | null {
+  const url = raw?.trim();
+  if (!url) return null;
+  if (!/^https?:\/\//i.test(url)) throw new Error(`WORLD_URL must start with http:// or https://, got "${url}"`);
+  return `${url.replace(/\/+$/, '')}/`;
+}
+
 /** Server configuration from environment variables; `overrides` (tests) win over the environment. */
 export function loadConfig(env: Env = process.env, overrides: Partial<Config> = {}): Config {
   const logLevel = (env.LOG_LEVEL || 'info') as LogLevel;
@@ -98,6 +113,8 @@ export function loadConfig(env: Env = process.env, overrides: Partial<Config> = 
     reconnectS: RECONNECT_S,
     joinPerMin: dev ? intEnv(env, 'NN_JOIN_PER_MIN', JOIN_PER_IP_PER_MIN, 1, 100_000) : JOIN_PER_IP_PER_MIN,
     weather: parseWeather(env.NN_WEATHER, dev),
+    worldUrl: parseWorldUrl(env.WORLD_URL),
+    restartNoticeS: intEnv(env, 'RESTART_NOTICE_S', dev ? 0 : 60, 0, 600),
     ...overrides,
   };
 }

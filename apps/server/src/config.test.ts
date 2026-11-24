@@ -33,4 +33,22 @@ describe('loadConfig', () => {
     expect(loadConfig({ NN_WEATHER: 'rain', NODE_ENV: 'production' }).weather).toBe('live');
     expect(() => loadConfig({ NN_WEATHER: 'banana' })).toThrow(/live.*off.*heavyrain/);
   });
+
+  it('WORLD_URL gets exactly one trailing slash; empty is null; a value without scheme throws', () => {
+    expect(loadConfig({ WORLD_URL: 'https://b.example' }).worldUrl).toBe('https://b.example/');
+    expect(loadConfig({ WORLD_URL: 'https://b.example//' }).worldUrl).toBe('https://b.example/');
+    expect(loadConfig({ WORLD_URL: 'http://b.example/world/' }).worldUrl).toBe('http://b.example/world/');
+    expect(loadConfig({}).worldUrl).toBeNull();
+    expect(loadConfig({ WORLD_URL: '' }).worldUrl).toBeNull();
+    expect(() => loadConfig({ WORLD_URL: 'b.example' })).toThrow(/WORLD_URL/);
+  });
+
+  it('RESTART_NOTICE_S: 60 in production, 0 in dev, 0..600 accepted', () => {
+    expect(loadConfig({ NODE_ENV: 'production' }).restartNoticeS).toBe(60);
+    expect(loadConfig({}).restartNoticeS).toBe(0);
+    expect(loadConfig({ NODE_ENV: 'production', RESTART_NOTICE_S: '0' }).restartNoticeS).toBe(0);
+    expect(loadConfig({ RESTART_NOTICE_S: '600' }).restartNoticeS).toBe(600);
+    expect(() => loadConfig({ NODE_ENV: 'production', RESTART_NOTICE_S: '601' })).toThrow();
+    expect(() => loadConfig({ RESTART_NOTICE_S: '-1' })).toThrow();
+  });
 });

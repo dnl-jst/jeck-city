@@ -234,9 +234,9 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
    * /healthz: connected players, p95 tick time and dropped steps over the last 600 ticks, plus the totals since start
    * (ticks run, steps dropped) and the process' resident memory.
    */
-  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; version: string } {
+  health(): Health & { ticks: number; droppedTotal: number; rssMb: number; version: string; worldHash: string } {
     return {
-      version: SERVER_VERSION,
+      version: SERVER_VERSION, worldHash: this.deps.worldHash,
       ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
       rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
     };

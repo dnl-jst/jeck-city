@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, worldHash,
-  type PlayerInput, type Snapshot,
+  decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, WORLD_INDEX_FILE,
+  worldHash, type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
 import { INPUT_BURST, QUEUE_MAX } from './inputs';
@@ -16,7 +16,12 @@ const clientDir = mkdtempSync(join(tmpdir(), 'nn-dist-'));
 writeFileSync(join(clientDir, 'index.html'), '<h1>nippes</h1>');
 const base = { port: 0, maxPlayers: 2, logLevel: 'error' as const, joinPerMin: 1000, reconnectS: 3, clientDir, weather: 'off' as const };
 const cfg = loadConfig({}, base);
-const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin'].every((f) => existsSync(`${cfg.worldDir}/${f}`));
+const haveAssets = ['manifest.json', 'collision.bin', 'terrain.bin', WORLD_INDEX_FILE].every((f) => existsSync(`${cfg.worldDir}/${f}`));
+/** worldHash() over a file of the world directory. */
+const hashOf = async (file: string): Promise<string> => {
+  const b = readFileSync(`${cfg.worldDir}/${file}`);
+  return worldHash(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer);
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, timeoutMs = 3000): Promise<void> {
@@ -33,8 +38,7 @@ describe.skipIf(!haveAssets)('nippes room', () => {
   const open: Room[] = [];
 
   beforeAll(async () => {
-    const m = readFileSync(`${cfg.worldDir}/manifest.json`);
-    hash = await worldHash(m.buffer.slice(m.byteOffset, m.byteOffset + m.byteLength));
+    hash = await hashOf(WORLD_INDEX_FILE);
     srv = await startServer(cfg);
   }, 60_000);
 
@@ -90,6 +94,12 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(e.message).toBe('version');
     const e2 = await rejection(join('Jupp', { worldHash: 'ffffffffffff' }));
     expect(e2.code).toBe(409);
+  });
+
+  it('a join with the hash of manifest.json is rejected as a version conflict', async () => {
+    const e = await rejection(join('Jupp', { worldHash: await hashOf('manifest.json') }));
+    expect(e.code).toBe(409);
+    expect(e.message).toBe('version');
   });
 
   it("bad name → 400 'bad'", async () => {
@@ -427,6 +437,20 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     expect(h.tickP95Ms).toBeGreaterThanOrEqual(0);
     expect(Number.isInteger(h.dropped)).toBe(true);
     await leaveAll();
+  });
+
+  it('/config.json answers { worldUrl: null } with no-cache', async () => {
+    const r = await fetch(`http://127.0.0.1:${srv.port}/config.json`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get('cache-control')).toBe('no-cache');
+    expect(await r.json()).toEqual({ worldUrl: null });
+  });
+
+  it('/healthz carries worldHash (the hash of index.json) and worldPublished null', async () => {
+    const h = (await (await fetch(`http://127.0.0.1:${srv.port}/healthz`)).json()) as { worldHash: string; worldPublished: boolean | null };
+    expect(h.worldHash).toBe(hash);
+    expect(h.worldHash).toBe(await hashOf(WORLD_INDEX_FILE));
+    expect(h.worldPublished).toBeNull();
   });
 
   // Uses the shared server: a fixed weather is just room.setWeather() at startup (server.ts), and a second

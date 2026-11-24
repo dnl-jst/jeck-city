@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { parseArgs } from 'node:util';
-import { parseManifest, worldHash, type WorldManifest } from '@nn/shared';
+import { parseManifest, WORLD_INDEX_FILE, worldHash, type WorldManifest } from '@nn/shared';
 import { loadConfig } from '../config';
 import { connectBot, prng, type BotRole, type ConnectedBot, type VehicleSpot } from './bot';
 
@@ -87,9 +87,9 @@ function plan(m: WorldManifest, rng: () => number): { role: BotRole; start: { x:
 
 async function main(): Promise<number> {
   const cfg = loadConfig(process.env);
-  const bytes = readFileSync(`${cfg.worldDir}/manifest.json`);
-  const manifest = parseManifest(JSON.parse(bytes.toString('utf8')));
-  const hash = await worldHash(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+  const manifest = parseManifest(JSON.parse(readFileSync(`${cfg.worldDir}/manifest.json`, 'utf8')));
+  const index = readFileSync(`${cfg.worldDir}/${WORLD_INDEX_FILE}`);
+  const hash = await worldHash(index.buffer.slice(index.byteOffset, index.byteOffset + index.byteLength) as ArrayBuffer);
   const rng = prng(seed);
   const roles = plan(manifest, rng);
   const home = { x: manifest.spawn.x, z: manifest.spawn.z };
