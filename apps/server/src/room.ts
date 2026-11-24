@@ -1,10 +1,11 @@
 import { performance } from 'node:perf_hooks';
 import { CloseCode, Room, ServerError, type AuthContext, type Client, type RoomException, type RoomMethodName } from 'colyseus';
 import {
-  CHARACTER_VARIANTS, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
-  parseStationId, PROTOCOL_VERSION, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
-  type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
+  censorChat, CHARACTER_VARIANTS, CHAT_TEXTS, checkChat, checkName, decodeInputs, dedupeName, encodeSnapshot, FixedStepper, Interest, MAX_MESSAGE_BYTES,
+  parseChatSend, parseStationId, PROTOCOL_VERSION, SAY_RANGE_M, SNAPSHOT_EVERY, snapshotFor, snapshotRound, TICK_HZ, WorldSim,
+  type ChatLineMsg, type PlayerId, type PlayerInput, type PropPose, type SimEvent, type SnapshotRound, type Weather, type WorldAssets,
 } from '@nn/shared';
+import { ChatThrottle } from './chat';
 import type { Config } from './config';
 import { LagLine } from './fake-lag';
 import { TickStats, type Health } from './health';
@@ -45,6 +46,7 @@ type Seat = {
   /** Fake lag (dev) per direction; null when off. */
   lagIn: LagLine | null;
   lagOut: LagLine | null;
+  chat: ChatThrottle;
 };
 
 /** Byte size of a raw ws 'message' payload (Buffer, ArrayBuffer or fragments). */
@@ -101,6 +103,10 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     this.onMessage('radio', (client, msg: unknown) => {
       const seat = this.seatOf(client);
       if (seat) this.inbound(seat, () => this.sim.setRadio(seat.slot, parseStationId(msg)));
+    });
+    this.onMessage('chat', (client, msg: unknown) => {
+      const seat = this.seatOf(client);
+      if (seat) this.inbound(seat, () => this.routeChat(seat, msg));
     });
     this.onMessage('devTeleport', (client, msg: unknown) => {
       const seat = this.seatOf(client);
@@ -161,6 +167,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     const seat: Seat = {
       slot, name, ipHash: auth.ipHash, queue: new InputQueue(this.sim.player(slot).yaw), kicked: false, client,
       interest: new Interest(), away: false, lagIn: lag && new LagLine(lag), lagOut: lag && new LagLine(lag),
+      chat: new ChatThrottle(),
     };
     this.seats.set(client.sessionId, seat);
     const start = this.sim.player(slot).pos;
@@ -240,6 +247,34 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
       ...this.stats.health(this.seats.size), ticks: this.sim.tick, droppedTotal: this.droppedSteps,
       rssMb: Math.round(process.memoryUsage.rss() / 2 ** 20),
     };
+  }
+
+  /** Validates, throttles and censors a chat message, then delivers it (world: everyone, say: within SAY_RANGE_M). */
+  private routeChat(seat: Seat, msg: unknown): void {
+    const send = parseChatSend(msg);
+    if (!send) return;
+    const checked = checkChat(send.t);
+    if (!checked.ok) return;
+    const verdict = seat.chat.take(Date.now());
+    if (verdict === 'drop') return;
+    const deliver = (to: Seat, line: ChatLineMsg) => this.outbound(to, () => to.client.send('chat', line));
+    if (verdict === 'warn') {
+      deliver(seat, { c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.slow });
+      return;
+    }
+    const line: ChatLineMsg = { c: send.c, slot: seat.slot, name: seat.name, t: censorChat(checked.text) };
+    let heard = 0;
+    const from = this.sim.player(seat.slot).pos;
+    for (const to of this.seats.values()) {
+      if (send.c === 's') {
+        const p = this.sim.player(to.slot).pos;
+        if (Math.hypot(p.x - from.x, p.z - from.z) > SAY_RANGE_M) continue;
+      }
+      if (to !== seat) heard++;
+      deliver(to, line);
+    }
+    if (send.c === 's' && heard === 0) deliver(seat, { c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.unheard });
+    log('info', 'chat', { slot: seat.slot, channel: send.c, len: [...checked.text].length });
   }
 
   /** Runs `action` now, or after the simulated inbound lag (dev). Order per client is kept. */
