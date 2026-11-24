@@ -88,6 +88,6 @@ export const NippesState = schema({
   bikes: t.map(BikeSlowState),
   lamps: t.map(LampState),
   weather: t.ref(WeatherState).default(unknownWeatherState),
-  restartTick: t.float64(),
+  restartTick: t.float64().default(0),
 }, 'NippesState');
 export type NippesState = SchemaType<typeof NippesState>;
