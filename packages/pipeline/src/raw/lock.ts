@@ -55,7 +55,19 @@ export function rawKey(path: string, hash: string): string {
   return `raw/${hash.slice(0, 2)}/${hash}${extname(path)}`;
 }
 
-/** The logical paths every pipeline run reads. */
+/** The timetable's logical path: VRS's GTFS feed as downloaded (GTFS_URL in gtfs.ts). */
+export const GTFS_ZIP = 'gtfs.zip';
+
+/** The pinned timetable (the feed's hash and the sample days); throws, naming `raw:update -- gtfs`, if the lock lacks either. */
+export function requireTimetable(lock: RawLock, file: string = RAW_LOCK_FILE): { hash: string; days: [number, number, number] } {
+  const zip = lock.files[GTFS_ZIP];
+  if (!zip || !lock.gtfsDays) {
+    throw new Error(`${file} pins no timetable (${zip ? 'gtfsDays' : GTFS_ZIP} missing). Run \`${RAW_UPDATE_HINT} -- gtfs\`.`);
+  }
+  return { hash: zip.hash, days: lock.gtfsDays };
+}
+
+/** The logical paths every pipeline run reads (besides the timetable, see requireTimetable). */
 export function pipelineRawPaths(): string[] {
   return ['osm.json', TRANSIT_ROUTES_FILE, ...LOD2_TILES.map((t) => `lod2/${t}`), ...DGM_TILES.map((t) => `dgm1/${t}`)];
 }

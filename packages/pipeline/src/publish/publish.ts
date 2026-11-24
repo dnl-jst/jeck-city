@@ -15,6 +15,11 @@ const CONTENT_TYPES: Record<string, string> = {
   '.glb': 'model/gltf-binary',
   '.json': 'application/json',
   '.bin': 'application/octet-stream',
+  // raw data in the mirror (raw/update.ts)
+  '.gml': 'application/gml+xml',
+  '.tif': 'image/tiff',
+  '.zip': 'application/zip',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 function contentType(name: string): string {
@@ -22,8 +27,8 @@ function contentType(name: string): string {
   return (dot >= 0 && CONTENT_TYPES[name.slice(dot)]) || 'application/octet-stream';
 }
 
-/** Brotli (quality 5) when that is smaller, the raw bytes otherwise. */
-async function encode(raw: Uint8Array, name: string): Promise<{ body: Uint8Array; meta: PutMeta }> {
+/** Brotli (quality 5) when that is smaller, the raw bytes otherwise; immutable caching, content type from `name`. */
+export async function encode(raw: Uint8Array, name: string): Promise<{ body: Uint8Array; meta: PutMeta }> {
   const br = await compress(raw, {
     params: { [constants.BROTLI_PARAM_QUALITY]: 5, [constants.BROTLI_PARAM_SIZE_HINT]: raw.byteLength },
   });
@@ -32,7 +37,7 @@ async function encode(raw: Uint8Array, name: string): Promise<{ body: Uint8Array
 }
 
 /** Runs `fn` over `items` with at most `n` at a time; after the first failure no new item starts, then it rethrows. */
-async function inPool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
+export async function inPool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   let failure: { error: unknown } | null = null;
   const worker = async () => {

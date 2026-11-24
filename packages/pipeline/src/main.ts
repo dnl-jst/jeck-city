@@ -15,7 +15,8 @@ import { shipCarModels, withHeli } from './ship-cars.js';
 import { writeWorldIndex } from './worldindex.js';
 import { parseCityGml } from './citygml.js';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
-import { readRawLock } from './raw/lock.js';
+import { GTFS_ZIP, readRawLock, requireTimetable } from './raw/lock.js';
+import { unpackGtfs } from './raw/gtfs-zip.js';
 import { ensureRawFiles } from './raw/resolve.js';
 import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
@@ -95,8 +96,10 @@ async function main() {
   const args = process.argv.slice(2);
   const outDir = parseOutDir(args);
   // the pinned raw data, checked file by file (missing or changed files come from the mirror, never an origin server)
-  await ensureRawFiles(await readRawLock(), RAW_DIR);
-  if (args.includes('--transit-only')) return transitOnly(outDir);
+  const lock = await readRawLock();
+  const timetable = requireTimetable(lock); // (before any work: the timetable is not optional)
+  await ensureRawFiles(lock, RAW_DIR);
+  if (args.includes('--transit-only')) return transitOnly(outDir, timetable);
 
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
@@ -268,7 +271,7 @@ async function main() {
     console.log(`model ${file} for ${ids.join(', ')}: chunk ${chunk}, ${m.collision.length / 9} collision triangles, ${mb(m.glb.byteLength)}, centre ${off.toFixed(1)} m from the LOD2 centroid, lift ${lift.toFixed(2)} m`);
   }
 
-  if (transitBuild) await withTimetable(transitBuild, area);
+  if (transitBuild) await withTimetable(transitBuild, area, timetable);
   const transitFiles = transitBuild ? await writeTransit(outDir, transitBuild, new Set(chunks.map((c) => c.key))) : null;
   if (transitFiles) models.push(...transitFiles.models);
 
@@ -397,14 +400,13 @@ async function main() {
 }
 
 /**
- * The real timetable for the line paths, if the GTFS feed is there (data/raw/gtfs, unpacked from GTFS_URL in gtfs.ts);
- * without it the paths keep their makeshift headways.
+ * The real timetable for the line paths: the pinned GTFS feed (data/raw/gtfs.zip, unpacked once into
+ * data/cache/gtfs/<hash>/) on the lock's sample days.
  */
-async function withTimetable(build: TransitBuild, area: Rect): Promise<void> {
-  const dir = join(RAW_DIR, 'gtfs');
-  if (!existsSync(join(dir, 'stop_times.txt'))) return console.warn(`transit: no timetable (${dir} is missing): trains run on a makeshift headway`);
+async function withTimetable(build: TransitBuild, area: Rect, timetable: { hash: string; days: [number, number, number] }): Promise<void> {
+  const dir = await unpackGtfs(join(RAW_DIR, GTFS_ZIP), timetable.hash);
   const lines = [...new Set(build.transit.tracks.map((t) => t.line ?? '').filter(Boolean))];
-  const trips = await loadGtfsTrips(dir, lines, (x, z) => x > area.minX && x < area.maxX && z > area.minZ && z < area.maxZ, 'data/cache/gtfs-trips.json');
+  const trips = await loadGtfsTrips(dir, lines, (x, z) => x > area.minX && x < area.maxX && z > area.minZ && z < area.maxZ, 'data/cache/gtfs-trips.json', timetable.days, timetable.hash);
   const { placed, lost } = applyTimetable(build.transit.tracks, trips);
   // a path no trip was put on is a branch that shares its way through the area with another path of its line (12 to
   // Niehl and to Merkenich): that one carries its trips; this one would only run on the makeshift headway
@@ -435,7 +437,7 @@ async function writeTransit(outDir: string, build: TransitBuild, chunkKeys: Set<
  * in seconds: from the cached OSM data, the world's terrain.bin and the city raster the last full run left
  * (TRANSIT_ENV). The stairwells are cut out of the ground and the pavement by the full run only: if they moved, it warns.
  */
-async function transitOnly(outDir: string): Promise<void> {
+async function transitOnly(outDir: string, timetable: { hash: string; days: [number, number, number] }): Promise<void> {
   for (const file of [join(outDir, 'manifest.json'), join(outDir, 'terrain.bin'), TRANSIT_ENV]) {
     if (!existsSync(file)) throw new Error(`--transit-only: ${file} is missing; run the full pipeline once`);
   }
@@ -447,7 +449,7 @@ async function transitOnly(outDir: string): Promise<void> {
   const build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
     { terrain, area: worldRect(f.boundary), ...decodeEnv(await readFile(TRANSIT_ENV)) });
   if (!build) throw new Error('--transit-only: the OSM data has no transit line');
-  await withTimetable(build, worldRect(f.boundary));
+  await withTimetable(build, worldRect(f.boundary), timetable);
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);
   if (before !== after) console.warn('transit: the stairwells moved; the ground and the pavement are only cut out for them by a full pipeline run');
   for (const file of await readdir(outDir)) if (/^transit_.*\.glb$/.test(file)) await rm(join(outDir, file));

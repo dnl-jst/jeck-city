@@ -3,10 +3,15 @@ import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { GTFS_URL } from './gtfs.js';
 import { BOUNDARY_IDS } from './osm.js';
 
 // The tile lists define what the pipeline reads (see raw/lock.ts). The download functions ask the origin servers and
-// are not part of a pipeline run: a run reads the pinned raw data (data/raw.lock.json, raw/resolve.ts).
+// are not part of a pipeline run: a run reads the pinned raw data (data/raw.lock.json, raw/resolve.ts). They are called
+// by `npm run raw:update` (raw/update.ts), which passes its own `fetchFn` and `log` (tests: no network).
+
+/** What every download function takes: the fetch to use and where progress lines go (default: global fetch, console). */
+export type FetchOptions = { fetchFn?: typeof fetch; log?: (line: string) => void };
 
 const LOD2_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod2_gml/lod2_gml/';
 const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/';
@@ -68,55 +73,55 @@ async function exists(path: string): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Streams a response body into `path` (via `<path>.part`, renamed when complete). */
+async function streamToFile(body: ReadableStream<Uint8Array>, path: string): Promise<void> {
+  const tmp = `${path}.part`;
+  try {
+    await pipeline(Readable.fromWeb(body as never), createWriteStream(tmp));
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true });
+    throw err;
+  }
+}
+
 /** Downloads LoD2 tiles into `dir`, skipping existing files. Returns file paths. */
-export async function fetchLod2Tiles(dir: string): Promise<string[]> {
+export async function fetchLod2Tiles(dir: string, o: FetchOptions = {}): Promise<string[]> {
+  const { fetchFn = fetch, log = console.log } = o;
   await mkdir(dir, { recursive: true });
   const paths: string[] = [];
   for (const name of LOD2_TILES) {
     const path = join(dir, name);
     paths.push(path);
     if (await exists(path)) {
-      console.log(`skip ${name} (cached)`);
+      log(`skip ${name} (cached)`);
       continue;
     }
-    console.log(`download ${name}`);
-    const res = await fetch(LOD2_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
+    log(`download ${name}`);
+    const res = await fetchFn(LOD2_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
     if (!res.ok || !res.body) throw new Error(`LoD2 ${name}: HTTP ${res.status}`);
-    const tmp = `${path}.part`;
-    try {
-      await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmp));
-      await rename(tmp, path);
-    } catch (err) {
-      await rm(tmp, { force: true });
-      throw err;
-    }
+    await streamToFile(res.body, path);
   }
   return paths;
 }
 
 /** Downloads DGM1 GeoTIFF tiles into `dir`, skipping existing files. Returns file paths. */
-export async function fetchDgmTiles(dir: string): Promise<string[]> {
+export async function fetchDgmTiles(dir: string, o: FetchOptions = {}): Promise<string[]> {
+  const { fetchFn = fetch, log = console.log } = o;
   await mkdir(dir, { recursive: true });
   const paths: string[] = [];
   for (const name of DGM_TILES) {
     const path = join(dir, name);
     paths.push(path);
     if (await exists(path)) {
-      console.log(`skip ${name} (cached)`);
+      log(`skip ${name} (cached)`);
       continue;
     }
-    console.log(`download ${name}`);
-    const res = await fetch(DGM_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
+    log(`download ${name}`);
+    const res = await fetchFn(DGM_BASE + name, { headers: { 'User-Agent': USER_AGENT } });
     if (res.status === 404) throw new Error(`DGM1 ${name}: HTTP 404. DGM_VINTAGE ('${DGM_VINTAGE}') in fetch.ts may be outdated, the NRW vintage may have changed (check the directory listing at ${DGM_BASE}).`);
     if (!res.ok || !res.body) throw new Error(`DGM1 ${name}: HTTP ${res.status}`);
-    const tmp = `${path}.part`;
-    try {
-      await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tmp));
-      await rename(tmp, path);
-    } catch (err) {
-      await rm(tmp, { force: true });
-      throw err;
-    }
+    await streamToFile(res.body, path);
   }
   return paths;
 }
@@ -151,22 +156,22 @@ out geom;`;
  * overload answers (429/5xx) and broken JSON move on to the next instance in OVERPASS_URLS after a pause; other HTTP
  * errors (e.g. 400, a broken query) fail at once.
  */
-export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number; file?: string; query?: string } = {}): Promise<string> {
-  const { urls = OVERPASS_URLS, attempts = OVERPASS_ATTEMPTS, retryMs = OVERPASS_RETRY_MS, file = 'osm.json', query = OVERPASS_QUERY } = o;
+export async function fetchOsm(dir: string, o: FetchOptions & { urls?: readonly string[]; attempts?: number; retryMs?: number; file?: string; query?: string } = {}): Promise<string> {
+  const { urls = OVERPASS_URLS, attempts = OVERPASS_ATTEMPTS, retryMs = OVERPASS_RETRY_MS, file = 'osm.json', query = OVERPASS_QUERY, fetchFn = fetch, log = console.log } = o;
   await mkdir(dir, { recursive: true });
   const path = join(dir, file);
   if (await exists(path)) {
-    console.log(`skip ${file} (cached)`);
+    log(`skip ${file} (cached)`);
     return path;
   }
   const failures: string[] = [];
   for (let attempt = 0; attempt < attempts; attempt++) {
     const url = urls[attempt % urls.length]!;
     if (attempt > 0) await sleep(retryMs);
-    console.log(`overpass ${url} (attempt ${attempt + 1}/${attempts})`);
+    log(`overpass ${url} (attempt ${attempt + 1}/${attempts})`);
     let why: string;
     try {
-      const res = await fetch(url, {
+      const res = await fetchFn(url, {
         method: 'POST',
         headers: { 'User-Agent': USER_AGENT, 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ data: query }),
@@ -186,7 +191,7 @@ export async function fetchOsm(dir: string, o: { urls?: readonly string[]; attem
       if (err instanceof Error && err.message.startsWith('Overpass ')) throw err;
       why = err instanceof Error ? `${err.name}: ${err.message}${err.cause instanceof Error ? ` (${err.cause.message || err.cause.name})` : ''}` : String(err);
     }
-    console.log(`overpass ${url}: ${why}`);
+    log(`overpass ${url}: ${why}`);
     failures.push(`${url}: ${why}`);
   }
   throw new Error(`Overpass: all ${attempts} attempts failed:\n  ${failures.join('\n  ')}`);
@@ -199,5 +204,17 @@ relation["type"="route"]["route"~"^(tram|light_rail|subway)$"](${OSM_BBOX});
 out body;`;
 
 /** Fetches the line relations into `dir` (as fetchOsm does osm.json), skipping an existing file. */
-export const fetchTransitRoutes = (dir: string, o: { urls?: readonly string[]; attempts?: number; retryMs?: number } = {}): Promise<string> =>
+export const fetchTransitRoutes = (dir: string, o: FetchOptions & { urls?: readonly string[]; attempts?: number; retryMs?: number } = {}): Promise<string> =>
   fetchOsm(dir, { ...o, file: TRANSIT_ROUTES_FILE, query: TRANSIT_ROUTES_QUERY });
+
+/** Downloads VRS's GTFS feed (GTFS_URL, ~100 MB, streamed) into `dir/<file>`; returns the path. Never cached: always fetched. */
+export async function fetchGtfs(dir: string, file: string, o: FetchOptions = {}): Promise<string> {
+  const { fetchFn = fetch, log = console.log } = o;
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, file);
+  log(`download ${GTFS_URL}`);
+  const res = await fetchFn(GTFS_URL, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok || !res.body) throw new Error(`GTFS ${GTFS_URL}: HTTP ${res.status}`);
+  await streamToFile(res.body, path);
+  return path;
+}

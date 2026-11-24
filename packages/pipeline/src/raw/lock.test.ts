@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from '../fetch';
-import { parseRawLock, rawKey, readRawLock, type RawLock } from './lock';
+import { GTFS_ZIP, parseRawLock, rawKey, readRawLock, requireTimetable, type RawLock } from './lock';
 
 const HASH = '0123456789abcdef0123456789abcdef';
 const valid = (): RawLock => ({ version: 1, mirror: 'https://cdn.example.org/', files: { 'osm.json': { hash: HASH, bytes: 3 } } });
@@ -64,4 +64,12 @@ describe('readRawLock', () => {
     await writeFile(path, JSON.stringify({ version: 1, mirror: null, files: noLod2 }));
     await expect(readRawLock(path)).rejects.toThrow(/npm run raw:update/);
   });
+});
+
+it('requireTimetable gives the pinned feed and sample days, and names `raw:update -- gtfs` when either is missing', () => {
+  const days: [number, number, number] = [20261201, 20261128, 20261129];
+  const withZip = { ...valid(), files: { ...valid().files, [GTFS_ZIP]: { hash: HASH, bytes: 9 } } };
+  expect(requireTimetable({ ...withZip, gtfsDays: days })).toEqual({ hash: HASH, days });
+  expect(() => requireTimetable(withZip)).toThrow(/gtfsDays.*npm run raw:update -- gtfs/);
+  expect(() => requireTimetable({ ...valid(), gtfsDays: days })).toThrow(/gtfs\.zip.*npm run raw:update -- gtfs/);
 });
