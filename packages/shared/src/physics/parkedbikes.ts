@@ -4,10 +4,16 @@ import { heightAt, type TerrainGrid } from '../assets/terrain';
 import { RiddenBike, bikeColliderRadius } from './bike';
 import { BIKE_SPECS, BIKE_TYPES, type BikeType } from './biketypes';
 import { TUNING } from './tuning';
-import { BIKE_GROUPS, PROP_GROUPS, staticWorldFilter, type PhysicsWorld } from './world';
+import { BIKE_GROUPS, CAR_GROUPS, PROP_GROUPS, staticWorldFilter, type PhysicsWorld } from './world';
 
-/** Ground under the wheels (y) and heading (forward = (sin h, cos h)). */
-export type BikePose = { x: number; y: number; z: number; heading: number };
+/**
+ * Ground under the wheels (y) and heading (forward = (sin h, cos h)). fall: lying on its left side (1, rider's left),
+ * its right side (−1) or standing (0, also when missing).
+ */
+export type BikePose = { x: number; y: number; z: number; heading: number; fall?: number };
+
+/** The fall of a pose: 1 (lying on its left side), −1 (right side) or 0 (standing). */
+export const fallOf = (p: BikePose): -1 | 0 | 1 => (p.fall === undefined || p.fall === 0 ? 0 : p.fall > 0 ? 1 : -1);
 
 const T = TUNING.bike;
 /** Parked bike box: half height; it rests on the ground. */
@@ -19,6 +25,23 @@ const LINEAR_DAMPING = 0.4;
 const SLIM_HALF_X = 0.15;
 const CARGO: ReadonlySet<BikeType> = new Set(['longjohn', 'trike', 'soundjohn']);
 const ANGULAR_DAMPING = 3;
+/**
+ * A lying bike's box: flat (half height LIE_HALF_Y) and beside the line between its wheels, on the side it lies on
+ * (centre LIE_HALF_X out). It collides with the static city only (LYING_BIKE_GROUPS): no car body bulldozes it, no
+ * bike, person or rack is shoved by it, the wheel rays still roll over it.
+ */
+const LIE_HALF_X = 0.45;
+const LIE_HALF_Y = 0.15;
+/** A bike on its side scrapes over the ground: it stops after a short slide. */
+const LIE_FRICTION = 0.8;
+const LIE_LINEAR_DAMPING = 2;
+/** Bikes (bit 4) that only collide with the static city (bit 0): see LIE_HALF_X. */
+export const LYING_BIKE_GROUPS = 0x0010_0001;
+/** What knocks a standing bike over (membership bits): a car's chassis or a bike (ridden, or a parked one shoved into it). */
+const KNOCKERS = (CAR_GROUPS >>> 16) | (BIKE_GROUPS >>> 16);
+/** A standing bike a car or bike shoves along faster than SHOVE_SPEED (m/s) for parkedShoveSeconds falls over too. */
+const SHOVE_SPEED = 0.3;
+const SHOVE_TICKS = Math.round(T.parkedShoveSeconds / TUNING.world.dt);
 
 const yawQuat = (h: number) => ({ x: 0, y: Math.sin(h / 2), z: 0, w: Math.cos(h / 2) });
 const yawOf = (q: { x: number; y: number; z: number; w: number }) => 2 * Math.atan2(q.y, q.w);
@@ -27,17 +50,18 @@ const MOVED_DIST = 0.05;
 const MOVED_ANGLE = (2 * Math.PI) / 180;
 
 /**
- * Unridden bikes (approach B of the bike design): dynamic boxes that can only turn about the vertical axis, so a car
- * shoves them but never knocks them over. Bodies exist only near the player (parkedPhysicsNear/Far, like parked cars);
- * the others keep their pose. mount() swaps a bike's body for a kinematic RiddenBike, dismount() back. Any number of
- * bikes can be ridden at once, each by one rider.
+ * Unridden bikes (approach B of the bike design): dynamic boxes that can only turn about the vertical axis, so the
+ * solver never tips them. Falling over is a state instead (BikePose.fall): a standing bike that a car or another bike
+ * hits hard (its speed jumps by at least parkedFallDv in one step, see sync) falls to the side it was pushed to; its
+ * box becomes a flat one beside it (LIE_HALF_X) and the client rolls the model over. Getting on picks it up; ridden
+ * bikes never fall this way. Bodies exist only near the player (parkedPhysicsNear/Far, like parked cars); the others
+ * keep their pose. mount() swaps a bike's body for a kinematic RiddenBike, dismount() back. Any number of bikes can be
+ * ridden at once, each by one rider.
  */
 export class ParkedBikes {
   readonly poses: BikePose[];
   readonly types: BikeType[];
   readonly colors: number[];
-  /** Knocked over in the manifest (e-scooters lying on their side); see lying(). */
-  readonly down: boolean[];
   /** Who rides each bike (a player id), null while it is free. */
   readonly rider: (number | null)[];
   /** Manifest pose of every bike (where the idle reset puts it back). */
@@ -45,14 +69,27 @@ export class ParkedBikes {
   private readonly bodies = new Map<number, RAPIER.RigidBody>();
   /** Bikes placed kinematically on a streamed pose (client prediction, see follow). */
   private readonly followed = new Set<number>();
+  /** Horizontal velocity (x, z) and yaw rate of every awake body after the last sync: a hit is a jump from there. */
+  private readonly lastVel = new Map<number, [number, number, number]>();
+  /** Consecutive steps a car or bike has been shoving each standing bike along. */
+  private readonly shoved = new Map<number, number>();
+  /** Bikes that fell over since the last takeFallen(). */
+  private fallenNow: number[] = [];
+  /**
+   * Whether sync() knocks bikes over (the server and offline play). The client's prediction leaves that to the server:
+   * the fall arrives with the streamed or resting pose.
+   */
+  decideFalls = true;
 
   constructor(private readonly pw: PhysicsWorld, bikes: WorldManifest['bikes'], private readonly terrain?: TerrainGrid) {
     // on the static surface (sidewalks lie 0.12 m above the terrain), else the terrain
-    this.home = bikes.map((b) => ({ x: b.x, y: surfaceBelow(pw, b.x, b.z, this.ground(b.x, b.z) + 1.5) ?? this.ground(b.x, b.z), z: b.z, heading: b.heading }));
+    // (knocked over in the manifest: e-scooters lying on their left side)
+    this.home = bikes.map((b) => ({
+      x: b.x, y: surfaceBelow(pw, b.x, b.z, this.ground(b.x, b.z) + 1.5) ?? this.ground(b.x, b.z), z: b.z, heading: b.heading, fall: b.down ? 1 : 0,
+    }));
     this.poses = this.home.map((p) => ({ ...p }));
     this.types = bikes.map((b) => BIKE_TYPES[b.type]!);
     this.colors = bikes.map((b) => b.color);
-    this.down = bikes.map((b) => b.down === true);
     this.rider = bikes.map(() => null);
   }
 
@@ -88,8 +125,7 @@ export class ParkedBikes {
     for (const [id, b] of this.bodies) {
       if (!this.followed.has(id) && dist(this.poses[id]!) > T.parkedPhysicsFar) {
         this.read(id, b);
-        this.pw.world.removeRigidBody(b);
-        this.bodies.delete(id);
+        this.removeBody(id, b);
       }
     }
     this.poses.forEach((p, id) => {
@@ -97,9 +133,76 @@ export class ParkedBikes {
     });
   }
 
-  /** Reads the poses of all bikes with an awake body. */
+  /**
+   * Reads the poses of all bikes with an awake body. With decideFalls, a standing one falls over when a car or bike
+   * hits it hard (its speed jumps by parkedFallDv in this step) or keeps shoving it (for parkedShoveSeconds).
+   */
   sync(): void {
-    for (const [id, b] of this.bodies) if (!b.isSleeping() && !this.followed.has(id)) this.read(id, b);
+    for (const [id, b] of this.bodies) {
+      if (this.followed.has(id)) continue;
+      if (b.isSleeping()) {
+        this.lastVel.delete(id);
+        this.shoved.delete(id);
+        continue;
+      }
+      this.read(id, b);
+      const v = b.linvel(), w = b.angvel().y;
+      const last = this.lastVel.get(id) ?? [0, 0, 0];
+      this.lastVel.set(id, [v.x, v.z, w]);
+      if (!this.decideFalls || fallOf(this.poses[id]!) !== 0) continue;
+      // the jump in speed this step, of the centre and of the bike's ends (a hit at the front wheel spins it)
+      const dx = v.x - last[0], dz = v.z - last[1];
+      const ends = Math.abs(w - last[2]) * (BIKE_SPECS[this.types[id]!].wheelbase / 2 + 0.3);
+      const hit = Math.max(Math.hypot(dx, dz), ends) >= T.parkedFallDv;
+      if ((!hit && Math.hypot(v.x, v.z) < SHOVE_SPEED) || !this.touchesKnocker(b)) {
+        this.shoved.delete(id);
+        continue;
+      }
+      const n = (this.shoved.get(id) ?? 0) + 1;
+      this.shoved.set(id, n);
+      if (!hit && n < SHOVE_TICKS) continue;
+      // pushed to its left (cos h, −sin h) or right; straight along it (front or back): the left, where it leans
+      const [px, pz] = hit ? [dx, dz] : [v.x, v.z];
+      const h = this.poses[id]!.heading;
+      this.setFall(id, px * Math.cos(h) - pz * Math.sin(h) >= 0 ? 1 : -1);
+      this.shoved.delete(id);
+      this.fallenNow.push(id);
+    }
+  }
+
+  /** Ids of the bikes that fell over since the last call, ascending. */
+  takeFallen(): number[] {
+    const out = this.fallenNow.sort((a, b) => a - b);
+    this.fallenNow = [];
+    return out;
+  }
+
+  /** Whether a car or a bike touches the body of a parked bike. */
+  private touchesKnocker(b: RAPIER.RigidBody): boolean {
+    const w = this.pw.world, mine = b.collider(0), near: RAPIER.Collider[] = [];
+    // (pairs exist for overlapping bounding boxes, and for groups that do not collide: only real contact points count.
+    // Collected first: a query inside the pair callback would be a recursive use of the world.)
+    w.contactPairsWith(mine, (c) => { if (((c.collisionGroups() >>> 16) & KNOCKERS) !== 0) near.push(c); });
+    let hit = false;
+    for (const c of near) w.contactPair(mine, c, (m) => { if (m.numContacts() > 0) hit = true; });
+    return hit;
+  }
+
+  /** Bike `id` stands (0) or lies on its left (1) or right (−1) side; a body it has gets the matching box. */
+  private setFall(id: number, fall: -1 | 0 | 1): void {
+    const p = this.poses[id]!;
+    if (fallOf(p) === fall) return;
+    p.fall = fall;
+    const b = this.bodies.get(id);
+    if (!b) return;
+    this.pw.world.removeCollider(b.collider(0), false);
+    this.pw.world.createCollider(this.collider(id), b);
+    b.setLinearDamping(fall !== 0 ? LIE_LINEAR_DAMPING : LINEAR_DAMPING);
+  }
+
+  /** The side unridden bike `id` lies on (1 left, −1 right; knocked over, or so in the manifest), 0 standing or ridden. */
+  fallSide(id: number): -1 | 0 | 1 {
+    return this.rider[id] === null ? fallOf(this.poses[id]!) : 0;
   }
 
   /** Ids of the bikes with an awake dynamic body (pushed, rolling), ascending. */
@@ -141,23 +244,23 @@ export class ParkedBikes {
     const p = this.poses[id]!;
     // (a vertical ray exactly on a heightfield cell edge can miss it: fall back to the terrain height)
     const y = this.surface(p.x, p.z, p.y + 0.6) ?? (this.terrain ? heightAt(this.terrain, p.x, p.z) : p.y);
-    if (b) {
-      this.pw.world.removeRigidBody(b);
-      this.bodies.delete(id);
-    }
+    if (b) this.removeBody(id, b);
     this.followed.delete(id);
     this.rider[id] = who;
-    return new RiddenBike(this.pw, this.types[id]!, { ...p, y });
+    p.fall = 0; // getting on picks a lying bike up
+    return new RiddenBike(this.pw, this.types[id]!, { x: p.x, y, z: p.z, heading: p.heading });
   }
 
   /** Disposes the ridden bike and puts a dynamic body in its place, moving at its speed (it rolls out). */
   dismount(id: number, bike: RiddenBike): void {
     const s = bike.state();
     bike.dispose();
-    this.poses[id] = { x: s.x, y: s.y, z: s.z, heading: s.heading };
+    this.poses[id] = { x: s.x, y: s.y, z: s.z, heading: s.heading, fall: 0 };
     this.rider[id] = null;
     const b = this.create(id);
-    b.setLinvel({ x: Math.sin(s.heading) * s.speed, y: 0, z: Math.cos(s.heading) * s.speed }, true);
+    const v = { x: Math.sin(s.heading) * s.speed, y: 0, z: Math.cos(s.heading) * s.speed };
+    b.setLinvel(v, true);
+    this.lastVel.set(id, [v.x, v.z, 0]); // rolling out is no hit
   }
 
   /**
@@ -165,6 +268,7 @@ export class ParkedBikes {
    * because it rolls). It moves there in the next step and shoves the own figure, car or bike; it is never pushed itself.
    */
   follow(id: number, pose: BikePose): void {
+    this.setFall(id, fallOf(pose));
     this.poses[id] = { ...pose };
     let b = this.bodies.get(id);
     if (!b) b = this.create(id);
@@ -197,7 +301,10 @@ export class ParkedBikes {
 
   /** Bike `id` on `pose`, its body (if any) there at rest and asleep. */
   private rest(id: number, pose: BikePose): void {
+    this.setFall(id, fallOf(pose));
     this.poses[id] = { ...pose };
+    this.lastVel.delete(id);
+    this.shoved.delete(id);
     const b = this.bodies.get(id);
     if (!b) return;
     b.setTranslation({ x: pose.x, y: pose.y + BOX_HALF_Y + 0.005, z: pose.z }, false);
@@ -217,17 +324,13 @@ export class ParkedBikes {
     return this.followed;
   }
 
-  /** Whether bike `id` stands more than 5 cm or 2° away from its manifest spot. */
+  /** Whether bike `id` stands more than 5 cm or 2° away from its manifest spot, or fell over (or got up) since. */
   isMoved(id: number): boolean {
     const p = this.poses[id]!, h = this.home[id]!;
+    if (fallOf(p) !== fallOf(h)) return true;
     if (Math.hypot(p.x - h.x, p.y - h.y, p.z - h.z) > MOVED_DIST) return true;
     const d = p.heading - h.heading;
     return Math.abs(Math.atan2(Math.sin(d), Math.cos(d))) > MOVED_ANGLE;
-  }
-
-  /** Whether bike `id` is shown lying on its side: knocked over in the manifest, unridden and not moved since. */
-  lying(id: number): boolean {
-    return this.down[id]! && this.rider[id] === null && !this.isMoved(id);
   }
 
   /** Puts unridden bike `id` back on its manifest spot (a resting body there if it had one). No-op while ridden or followed. */
@@ -236,8 +339,7 @@ export class ParkedBikes {
     this.poses[id] = { ...this.home[id]! };
     const b = this.bodies.get(id);
     if (!b) return;
-    this.pw.world.removeRigidBody(b);
-    this.bodies.delete(id);
+    this.removeBody(id, b);
     this.create(id);
   }
 
@@ -282,32 +384,48 @@ export class ParkedBikes {
     return this.terrain ? heightAt(this.terrain, x, z) : 0;
   }
 
+  private removeBody(id: number, b: RAPIER.RigidBody): void {
+    this.pw.world.removeRigidBody(b);
+    this.bodies.delete(id);
+    this.lastVel.delete(id);
+    this.shoved.delete(id);
+  }
+
+  /** The box of bike `id` (relative to its body), standing or lying as its pose. */
+  private collider(id: number): RAPIER.ColliderDesc {
+    const R = this.pw.rapier, spec = BIKE_SPECS[this.types[id]!], fall = fallOf(this.poses[id]!);
+    const hz = spec.wheelbase / 2 + 0.3;
+    if (fall !== 0) {
+      // on the ground beside the wheels, on the side it lies on (local +x is the bike's left)
+      return R.ColliderDesc.cuboid(LIE_HALF_X, LIE_HALF_Y, hz).setTranslation(fall * LIE_HALF_X, LIE_HALF_Y - BOX_HALF_Y, 0)
+        .setMass(spec.massParked).setFriction(LIE_FRICTION).setCollisionGroups(LYING_BIKE_GROUPS);
+    }
+    return R.ColliderDesc.cuboid(CARGO.has(this.types[id]!) ? bikeColliderRadius(spec) : SLIM_HALF_X, BOX_HALF_Y, hz)
+      .setMass(spec.massParked)
+      .setFriction(FRICTION)
+      .setCollisionGroups(BIKE_GROUPS);
+  }
+
   private create(id: number): RAPIER.RigidBody {
     const { rapier: R, world } = this.pw;
-    const p = this.poses[id]!, spec = BIKE_SPECS[this.types[id]!];
+    const p = this.poses[id]!;
     const b = world.createRigidBody(
       R.RigidBodyDesc.dynamic()
         .setTranslation(p.x, p.y + BOX_HALF_Y + 0.005, p.z)
         .setRotation(yawQuat(p.heading))
         .enabledRotations(false, true, false)
-        .setLinearDamping(LINEAR_DAMPING)
+        .setLinearDamping(fallOf(p) !== 0 ? LIE_LINEAR_DAMPING : LINEAR_DAMPING)
         .setAngularDamping(ANGULAR_DAMPING)
         .setCanSleep(true),
     );
-    world.createCollider(
-      R.ColliderDesc.cuboid(CARGO.has(this.types[id]!) ? bikeColliderRadius(spec) : SLIM_HALF_X, BOX_HALF_Y, spec.wheelbase / 2 + 0.3)
-        .setMass(spec.massParked)
-        .setFriction(FRICTION)
-        .setCollisionGroups(BIKE_GROUPS),
-      b,
-    );
+    world.createCollider(this.collider(id), b);
     this.bodies.set(id, b);
     return b;
   }
 
   private read(id: number, b: RAPIER.RigidBody): void {
     const t = b.translation();
-    this.poses[id] = { x: t.x, y: t.y - BOX_HALF_Y, z: t.z, heading: yawOf(b.rotation()) };
+    this.poses[id] = { x: t.x, y: t.y - BOX_HALF_Y, z: t.z, heading: yawOf(b.rotation()), fall: fallOf(this.poses[id]!) };
   }
 }
 

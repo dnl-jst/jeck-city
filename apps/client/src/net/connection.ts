@@ -31,7 +31,7 @@ type StatePose = { x: number; y: number; z: number; qx: number; qy: number; qz: 
 export type NetState = {
   players: StateMap<{ slot: number; name: string; mode: number; carId: number; /** Seat in carId (0 driving), −1 otherwise. */ seat?: number; bikeId: number; variant: number; mapX?: number; mapZ?: number }>;
   cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
-  bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number }>;
+  bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number; fall?: number }>;
   lamps: StateMap<StatePose>;
   weather: Weather;
 };

@@ -102,7 +102,7 @@ type Headed = { x: number; y: number; z: number; heading: number };
 
 /** Unridden moving bikes: position linear, heading the short way round; past the newest snapshot they stay. */
 export const bikeOps = <T extends Headed>(): InterpOps<T> => ({
-  lerp: (a, b, t) => ({ ...a, x: mix(a.x, b.x, t), y: mix(a.y, b.y, t), z: mix(a.z, b.z, t), heading: mixAngle(a.heading, b.heading, t) }),
+  lerp: (a, b, t) => ({ ...(t < 0.5 ? a : b), x: mix(a.x, b.x, t), y: mix(a.y, b.y, t), z: mix(a.z, b.z, t), heading: mixAngle(a.heading, b.heading, t) }),
   extrapolate: (a) => a,
 });
 

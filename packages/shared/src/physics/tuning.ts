@@ -189,5 +189,12 @@ export const TUNING = {
     /** Parked bikes get a physics body within near (m) of the player, lose it beyond far. */
     parkedPhysicsNear: 60,
     parkedPhysicsFar: 80,
+    /**
+     * A standing parked bike falls over when a car or a bike changes its speed by this much (m/s) in one step (rolling
+     * into it at about 5 km/h or faster), or keeps shoving it along for this long (s). A person on foot never knocks
+     * one over.
+     */
+    parkedFallDv: 1.2,
+    parkedShoveSeconds: 0.6,
   },
 } as const;

@@ -4,7 +4,7 @@ import {
   type Snapshot, type SnapshotBike, type SnapshotCar, type SnapshotLamp, type SnapshotRider, type SnapshotWalker, type StationId,
   type Weather, type WorldSim,
 } from '@nn/shared';
-import { carriedTo } from '@nn/shared';
+import { carriedTo, fallOf } from '@nn/shared';
 
 /** The trains' clock (see transitLead): taken over at once when more than LEAD_SNAP ticks off, else after LEAD_SETTLE snapshots in a row that differ. */
 const LEAD_SNAP = 6, LEAD_SETTLE = 40;
@@ -78,8 +78,8 @@ const qmul = (a: Quat, b: Quat): Quat => ({
 const qconj = (q: Quat): Quat => ({ x: -q.x, y: -q.y, z: -q.z, w: q.w });
 const poseOf = (p: CarPose | PropPose): CarPose => ({ x: p.x, y: p.y, z: p.z, qx: p.qx, qy: p.qy, qz: p.qz, qw: p.qw });
 const carKey = (p: CarPose): string => `${p.x},${p.y},${p.z},${p.qx},${p.qy},${p.qz},${p.qw}`;
-const bikeKey = (p: BikePose): string => `${p.x},${p.y},${p.z},${p.heading}`;
-const bikePoseOf = (p: BikePose): BikePose => ({ x: p.x, y: p.y, z: p.z, heading: p.heading });
+const bikeKey = (p: BikePose): string => `${p.x},${p.y},${p.z},${p.heading},${fallOf(p)}`;
+const bikePoseOf = (p: BikePose): BikePose => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, fall: fallOf(p) });
 const sameVehicle = (a: Vehicle, b: Vehicle): boolean => a.car === b.car && a.bike === b.bike && a.pass === b.pass;
 const passOf = (key: string): { car: number; seat: number } => { const [car, seat] = key.split(':').map(Number); return { car: car!, seat: seat! }; };
 
@@ -162,6 +162,8 @@ export class OnlineSession implements Session {
 
   constructor(readonly sim: WorldSim, private readonly link: NetLink, opts: { now?: () => number } = {}) {
     this.me = link.welcome.slot;
+    // bikes fall over on the server; the fall arrives with their streamed or resting pose
+    sim.bikes.decideFalls = false;
     this.now = opts.now ?? (() => performance.now());
     // the trains run by the server's clock
     if (typeof link.welcome.transitEpoch === 'number') sim.setTransitEpoch(link.welcome.transitEpoch);

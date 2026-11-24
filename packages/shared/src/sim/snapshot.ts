@@ -2,6 +2,7 @@ import type {
   Snapshot, SnapshotBike, SnapshotCar, SnapshotEvent, SnapshotLamp, SnapshotOwn, SnapshotRider, SnapshotWalker, WalkerState,
 } from '../net/codec';
 import { INTEREST_RADIUS } from '../net/constants';
+import { fallOf } from '../physics/parkedbikes';
 import type { Interest, InterestEntity } from '../net/interest';
 import type { PlayerId } from './cars';
 import type { SimEvent, WorldSim } from './world-sim';
@@ -58,7 +59,7 @@ export function snapshotRound(sim: WorldSim, events: SimEvent[], slotOf: (id: Pl
   for (const i of sim.bikes.awake()) {
     if (!sim.bikes.isMoved(i)) continue;
     const p = sim.bikes.poses[i]!;
-    bikes.push({ key: `b${i}`, x: p.x, z: p.z, v: { id: i, x: p.x, y: p.y, z: p.z, heading: p.heading } });
+    bikes.push({ key: `b${i}`, x: p.x, z: p.z, v: { id: i, x: p.x, y: p.y, z: p.z, heading: p.heading, fall: fallOf(p) } });
   }
 
   const cars: SnapshotRound['cars'] = [];
