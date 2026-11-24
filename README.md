@@ -36,7 +36,8 @@ Das Build-Argument `WORLD_FILES` bestimmt, wie viel Welt ins Image kommt:
 - `full` (Standard): die ganze Welt; der Server liefert sie selbst unter `/world/` aus.
 - `server`: nur die Dateien, die der Server lädt (`index.json`, `manifest.json`, `collision.bin`, `terrain.bin`,
   `transit-collision.bin`). Die Browser laden die Welt dann aus dem Objektspeicher (`WORLD_URL`, siehe
-  „Welt im Objektspeicher“). Deutlich kleineres Image; ohne `WORLD_URL` ist das Spiel damit nicht spielbar.
+  „Welt im Objektspeicher“). Deutlich kleineres Image; ohne `WORLD_URL` startet es nicht (der Server meldet, dass
+  Weltdateien aus `index.json` fehlen).
 
 ```
 docker build -f apps/server/Dockerfile --build-arg WORLD_FILES=server -t nippes-nights .
@@ -73,9 +74,11 @@ Logs enthalten keine Klartext-IP, sondern einen gesalzenen SHA-256-Präfix.
 
 ### Welt im Objektspeicher
 
-Die Welt (über 1 GB) muss nicht im Image liegen: Die GitHub Action lädt sie vor dem Image-Bau in einen
-S3-kompatiblen Bucket (Hetzner Object Storage), das Image enthält nur die Server-Dateien (`WORLD_FILES=server`), und
-mit `WORLD_URL` laden die Browser die Welt direkt aus dem Bucket. Die Objekte heißen nach dem Hash ihres Inhalts
+Die Welt (über 1 GB) muss nicht im Image liegen: Sie liegt in einem S3-kompatiblen Bucket (Hetzner Object Storage),
+das Image enthält nur die Server-Dateien (`WORLD_FILES=server`), und mit `WORLD_URL` laden die Browser die Welt direkt
+aus dem Bucket. Die GitHub Action tut das nur, wenn die Repository-Variable `WORLD_URL` gesetzt ist: Dann lädt sie die
+Welt vor dem Image-Bau in den Bucket und baut das schlanke Image. Ohne die Variable baut sie wie bisher das Image mit
+der ganzen Welt (`WORLD_FILES=full`) und veröffentlicht nichts. Die Objekte heißen nach dem Hash ihres Inhalts
 (`objects/<hh>/<hash>.<ext>`) und werden nie überschrieben; unveränderte Dateien lädt der Browser also aus seinem Cache,
 und ein neues Veröffentlichen lädt nur geänderte Dateien hoch. `worlds/<welt-hash>.json` wird zuletzt geschrieben.
 
@@ -88,9 +91,8 @@ Einrichten:
    aws s3api put-bucket-cors --bucket <bucket> --cors-configuration file://deploy/object-storage-cors.json --endpoint-url <S3_ENDPOINT>
    ```
    **Stand:** Beim Hetzner-Bucket `jeck-city` wurde das Setzen mit `AccessDenied` abgelehnt (Schlüssel des Projekts) –
-   noch offen. Solange die Regel fehlt, können Browser die Welt nicht aus dem Bucket laden: `WORLD_URL` in Produktion
-   **nicht** setzen und ein selbst gebautes Image mit `WORLD_FILES=full` betreiben – das Image der GitHub Action ist
-   `WORLD_FILES=server` und braucht `WORLD_URL`.
+   noch offen. Solange die Regel fehlt, können Browser die Welt nicht aus dem Bucket laden: `WORLD_URL` weder in
+   Produktion noch als Repository-Variable setzen; die Action baut dann das volle Image.
 3. Zugangsdaten zum Veröffentlichen: lokal in `.env` im Repository-Wurzelverzeichnis (nicht im Repository), in der
    GitHub Action als Secrets gleichen Namens; die öffentliche Adresse als Repository-Variable `WORLD_URL`:
    ```
@@ -101,7 +103,7 @@ Einrichten:
    S3_SECRET_ACCESS_KEY=…
    ```
 
-Veröffentlichen (die Action tut das bei jedem Lauf vor dem Image-Bau):
+Veröffentlichen (die Action tut das bei gesetzter Repository-Variable `WORLD_URL` vor dem Image-Bau):
 
 ```
 npm run pipeline         # oder eine vorhandene Welt

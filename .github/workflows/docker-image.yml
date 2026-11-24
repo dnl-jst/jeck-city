@@ -1,5 +1,5 @@
-# Publishes the world to object storage, then builds the production image (game server + built client + only the world
-# files the server loads, one port) and pushes it to GitHub Container Registry: ghcr.io/<owner>/nippes-nights. Deploy
+# Builds the production image (game server + built client + world, one port; with the repository variable WORLD_URL
+# the world is published to object storage first and the image carries only the server's world files) and pushes it to GitHub Container Registry: ghcr.io/<owner>/nippes-nights. Deploy
 # it behind a TLS reverse proxy (see deploy/Caddyfile.example, README "Mehrspieler betreiben").
 #
 # Runs automatically only for tags `v*`; main (and any other branch) is built by starting the workflow manually
@@ -75,9 +75,17 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-      # Upload the world to object storage (content-addressed objects, never overwritten; worlds/<hash>.json last). The
-      # image only carries the files the server loads; browsers load the world from the bucket (vars.WORLD_URL).
+      # Image variant. With the repository variable WORLD_URL set, the world is published to object storage and the
+      # image carries only the files the server loads (WORLD_FILES=server); browsers load the world from the bucket.
+      # Without it the image carries the whole world (WORLD_FILES=full) and nothing is published. WORLD_URL may only
+      # be set once the bucket has its CORS rule (deploy/object-storage-cors.json): without it browsers cannot load
+      # the world from there.
+      - id: variant
+        run: echo "world_files=${{ vars.WORLD_URL != '' && 'server' || 'full' }}" >> "$GITHUB_OUTPUT"
+
+      # Upload the world (content-addressed objects, never overwritten; worlds/<hash>.json last).
       - name: Publish the world to object storage
+        if: steps.variant.outputs.world_files == 'server'
         run: npm run world:publish
         env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
@@ -86,8 +94,7 @@ jobs:
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
 
-      # the Dockerfile copies .precompress-cache/ (compressed variants of earlier builds); empty here: the slim image
-      # compresses only a few MB
+      # the Dockerfile copies .precompress-cache/ (compressed variants of earlier builds); empty here
       - run: mkdir -p .precompress-cache
 
       - uses: docker/setup-buildx-action@v4
@@ -118,24 +125,35 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: nippes-nights:ci
-          build-args: WORLD_FILES=server
+          build-args: WORLD_FILES=${{ steps.variant.outputs.world_files }}
           # the image layers (npm ci, client build + precompression) are cached between runs
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       # Without players the restart countdown is skipped, so `docker stop -t 10` still shuts down cleanly.
-      - name: Smoke test (healthcheck, page, world, world in the bucket, clean shutdown)
+      - name: Smoke test (healthcheck, page, world, with WORLD_URL the world in the bucket, clean shutdown)
+        env:
+          WORLD_FILES: ${{ steps.variant.outputs.world_files }}
+          WORLD_URL: ${{ vars.WORLD_URL }}
         run: |
-          docker run -d --name nn -p 127.0.0.1:2567:2567 -e WORLD_URL=${{ vars.WORLD_URL }} nippes-nights:ci
+          if [ "$WORLD_FILES" = server ]; then
+            docker run -d --name nn -p 127.0.0.1:2567:2567 -e WORLD_URL="$WORLD_URL" nippes-nights:ci
+          else
+            docker run -d --name nn -p 127.0.0.1:2567:2567 nippes-nights:ci
+          fi
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:2567/healthz && break; sleep 2; done
           curl -fsS http://127.0.0.1:2567/healthz | grep -q '"players":0'
           curl -fsS -o /dev/null http://127.0.0.1:2567/
           curl -fsS -o /dev/null -H 'Accept-Encoding: br' http://127.0.0.1:2567/world/manifest.json
           curl -fsS -o /dev/null http://127.0.0.1:2567/world/index.json
-          curl -fsS http://127.0.0.1:2567/config.json | grep -q worldUrl
-          # the server checks in the background that the bucket holds this world
-          for i in $(seq 1 10); do curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true' && break; sleep 1; done
-          curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true'
+          if [ "$WORLD_FILES" = server ]; then
+            curl -fsS http://127.0.0.1:2567/config.json | grep -q worldUrl
+            # the server checks in the background that the bucket holds this world
+            for i in $(seq 1 10); do curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true' && break; sleep 1; done
+            curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true'
+          else
+            curl -fsS http://127.0.0.1:2567/config.json | grep -q '"worldUrl":null'
+          fi
           time docker stop -t 10 nn
           docker logs nn | tail -20
 
@@ -148,5 +166,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: WORLD_FILES=server
+          build-args: WORLD_FILES=${{ steps.variant.outputs.world_files }}
           cache-from: type=gha

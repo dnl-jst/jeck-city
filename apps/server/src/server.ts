@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { defineRoom, defineServer, matchMaker, WebSocketTransport } from 'colyseus';
-import { loadWorldAssets, WORLD_INDEX_FILE, worldHash } from '@nn/shared';
+import { loadWorldAssets, parseWorldIndex, WORLD_INDEX_FILE, worldHash } from '@nn/shared';
 import type { Config } from './config';
 import { log, setLogLevel } from './log';
 import { staticHandler } from './static';
@@ -12,6 +12,7 @@ import { restartOnSignal } from './restart';
 import { nippesRoom, type NippesRoom } from './room';
 import { SERVER_VERSION } from './version';
 import { checkWorldPublished } from './world-published';
+import { missingWorldFiles } from './world-complete';
 
 export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<void> };
 
@@ -29,7 +30,21 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
   if (!existsSync(join(cfg.worldDir, WORLD_INDEX_FILE))) {
     throw new Error(`${WORLD_INDEX_FILE} fehlt in ${cfg.worldDir}: 'npm run world:index' ausführen`);
   }
-  const [assets, hash] = await Promise.all([loadWorldAssets(read), read(WORLD_INDEX_FILE).then(worldHash)]);
+  const indexBytes = await read(WORLD_INDEX_FILE);
+  if (!cfg.worldUrl) {
+    // Without WORLD_URL the browsers load the world from this server: an image built with WORLD_FILES=server has only
+    // the server's files and would serve a world that cannot load.
+    const index = parseWorldIndex(JSON.parse(new TextDecoder().decode(indexBytes)));
+    const present = new Set(await readdir(cfg.worldDir, { recursive: true }));
+    const missing = missingWorldFiles(index, present);
+    if (missing.length > 0) {
+      throw new Error(
+        `world directory has only the server files (${missing.length} of ${Object.keys(index.files).length} files from ` +
+          `${WORLD_INDEX_FILE} are missing): set WORLD_URL or use an image built with WORLD_FILES=full`,
+      );
+    }
+  }
+  const [assets, hash] = await Promise.all([loadWorldAssets(read), worldHash(indexBytes)]);
 
   const transport = new WebSocketTransport();
   let room: NippesRoom | undefined;
