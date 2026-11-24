@@ -28,7 +28,21 @@ npm run pipeline
 docker build -f apps/server/Dockerfile -t nippes-nights .
 ```
 
-Fehlt `apps/client/public/world/`, bricht der Build mit einer klaren Meldung ab. `.dockerignore` darf den Ordner nicht ausschließen.
+Fehlt `apps/client/public/world/` (oder darin `index.json`, `manifest.json`, `collision.bin`, `terrain.bin`), bricht der
+Build mit einer klaren Meldung ab. `.dockerignore` darf den Ordner nicht ausschließen.
+
+Das Build-Argument `WORLD_FILES` bestimmt, wie viel Welt ins Image kommt:
+
+- `full` (Standard): die ganze Welt; der Server liefert sie selbst unter `/world/` aus.
+- `server`: nur die Dateien, die der Server lädt (`index.json`, `manifest.json`, `collision.bin`, `terrain.bin`,
+  `transit-collision.bin`). Die Browser laden die Welt dann aus dem Objektspeicher (`WORLD_URL`, siehe
+  „Welt im Objektspeicher“). Deutlich kleineres Image; ohne `WORLD_URL` ist das Spiel damit nicht spielbar.
+
+```
+docker build -f apps/server/Dockerfile --build-arg WORLD_FILES=server -t nippes-nights .
+```
+
+Ein anderer Wert bricht den Build ab.
 
 ### Starten
 
@@ -45,6 +59,8 @@ Umgebungsvariablen:
 | `MAX_PLAYERS` | 60 | gleichzeitige Spieler; bis 100 möglich, 100 nur auf einem schnelleren Einzelkern |
 | `PUBLIC_URL` | – | nur nötig, wenn die Spiel-Verbindung über eine andere Adresse laufen soll als die Seite (z. B. `spiel.example.org`); ohne Angabe nutzt der Client die Adresse der Seite |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `WORLD_URL` | – | öffentliche Adresse der Welt im Objektspeicher (z. B. `https://jeck-city.nbg1.your-objectstorage.com/`); die Browser laden die Welt dann von dort, der Server prüft beim Start im Hintergrund, ob sie dort liegt (`worldPublished` in `/healthz`). Ohne Angabe liefert der Server die Welt selbst aus (Image mit `WORLD_FILES=full`) |
+| `RESTART_NOTICE_S` | 60 (Entwicklung: 0) | Sekunden Countdown, den Spieler vor einem Neustart sehen (0–600). Bei `SIGTERM` (`docker stop`) kündigt der Server den Neustart an und beendet sich erst danach; ohne Spieler sofort |
 | `NN_WEATHER` | `live` | `live`: alle 15 min von Open-Meteo; `off`: kein Abruf, klares Wetter; im Entwicklungsmodus auch ein festes Wetter: `clear`, `cloudy`, `mist`, `fog`, `drizzle`, `rain`, `heavyrain`, `snow` |
 
 Ohne Docker: ein bloßes `npm start` ohne `NODE_ENV=production` startet den Server im Entwicklungsmodus (Teleport, Fliegen, Schreib-Hooks für Tests). In Produktion immer `NODE_ENV=production` setzen; das Docker-Image tut das.
@@ -54,6 +70,52 @@ braucht der leere Server schon ≈ 1,1 GB, daher besser 4 GB. Die Simulation lä
 `docs/superpowers/notes/2026-11-15-multiplayer-loadtest.md` (`npm run loadtest`).
 
 Logs enthalten keine Klartext-IP, sondern einen gesalzenen SHA-256-Präfix.
+
+### Welt im Objektspeicher
+
+Die Welt (über 1 GB) muss nicht im Image liegen: Die GitHub Action lädt sie vor dem Image-Bau in einen
+S3-kompatiblen Bucket (Hetzner Object Storage), das Image enthält nur die Server-Dateien (`WORLD_FILES=server`), und
+mit `WORLD_URL` laden die Browser die Welt direkt aus dem Bucket. Die Objekte heißen nach dem Hash ihres Inhalts
+(`objects/<hh>/<hash>.<ext>`) und werden nie überschrieben; unveränderte Dateien lädt der Browser also aus seinem Cache,
+und ein neues Veröffentlichen lädt nur geänderte Dateien hoch. `worlds/<welt-hash>.json` wird zuletzt geschrieben.
+
+Einrichten:
+
+1. Bucket anlegen und **öffentlich lesbar** machen.
+2. CORS-Regel setzen, sonst dürfen Browser die Welt nicht vom Bucket laden (`deploy/object-storage-cors.json`, erlaubt
+   `GET`/`HEAD` von jeder Herkunft), z. B. mit der AWS CLI:
+   ```
+   aws s3api put-bucket-cors --bucket <bucket> --cors-configuration file://deploy/object-storage-cors.json --endpoint-url <S3_ENDPOINT>
+   ```
+   **Stand:** Beim Hetzner-Bucket `jeck-city` wurde das Setzen mit `AccessDenied` abgelehnt (Schlüssel des Projekts) –
+   noch offen. Solange die Regel fehlt, können Browser die Welt nicht aus dem Bucket laden: `WORLD_URL` in Produktion
+   **nicht** setzen und ein selbst gebautes Image mit `WORLD_FILES=full` betreiben – das Image der GitHub Action ist
+   `WORLD_FILES=server` und braucht `WORLD_URL`.
+3. Zugangsdaten zum Veröffentlichen: lokal in `.env` im Repository-Wurzelverzeichnis (nicht im Repository), in der
+   GitHub Action als Secrets gleichen Namens; die öffentliche Adresse als Repository-Variable `WORLD_URL`:
+   ```
+   S3_ENDPOINT=https://nbg1.your-objectstorage.com
+   S3_REGION=nbg1
+   S3_BUCKET=jeck-city
+   S3_ACCESS_KEY_ID=…
+   S3_SECRET_ACCESS_KEY=…
+   ```
+
+Veröffentlichen (die Action tut das bei jedem Lauf vor dem Image-Bau):
+
+```
+npm run pipeline         # oder eine vorhandene Welt
+npm run world:index      # nur für einen Weltordner ohne index.json (die Pipeline schreibt ihn selbst)
+npm run world:publish
+```
+
+Alte Welten aufräumen: behält die laufende Welt (aus `/healthz` des Live-Servers) und die letzten fünf. Erst ohne
+`--delete` ansehen, was entfernt würde, dann mit `--delete` löschen; nicht während eines Veröffentlichens laufen lassen.
+
+```
+npm run world:prune -- --live https://<domain>/healthz
+npm run world:prune -- --live https://<domain>/healthz --delete
+```
 
 ### Reverse Proxy
 
@@ -75,7 +137,8 @@ Voraussetzungen auf dem Server: Docker mit Compose-Plugin, ein DNS-Eintrag (A/AA
    ```
    cd /opt/nippes
    cp .env.example .env
-   nano .env            # DOMAIN=spiel.example.org, IMAGE=ghcr.io/dnl-jst/nippes-nights:latest, MAX_PLAYERS=60
+   nano .env            # DOMAIN=spiel.example.org, IMAGE=ghcr.io/dnl-jst/nippes-nights:latest, MAX_PLAYERS=60,
+                        # WORLD_URL (siehe „Welt im Objektspeicher“), RESTART_NOTICE_S=60
    ```
 3. Ist das Image privat, einmal bei der GitHub Container Registry anmelden (Token mit `read:packages`):
    ```
@@ -95,6 +158,9 @@ auf `main`):
 docker compose pull game && docker compose up -d game
 ```
 
+Compose gibt dem alten Container 90 s (`stop_grace_period`): Spieler sehen vorher 60 s lang einen Countdown
+(`RESTART_NOTICE_S`), und ihre Seite lädt nach dem Neustart von selbst neu.
+
 Das Volume `caddy_data` enthält die Zertifikate: nicht löschen, sonst holt Caddy neue und läuft bei häufigen Neustarts in
 die Rate-Limits von Let's Encrypt. Lokal ausprobieren lässt sich alles mit `DOMAIN=localhost` (Caddy stellt dann ein
 eigenes Zertifikat aus, der Browser warnt einmal).
@@ -105,9 +171,10 @@ Neues Image bauen (`npm run pipeline` nur, wenn sich die Welt geändert hat), da
 
 ```
 docker build -f apps/server/Dockerfile -t nippes-nights .
-docker stop nippes && docker rm nippes
+docker stop -t 90 nippes && docker rm nippes
 docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=60 nippes-nights
 ```
 
-Laufende Spieler werden dabei getrennt. Ein offener Client zeigt „Neue Version – bitte Seite neu laden.“, sobald er sich mit
-der neuen Version verbinden will.
+`docker stop` schickt `SIGTERM`: Der Server kündigt den Neustart an, die Spieler sehen 60 s lang (`RESTART_NOTICE_S`)
+einen Countdown, danach beendet er sich. `-t 90` lässt ihm dafür Zeit (der Standard von 10 s würde ihn vorher
+abbrechen); ohne Spieler beendet er sich sofort. Nach dem Neustart lädt ein offener Client die Seite von selbst neu.

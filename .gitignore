@@ -14,3 +14,6 @@ deploy/.env
 # local credentials (S3 for publishing the world)
 .env
 data/cache/
+
+# compressed world variants reused by the image build (scripts/precompress.mjs --cache)
+.precompress-cache/
