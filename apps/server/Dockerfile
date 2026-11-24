@@ -27,7 +27,11 @@ RUN npm ci
 COPY apps/client/public/ ./apps/client/public/
 RUN for f in index.json manifest.json collision.bin terrain.bin; do \
       test -f "apps/client/public/world/$f" || { \
-        echo "ERROR: apps/client/public/world/$f is missing in the build context. Run 'npm run pipeline' in the repository root first (and do not exclude the folder in .dockerignore)." >&2; \
+        if [ "$f" = index.json ] && [ -f apps/client/public/world/manifest.json ]; then \
+          echo "ERROR: apps/client/public/world/index.json is missing in the build context. Run 'npm run world:index' in the repository root first." >&2; \
+        else \
+          echo "ERROR: apps/client/public/world/$f is missing in the build context. Run 'npm run pipeline' in the repository root first (and do not exclude the folder in .dockerignore)." >&2; \
+        fi; \
         exit 1; }; \
     done
 

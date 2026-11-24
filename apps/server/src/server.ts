@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { defineRoom, defineServer, matchMaker, WebSocketTransport } from 'colyseus';
-import { loadWorldAssets, parseWorldIndex, WORLD_INDEX_FILE, worldHash } from '@nn/shared';
+import { loadWorldAssets, parseWorldIndex, SERVER_WORLD_FILES, WORLD_INDEX_FILE, worldHash } from '@nn/shared';
 import type { Config } from './config';
 import { log, setLogLevel } from './log';
 import { staticHandler } from './static';
@@ -12,7 +13,7 @@ import { restartOnSignal } from './restart';
 import { nippesRoom, type NippesRoom } from './room';
 import { SERVER_VERSION } from './version';
 import { checkWorldPublished } from './world-published';
-import { missingWorldFiles } from './world-complete';
+import { missingIndexHint, missingWorldFiles, staleWorldFiles } from './world-complete';
 
 export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<void> };
 
@@ -23,18 +24,36 @@ export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<vo
  */
 export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean } = {}): Promise<RunningServer> {
   setLogLevel(cfg.logLevel);
+  const SIGNALS = ['SIGTERM', 'SIGINT'] as const;
+  // Until the room exists there is nobody to warn: a signal during the world load ends the process at once instead of
+  // letting `docker stop` wait out its grace period. Replaced by the restart handler below.
+  const exitNow = () => {
+    log('info', 'stopped while starting');
+    process.exit(0);
+  };
+  if (opts.exitOnShutdown) for (const signal of SIGNALS) process.on(signal, exitNow);
   const read = async (file: string): Promise<ArrayBuffer> => {
     const b = await readFile(join(cfg.worldDir, file));
     return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
   };
   if (!existsSync(join(cfg.worldDir, WORLD_INDEX_FILE))) {
-    throw new Error(`${WORLD_INDEX_FILE} fehlt in ${cfg.worldDir}: 'npm run world:index' ausführen`);
+    throw new Error(`${WORLD_INDEX_FILE} fehlt in ${cfg.worldDir}: ${missingIndexHint(cfg.worldDir)}`);
   }
   const indexBytes = await read(WORLD_INDEX_FILE);
+  const index = parseWorldIndex(JSON.parse(new TextDecoder().decode(indexBytes)));
+  // The world hash comes from index.json: a server file changed without a new index would run under a wrong hash.
+  const actual: Record<string, string> = {};
+  for (const file of SERVER_WORLD_FILES) {
+    if (file === WORLD_INDEX_FILE || !existsSync(join(cfg.worldDir, file))) continue;
+    actual[file] = createHash('sha256').update(await readFile(join(cfg.worldDir, file))).digest('hex').slice(0, 32);
+  }
+  const stale = staleWorldFiles(index, actual);
+  if (stale.length > 0) {
+    throw new Error(`${stale.join(', ')} passt nicht zu ${WORLD_INDEX_FILE} in ${cfg.worldDir}: 'npm run world:index' ausführen`);
+  }
   if (!cfg.worldUrl) {
     // Without WORLD_URL the browsers load the world from this server: an image built with WORLD_FILES=server has only
     // the server's files and would serve a world that cannot load.
-    const index = parseWorldIndex(JSON.parse(new TextDecoder().decode(indexBytes)));
     const present = new Set(await readdir(cfg.worldDir, { recursive: true }));
     const missing = missingWorldFiles(index, present);
     if (missing.length > 0) {
@@ -103,7 +122,12 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
         process.exit(0); // only reached if Colyseus was already shutting down
       },
     });
-    for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => void onSignal());
+    for (const signal of SIGNALS) {
+      // on before off: a signal that arrived during the (synchronous) world decoding may not have been dispatched yet,
+      // and removing the last listener would drop it; it now reaches the restart handler.
+      process.on(signal, () => void onSignal());
+      process.off(signal, exitNow);
+    }
   }
   return { port, room, stop: () => {
     weather?.stop();
