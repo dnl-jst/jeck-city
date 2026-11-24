@@ -464,4 +464,16 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     await until(() => w().weather.kind === 'rain');
     await leaveAll();
   });
+
+  // Last: the announced restart stays in the shared room's state.
+  it('announceRestart(60) sets restartTick about 3600 ticks ahead and a joining client sees it', async () => {
+    srv.room.announceRestart(60);
+    const c = await join('Anna');
+    const s = () => c.state as unknown as { restartTick: number };
+    await until(() => (s().restartTick ?? 0) > 0);
+    const ahead = s().restartTick - srv.room.sim.tick;
+    expect(ahead).toBeGreaterThanOrEqual(3500);
+    expect(ahead).toBeLessThanOrEqual(3600);
+    await leaveAll();
+  });
 });

@@ -221,6 +221,16 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
     Object.assign(this.state.weather, w);
   }
 
+  /** Announces a restart in `seconds` to everyone (state.restartTick). */
+  announceRestart(seconds: number): void {
+    this.state.restartTick = this.sim.tick + seconds * TICK_HZ;
+  }
+
+  /** Players holding a seat (including those within their reconnect window). */
+  playerCount(): number {
+    return this.seats.size;
+  }
+
   /** Test and diagnostics access: the input queue / slot of a session. */
   queueOf(sessionId: string): InputQueue | undefined {
     return this.seats.get(sessionId)?.queue;

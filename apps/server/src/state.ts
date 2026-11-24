@@ -81,11 +81,13 @@ function unknownWeatherState(): WeatherState {
   return w;
 }
 
+/** restartTick: the sim tick at which the server restarts (announced on SIGTERM/SIGINT), 0 while none is announced. */
 export const NippesState = schema({
   players: t.map(PlayerState),
   cars: t.map(CarState),
   bikes: t.map(BikeSlowState),
   lamps: t.map(LampState),
   weather: t.ref(WeatherState).default(unknownWeatherState),
+  restartTick: t.float64(),
 }, 'NippesState');
 export type NippesState = SchemaType<typeof NippesState>;

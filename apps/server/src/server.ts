@@ -8,6 +8,7 @@ import type { Config } from './config';
 import { log, setLogLevel } from './log';
 import { staticHandler } from './static';
 import { WeatherService } from './weather';
+import { restartOnSignal } from './restart';
 import { nippesRoom, type NippesRoom } from './room';
 import { SERVER_VERSION } from './version';
 import { checkWorldPublished } from './world-published';
@@ -16,7 +17,8 @@ export type RunningServer = { port: number; room: NippesRoom; stop(): Promise<vo
 
 /**
  * Loads the world, starts Colyseus on cfg.port (0 = any free port) and creates the one 'nippes' room.
- * `exitOnShutdown` (main): SIGINT/SIGTERM shut the server down gracefully and end the process.
+ * `exitOnShutdown` (main): SIGINT/SIGTERM announce a restart (cfg.restartNoticeS ahead), then shut the server down
+ * gracefully and end the process; a second signal shuts down at once (see restartOnSignal).
  */
 export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean } = {}): Promise<RunningServer> {
   setLogLevel(cfg.logLevel);
@@ -52,7 +54,7 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
         app.use(serve);
       }
     },
-    gracefullyShutdown: opts.exitOnShutdown ?? false,
+    gracefullyShutdown: false, // our own signal handlers below
     ...(cfg.publicUrl ? { publicAddress: cfg.publicUrl } : {}),
   });
   await server.listen(cfg.port);
@@ -74,6 +76,19 @@ export async function startServer(cfg: Config, opts: { exitOnShutdown?: boolean 
       worldPublished = ok;
       if (!ok) log('warn', 'world not published', { worldUrl, worldHash: hash });
     });
+  }
+  if (opts.exitOnShutdown) {
+    const onSignal = restartOnSignal({
+      noticeS: cfg.restartNoticeS,
+      players: () => room!.playerCount(),
+      announce: (seconds) => room!.announceRestart(seconds),
+      shutdown: async () => {
+        weather?.stop();
+        await server.gracefullyShutdown(true); // exits the process
+        process.exit(0); // only reached if Colyseus was already shutting down
+      },
+    });
+    for (const signal of ['SIGTERM', 'SIGINT'] as const) process.on(signal, () => void onSignal());
   }
   return { port, room, stop: () => {
     weather?.stop();
