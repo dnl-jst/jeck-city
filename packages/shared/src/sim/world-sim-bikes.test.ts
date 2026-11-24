@@ -4,6 +4,7 @@ import { TUNING } from '../physics/tuning';
 import { RESET_AFTER_S } from '../net/constants';
 import type { WorldAssets } from './assets';
 import { fixtureAssets } from './fixture.test-util';
+import { snapshotRound } from './snapshot';
 import { WorldSim, type SimEvent } from './world-sim';
 
 const N = NEUTRAL_INPUT(0);
@@ -270,4 +271,24 @@ test('a passenger standing on a cargo bike rides along; the bike does not crash 
   expect(Math.hypot(p.pos.x - b.x, p.pos.z - b.z)).toBeLessThan(0.8);
   expect(p.pos.y).toBeGreaterThan(on - 0.2);
   expect(Math.hypot(p.vel.x, p.vel.z)).toBeLessThan(0.5);
+}, 30_000);
+
+test('a car driving into a parked bike knocks it over: the fall is in the snapshot and makes it a moved bike', async () => {
+  const a = carBehindBike(20);
+  a.manifest.bikes[0]!.heading = Math.PI / 2; // across the car's path: pushed to its right
+  const sim = await WorldSim.create(a);
+  sim.addPlayer(2, { x: 2.5, z: -80 });
+  run(sim, 10, N, 2);
+  sim.step(new Map([[2, USE]]));
+  expect(sim.player(2).mode).toBe('drive');
+  run(sim, 360, N, 2);
+  let streamed: number | undefined;
+  for (let t = 0; t < 600 && !streamed; t++) {
+    sim.step(new Map([[2, { ...N, forward: 1 }]]));
+    streamed = snapshotRound(sim, [], () => 0).bikes.find((b) => b.v.id === 0)?.v.fall;
+  }
+  expect(streamed).toBe(-1);
+  expect(sim.bikes.fallSide(0)).toBe(-1);
+  expect(sim.bikes.isMoved(0)).toBe(true);
+  expect(sim.player(2).mode).toBe('drive'); // nothing happens to the driver
 }, 30_000);

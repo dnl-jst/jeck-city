@@ -28,6 +28,7 @@
     "heli-check": "node scripts/heli-check.mjs",
     "mp-check": "node scripts/mp-check.mjs",
     "restart-check": "node scripts/restart-check.mjs",
+    "chat-check": "node scripts/chat-check.mjs",
     "ride-along-check": "node scripts/ride-along-check.mjs",
     "transit-check": "node scripts/transit-check.mjs",
     "loadtest": "tsx apps/server/src/bots/loadtest.ts",

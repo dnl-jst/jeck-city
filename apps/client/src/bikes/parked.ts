@@ -10,16 +10,42 @@ export type BikeSource = {
   /** Who rides each bike (null: parked); ridden bikes are drawn by their rider's rig, not here. */
   readonly rider: readonly (number | null)[];
   activeIds(): number[];
-  /** Shown lying on its side (a knocked-over e-scooter); optional for sources without any. */
-  lying?(id: number): boolean;
+  /** The side a bike lies on (1 left, −1 right, 0 standing); optional for sources without any. */
+  fallSide?(id: number): number;
 };
 
 /**
- * A lying e-scooter rolls onto its left side (rider's left, +x in the model) about its forward axis, resting on the
- * left bar end and the deck edge (77° roll), lifted so both touch the ground.
+ * A lying bike is rolled onto its side about its forward axis (77°: on the bar end and a pedal or the deck edge, not
+ * flat), its left (rider's left, +x in the model) for fall 1, its right for −1, lifted so its lowest point touches the
+ * ground (per model and side, see lowest).
  */
-const LIE_ROLL = -Math.PI / 2 + 0.23;
-const LIE_LIFT = 0.07;
+const LIE_ANGLE = Math.PI / 2 - 0.23;
+/** Falling over takes FALL_S (accelerating like a toppling pole), then it bounces back BOUNCE (rad) once and settles. */
+export const FALL_S = 0.45;
+const BOUNCE = 0.09;
+const SETTLE_S = 0.3;
+
+/** How far over a falling bike is (0 standing … 1 lying), `t` s after it started to fall. */
+export function fallFraction(t: number): number {
+  if (t < FALL_S) return (t / FALL_S) ** 2;
+  const u = t - FALL_S;
+  if (u >= SETTLE_S) return 1;
+  // one hop off the ground, damped
+  return 1 - (BOUNCE / LIE_ANGLE) * Math.abs(Math.sin((u / SETTLE_S) * 2 * Math.PI)) * Math.exp(-u * 8);
+}
+
+/** Lowest y of a model's parts rolled by `roll` (rad) about its forward axis (z). */
+function lowest(ps: readonly Part[], roll: number): number {
+  const m = new Matrix4(), v = new Vector3(), r = new Matrix4().makeRotationZ(roll);
+  let min = Infinity;
+  for (const part of ps) {
+    m.multiplyMatrices(r, part.local);
+    const pos = part.geometry.getAttribute('position');
+    if (!pos) continue;
+    for (let i = 0; i < pos.count; i++) min = Math.min(min, v.fromBufferAttribute(pos, i).applyMatrix4(m).y);
+  }
+  return Number.isFinite(min) ? min : 0;
+}
 
 /** Rack hoops are drawn within this distance of the camera (m): the city has thousands (millions of triangles). */
 export const RACK_RENDER_RADIUS = 150;
@@ -57,7 +83,7 @@ function instanceMaterial(m: Material): Material {
  * RACK_RENDER_RADIUS, rebuilt with the bikes.
  */
 export class BikeView {
-  private readonly byType = new Map<BikeType, { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[] }>();
+  private readonly byType = new Map<BikeType, { parts: Part[]; meshes: InstancedMesh[]; paint: boolean[]; lift: { left: number; right: number } }>();
   /** Instance slot of each bike in its type's meshes, −1 while not drawn. */
   private readonly slots: Int32Array;
   private last: { x: number; z: number } | null = null;
@@ -71,12 +97,19 @@ export class BikeView {
   private readonly fwd = new Vector3(0, 0, 1);
   private readonly qr = new Quaternion();
   private readonly rackMeshes: { im: InstancedMesh; list: { x: number; z: number; m: Matrix4 }[] }[] = [];
+  /** The side each bike was last drawn lying on (as fallSide), 2 before it was first drawn: a change starts a fall. */
+  private readonly shownFall: Int8Array;
+  /** Bikes falling over now → seconds since they started. */
+  private readonly falling = new Map<number, number>();
+  /** Bikes that started to fall in this update (see update). */
+  private fell: { x: number; z: number }[] = [];
 
   constructor(
     scene: Scene, models: ReadonlyMap<BikeType, Object3D>, racks: ReadonlyMap<0 | 1, Object3D>, private readonly src: BikeSource,
     rackList: WorldManifest['bikeRacks'], rackYs: readonly number[],
   ) {
     this.slots = new Int32Array(src.poses.length).fill(-1);
+    this.shownFall = new Int8Array(src.poses.length).fill(2);
     for (const [type, model] of models) {
       const ps = parts(model);
       const n = src.types.filter((t) => t === type).length;
@@ -90,7 +123,8 @@ export class BikeView {
       });
       const paint = ps.map((part) => part.material.name === 'paint');
       meshes.forEach((im, k) => { if (paint[k]) im.setColorAt(0, new Color()); });
-      this.byType.set(type, { parts: ps, meshes, paint });
+      const lift = { left: Math.max(0, -lowest(ps, -LIE_ANGLE)), right: Math.max(0, -lowest(ps, LIE_ANGLE)) };
+      this.byType.set(type, { parts: ps, meshes, paint, lift });
     }
     for (const [kind, model] of racks) {
       const list = rackList.map((r, i) => ({ r, y: rackYs[i]! })).filter(({ r }) => r.kind === kind);
@@ -108,8 +142,16 @@ export class BikeView {
     }
   }
 
-  /** Rebuilds the drawn set when the camera moved or the ridden bikes changed; re-places bikes that have a body. */
-  update(camX: number, camZ: number): void {
+  /**
+   * Rebuilds the drawn set when the camera moved or the ridden bikes changed; re-places bikes that have a body and
+   * those falling over (dt: seconds since the last update). Returns where drawn bikes started to fall over.
+   */
+  update(camX: number, camZ: number, dt = 0): { x: number; z: number }[] {
+    this.fell = [];
+    for (const [i, t] of this.falling) {
+      if (t >= FALL_S + SETTLE_S) this.falling.delete(i);
+      else this.falling.set(i, t + dt);
+    }
     const ridden = new Set<number>();
     this.src.rider.forEach((r, i) => { if (r !== null) ridden.add(i); });
     const key = [...ridden].join();
@@ -120,13 +162,14 @@ export class BikeView {
       this.rebuild(camX, camZ, ridden);
     } else {
       const touched = new Set<BikeType>();
-      for (const i of this.src.activeIds()) {
+      for (const i of new Set([...this.src.activeIds(), ...this.falling.keys()])) {
         if (this.slots[i]! < 0) continue;
         this.write(i);
         touched.add(this.src.types[i]!);
       }
       for (const t of touched) for (const im of this.byType.get(t)!.meshes) im.instanceMatrix.needsUpdate = true;
     }
+    return this.fell;
   }
 
   private rebuild(x: number, z: number, ridden: ReadonlySet<number>): void {
@@ -138,6 +181,8 @@ export class BikeView {
       im.instanceMatrix.needsUpdate = true;
       im.computeBoundingSphere();
     }
+    // (a bike not drawn until now shows its fall as it is: it fell, if at all, out of sight)
+    const before = this.slots.slice();
     this.slots.fill(-1);
     const shown = visibleBikes(this.src.poses, x, z, BIKE_RENDER_RADIUS, ridden);
     const next = new Map<BikeType, number>();
@@ -149,6 +194,7 @@ export class BikeView {
       const k = next.get(t) ?? 0;
       next.set(t, k + 1);
       this.slots[i] = k;
+      if (before[i]! < 0) this.shownFall[i] = 2;
       e.meshes.forEach((im, j) => { if (e.paint[j]) im.setColorAt(k, col.setHex(this.src.colors[i]!)); });
       this.write(i);
     }
@@ -167,10 +213,27 @@ export class BikeView {
     const e = this.byType.get(this.src.types[i]!);
     if (k < 0 || !e) return;
     const s = this.src.poses[i]!;
-    const lying = this.src.lying?.(i) === true;
+    const side = Math.sign(this.src.fallSide?.(i) ?? 0);
+    // a bike lying since it was first drawn just lies; one that falls (or is set down) while drawn falls over
+    const shown = this.shownFall[i]!;
+    if (shown !== side) {
+      this.shownFall[i] = side;
+      this.falling.delete(i);
+      if (shown !== 2 && side !== 0) {
+        this.falling.set(i, 0);
+        this.fell.push({ x: s.x, z: s.z });
+      }
+    }
     this.q.setFromAxisAngle(this.up, s.heading);
-    if (lying) this.q.multiply(this.qr.setFromAxisAngle(this.fwd, LIE_ROLL));
-    const base = new Matrix4().compose(this.p.set(s.x, s.y + (lying ? LIE_LIFT : 0), s.z), this.q, this.one);
+    let lift = 0;
+    if (side !== 0) {
+      const t = this.falling.get(i);
+      const f = t === undefined ? 1 : fallFraction(t);
+      this.q.multiply(this.qr.setFromAxisAngle(this.fwd, -side * LIE_ANGLE * f));
+      // (the lowest point only reaches below the ground in the last part of the fall)
+      lift = (side > 0 ? e.lift.left : e.lift.right) * f ** 4;
+    }
+    const base = new Matrix4().compose(this.p.set(s.x, s.y + lift, s.z), this.q, this.one);
     e.meshes.forEach((im, j) => im.setMatrixAt(k, this.m.copy(base).multiply(e.parts[j]!.local)));
   }
 }

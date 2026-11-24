@@ -118,6 +118,13 @@ const clamp1 = (v: number): number => Math.max(-1, Math.min(1, v));
 /** −1..1 on the 1/127 grid of the input packets (codec axisToI8). */
 export const quantizeAxis = (v: number): number => (Number.isFinite(v) ? Math.round(clamp1(v) * 127) / 127 : 0);
 
+/** True for focus targets that take typed text (chat field, name field): their keys are not game input. */
+export function isTypingTarget(t: unknown): boolean {
+  if (!t || typeof t !== 'object') return false;
+  const { tagName, isContentEditable } = t as { tagName?: unknown; isContentEditable?: unknown };
+  return tagName === 'INPUT' || tagName === 'TEXTAREA' || isContentEditable === true;
+}
+
 const GAME_KEYS = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, 'Space']);
 
 /**
@@ -127,9 +134,13 @@ const GAME_KEYS = new Set([...FORWARD, ...BACK, ...LEFT, ...RIGHT, 'Space']);
  */
 export function attachInput(input: Input, canvas: HTMLCanvasElement, onLock: (locked: boolean) => void, touch = false): void {
   window.addEventListener('keydown', (e) => {
+    if (isTypingTarget(e.target)) return;
     if (input.keyDown(e) && GAME_KEYS.has(e.code)) e.preventDefault(); // no page scrolling on arrows/space
   });
-  window.addEventListener('keyup', (e) => input.keyUp(e));
+  window.addEventListener('keyup', (e) => {
+    if (isTypingTarget(e.target)) return;
+    input.keyUp(e);
+  });
   window.addEventListener('blur', () => input.releaseAll());
   canvas.addEventListener('click', () => {
     if (touch) return;

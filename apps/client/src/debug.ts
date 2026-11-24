@@ -1,4 +1,6 @@
 /** Debug overlay (`?debug=1`): position, view direction, shareable view link (key P). */
+import { isTypingTarget } from './input';
+
 export type DebugView = {
   x: number; y: number; z: number; yawDeg: number; pitchDeg: number;
   /** HH:MM game time */
@@ -73,7 +75,7 @@ export class DebugOverlay {
     this.field.hidden = true;
     this.box.append(this.text, this.note, this.field);
     root.append(this.box);
-    window.addEventListener('keydown', (e) => { if (e.code === 'KeyP' && !e.repeat) void this.copyLink(); });
+    window.addEventListener('keydown', (e) => { if (e.code === 'KeyP' && !e.repeat && !isTypingTarget(e.target)) void this.copyLink(); });
     setInterval(() => this.refresh(), 250);
     this.refresh();
   }

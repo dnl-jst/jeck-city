@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
-import { BoxGeometry, Group, InstancedMesh, Mesh, MeshStandardMaterial, Scene } from 'three';
+import { BoxGeometry, Group, InstancedMesh, Matrix4, Mesh, MeshStandardMaterial, Scene, Vector3 } from 'three';
 import type { BikeType } from '@nn/shared';
-import { BikeView, RACK_RENDER_RADIUS, type BikeSource } from './parked';
+import { BikeView, FALL_S, fallFraction, RACK_RENDER_RADIUS, type BikeSource } from './parked';
 
 const model = () => {
   const g = new Group();
@@ -39,4 +39,27 @@ test('draws the bikes near the camera per type, not the ridden one, racks near t
   expect(counts(scene)).toEqual(expect.arrayContaining([['bike_dutch_frame', 1]]));
   view.update(RACK_RENDER_RADIUS + 50, 0); // moved to the far rack: only it is drawn
   expect(counts(scene)).toEqual(expect.arrayContaining([['rack_0_frame', 1]]));
+});
+
+test('a bike lying when first drawn just lies; one that falls while drawn falls over once', () => {
+  const scene = new Scene();
+  const side = [1, 0, 0, 0];
+  const src: BikeSource = { ...source(), activeIds: () => [1], fallSide: (i) => side[i]! };
+  const view = new BikeView(scene, new Map<BikeType, Group>([['dutch', model()], ['road', model()]]), new Map(), src, [], []);
+  expect(view.update(0, 0, 0.016)).toEqual([]);
+  side[1] = -1;
+  expect(view.update(0, 0, 0.016)).toEqual([{ x: 5, z: 0 }]);
+  const frame = scene.getObjectByName('bike_dutch_frame') as InstancedMesh;
+  const up = () => {
+    const m = new Matrix4();
+    frame.getMatrixAt(1, m);
+    return new Vector3(0, 1, 0).transformDirection(m).y;
+  };
+  view.update(0, 0, FALL_S / 2);
+  const half = up();
+  for (let k = 0; k < 60; k++) expect(view.update(0, 0, 0.016)).toEqual([]);
+  expect(half).toBeGreaterThan(0.5); // still on its way down
+  expect(up()).toBeLessThan(0.3); // lying
+  expect(fallFraction(FALL_S / 2)).toBeCloseTo(0.25);
+  expect(fallFraction(10)).toBe(1);
 });

@@ -162,6 +162,108 @@ describe('parked bikes', () => {
   });
 });
 
+describe('falling over', () => {
+  /** A car from z = −8 heading +z at up to `kmh`, for `n` steps; bikes synced after every step. */
+  async function carInto(b: WorldManifest['bikes'][number], kmh: number, n = 150) {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [b]);
+    bikes.updatePhysics(0, 0);
+    const car = new Vehicle(pw, { x: 0, z: -8, heading: 0 });
+    car.setOccupied(true);
+    const fellAt: number[] = [];
+    steps(pw, n, () => {
+      car.applyInput({ throttle: car.speed() / KMH < kmh ? 1 : 0, steer: 0, brake: false });
+      bikes.sync();
+      fellAt.push(...bikes.takeFallen());
+    });
+    bikes.sync();
+    return { pw, bikes, car, fellAt };
+  }
+
+  test('a car hitting a parked bike knocks it over to the side it pushes it to, the body stays upright', async () => {
+    // heading π/2: forward +x, its left −z; the car comes from −z and pushes it to its right
+    const { bikes, fellAt } = await carInto(bike(0, 0, Math.PI / 2), 25);
+    expect(fellAt).toEqual([0]);
+    expect(bikes.poses[0]!.fall).toBe(-1);
+    expect(bikes.fallSide(0)).toBe(-1);
+    expect(bikes.isMoved(0)).toBe(true);
+    expect(tilt(bikes.body(0)!.rotation())).toBeLessThan(Math.PI / 180);
+  });
+
+  test('pushed to its left it falls to the left', async () => {
+    const { bikes } = await carInto(bike(0, 0, -Math.PI / 2), 25);
+    expect(bikes.fallSide(0)).toBe(1);
+  });
+
+  test('a lying bike no longer collides with the car: it drives on over it', async () => {
+    const { bikes, car } = await carInto(bike(0, 0, Math.PI / 2), 25, 240);
+    expect(bikes.fallSide(0)).not.toBe(0);
+    expect(car.pose().z).toBeGreaterThan(5);
+    expect(bikes.poses[0]!.z).toBeLessThan(car.pose().z - 3); // flung a little, not bulldozed along
+  });
+
+  test('a car creeping into a bike shoves it a little, then it tips over (not bulldozed down the street)', async () => {
+    const { bikes, car } = await carInto(bike(0, 0, Math.PI / 2), 2, 1200);
+    expect(bikes.fallSide(0)).toBe(-1);
+    expect(bikes.poses[0]!.z).toBeGreaterThan(0.1);
+    expect(bikes.poses[0]!.z).toBeLessThan(1);
+    expect(car.pose().z).toBeGreaterThan(2);
+  });
+
+  test('a ridden bike knocks a parked one over and rides on without crashing', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 4, Math.PI / 2)]);
+    bikes.updatePhysics(0, 0);
+    const me = new RiddenBike(pw, 'dutch', { x: 0, y: 0, z: 0, heading: 0 }, 15 * KMH);
+    let crashes = 0;
+    steps(pw, 120, () => {
+      if (me.applyInput({ pedal: me.state().speed / KMH < 15 ? 1 : 0, steer: 0, sprint: false, hop: false }).crashed) crashes++;
+      bikes.sync();
+    });
+    expect(bikes.fallSide(0)).not.toBe(0);
+    expect(crashes).toBe(0);
+    expect(me.state().z).toBeGreaterThan(6); // through it, not stopped
+  });
+
+  test('without decideFalls (client prediction) a hit only shoves; follow and place bring the fall', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 0, Math.PI / 2)]);
+    bikes.decideFalls = false;
+    bikes.updatePhysics(0, 0);
+    const car = new Vehicle(pw, { x: 0, z: -8, heading: 0 });
+    car.setOccupied(true);
+    steps(pw, 150, () => {
+      car.applyInput({ throttle: car.speed() / KMH < 25 ? 1 : 0, steer: 0, brake: false });
+      bikes.sync();
+    });
+    expect(bikes.fallSide(0)).toBe(0);
+    bikes.follow(0, { x: 1, y: 0, z: 3, heading: 1, fall: 1 });
+    expect(bikes.fallSide(0)).toBe(1);
+    bikes.release(0, { x: 1, y: 0, z: 3, heading: 1, fall: -1 });
+    expect(bikes.fallSide(0)).toBe(-1);
+    bikes.place(0, { x: 1, y: 0, z: 3, heading: 1, fall: 0 });
+    expect(bikes.fallSide(0)).toBe(0);
+  });
+
+  test('getting on picks it up, the idle reset stands it up at home; a scooter lying in the manifest stays lying', async () => {
+    const pw = await createPhysicsWorld(flat());
+    const bikes = new ParkedBikes(pw, [bike(0, 0, 0), { ...bike(5, 0, 0, 5), down: true }]);
+    bikes.updatePhysics(0, 0);
+    expect(bikes.fallSide(1)).toBe(1);
+    expect(bikes.isMoved(1)).toBe(false);
+    bikes.place(0, { x: 0, y: 0, z: 0, heading: 0, fall: -1 });
+    expect(bikes.isMoved(0)).toBe(true);
+    const r = bikes.mount(0, 3);
+    expect(bikes.fallSide(0)).toBe(0);
+    bikes.dismount(0, r);
+    expect(bikes.poses[0]!.fall).toBe(0);
+    bikes.place(0, { x: 0, y: 0, z: 0, heading: 0, fall: 1 });
+    bikes.reset(0);
+    expect(bikes.fallSide(0)).toBe(0);
+    expect(bikes.isMoved(0)).toBe(false);
+  });
+});
+
 describe('standing on a sidewalk', () => {
   test('parked bikes and rack hoops stand on the surface, not on the terrain below it', async () => {
     const pw = await createPhysicsWorld(flat());

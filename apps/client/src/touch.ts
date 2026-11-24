@@ -79,6 +79,7 @@ const ICON = {
   figure: '<circle cx="12" cy="6" r="3"/><path d="M12 9v7M8 21l4-5 4 5M6 12h12"/>',
   full: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   zoomIn: '<circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M16 16l5 5"/>',
+  chat: '<path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-8l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z"/><path d="M8 10h8M8 13h5"/>',
   zoomOut: '<circle cx="11" cy="11" r="7"/><path d="M8 11h6M16 16l5 5"/>',
 } as const;
 
@@ -129,6 +130,9 @@ export const TOUCH_CSS = `
   .nn-tc-sys .nn-tc-btn { position: relative; width: 40px; height: 40px; margin: 0; border-width: 1px; }
   .nn-tc-sys .nn-tc-btn svg { width: 20px; height: 20px; }
   .nn-tc-sys .nn-tc-label { display: none; }
+  .nn-tc-btn.nn-unread::after { content: ''; position: absolute; top: 2px; right: 2px; width: 9px; height: 9px; border-radius: 50%;
+    background: #f2c46b; box-shadow: 0 0 0 1px rgba(10,12,20,0.8); }
+  .nn-tc.nn-suspended { visibility: hidden; }
   .nn-tc-zoom { position: absolute; right: calc(16px + env(safe-area-inset-right)); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 12px; pointer-events: none; }
   .nn-tc-zoom .nn-tc-btn { position: relative; margin: 0; }
   .nn-tc-zoom[hidden] { display: none; }
@@ -149,12 +153,15 @@ export class TouchControls {
   /** Swipes on the free screen that look around: last position per pointer. */
   private readonly swipes = new Map<number, { x: number; y: number }>();
   private readonly btns: Record<'use' | 'jump' | 'sink' | 'horn' | 'radio' | 'disco', Btn>;
-  private readonly sysBtns: Record<'map' | 'sound' | 'gfx' | 'figure' | 'full', Btn>;
+  private readonly sysBtns: Record<'map' | 'sound' | 'gfx' | 'figure' | 'chat' | 'full', Btn>;
   private readonly zoom: HTMLDivElement;
   private readonly rotate: HTMLDivElement;
   /** Reads the safe-area insets (notch, home bar) in px. */
   private readonly safe: HTMLDivElement;
+  /** Tap on the chat button (set by the game). */
+  onChat: (() => void) | null = null;
   private shown = false;
+  private suspended = false;
   private last = '';
   private walk = true;
 
@@ -199,6 +206,7 @@ export class TouchControls {
       sound: btn('', sys, 'KeyN'),
       gfx: btn('', sys, 'KeyG'),
       figure: btn('', sys, 'KeyC'),
+      chat: btn('', sys, null, () => this.onChat?.()),
       full: btn('', sys, null, () => {
         if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
         else void full.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
@@ -207,6 +215,8 @@ export class TouchControls {
     setBtn(this.sysBtns.map, ICON.map, 'Karte');
     setBtn(this.sysBtns.gfx, ICON.gfx, 'Grafik');
     setBtn(this.sysBtns.figure, ICON.figure, 'Figur');
+    setBtn(this.sysBtns.chat, ICON.chat, 'Chat');
+    this.sysBtns.chat.el.hidden = true; // online only
     setBtn(this.sysBtns.full, ICON.full, 'Vollbild');
     // iPhone Safari has no element fullscreen (Add to Home Screen opens the game without browser bars)
     this.sysBtns.full.el.hidden = typeof full.requestFullscreen !== 'function';
@@ -228,7 +238,7 @@ export class TouchControls {
     // swiping on the open screen above the zones looks around, too
     const canvas = document.getElementById('game');
     canvas?.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch' || !this.shown) return;
+      if (e.pointerType !== 'touch' || !this.shown || this.suspended) return;
       canvas.setPointerCapture(e.pointerId);
       this.swipes.set(e.pointerId, { x: e.clientX, y: e.clientY });
     });
@@ -241,7 +251,8 @@ export class TouchControls {
     // never the browser's. Form fields (the name dialog) keep theirs.
     const own = (e: TouchEvent): void => {
       if (!this.shown || !e.cancelable) return;
-      if ((e.target as Element | null)?.closest?.('input, textarea, select')) return;
+      // form fields (the name dialog) and the chat sheet (scrolling, buttons) keep their touches
+      if ((e.target as Element | null)?.closest?.('input, textarea, select, .nn-chat-sheet')) return;
       e.preventDefault();
     };
     for (const t of ['touchstart', 'touchmove'] as const) document.addEventListener(t, own, { passive: false });
@@ -253,6 +264,26 @@ export class TouchControls {
     window.addEventListener('resize', () => this.layout());
     window.addEventListener('blur', () => this.releaseAll());
     this.layout();
+  }
+
+  /** The chat button is only there while online. */
+  setChatAvailable(on: boolean): void {
+    this.sysBtns.chat.el.hidden = !on;
+  }
+
+  /** Unread dot on the chat button. */
+  setUnread(on: boolean): void {
+    this.sysBtns.chat.el.classList.toggle('nn-unread', on);
+  }
+
+  /** Hides the controls and lets go of every finger while the chat sheet is open. */
+  setSuspended(on: boolean): void {
+    this.suspended = on;
+    this.root.classList.toggle('nn-suspended', on);
+    if (on) {
+      this.releaseAll();
+      this.input.releaseAll();
+    }
   }
 
   private enable(): void {

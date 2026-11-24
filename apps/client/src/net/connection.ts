@@ -1,7 +1,7 @@
 import { Client, type Room } from '@colyseus/sdk';
 import {
-  decodeSnapshot, encodeInputs, NAME_ERRORS, PROTOCOL_VERSION, RECONNECT_S, RETRY_CONNECT_S,
-  type InputPacket, type Snapshot, type StationId, type Weather,
+  clampChat, decodeSnapshot, encodeInputs, NAME_ERRORS, PROTOCOL_VERSION, RECONNECT_S, RETRY_CONNECT_S,
+  type ChatChannel, type ChatLineMsg, type InputPacket, type Snapshot, type StationId, type Weather,
 } from '@nn/shared';
 import { ServerClock } from './clock';
 
@@ -31,7 +31,7 @@ type StatePose = { x: number; y: number; z: number; qx: number; qy: number; qz: 
 export type NetState = {
   players: StateMap<{ slot: number; name: string; mode: number; carId: number; /** Seat in carId (0 driving), −1 otherwise. */ seat?: number; bikeId: number; variant: number; mapX?: number; mapZ?: number }>;
   cars: StateMap<{ driver: number; engine: number; lights: boolean; radio: string } & StatePose>;
-  bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number }>;
+  bikes: StateMap<{ rider: number; x: number; y: number; z: number; heading: number; fall?: number }>;
   lamps: StateMap<StatePose>;
   weather: Weather;
   /** Server tick of an announced restart; 0 or absent = none. */
@@ -100,6 +100,7 @@ export class Connection {
 
   private readonly snapshotListeners = new Set<(s: Snapshot) => void>();
   private pending: Snapshot[] = [];
+  private readonly chatListeners = new Set<(m: ChatLineMsg) => void>();
   private readonly statusListeners = new Set<(s: NetStatus) => void>();
   private readonly welcomeListeners = new Set<(w: Welcome) => void>();
   private resolveWelcome!: (w: Welcome) => void;
@@ -126,6 +127,8 @@ export class Connection {
       }
       for (const cb of this.snapshotListeners) cb(snap);
     });
+    // Registered here so no line is lost; lines before the first listener are dropped.
+    room.onMessage('chat', (m: ChatLineMsg) => { for (const cb of this.chatListeners) cb(m); });
     room.reconnection.minUptime = 0;
     room.reconnection.maxRetries = Math.ceil(RECONNECT_S / 0.5) + 2;
     room.reconnection.backoff = () => 500;
@@ -176,6 +179,11 @@ export class Connection {
     if (this.status === 'online' && this.room.connection.isOpen) this.room.send('variant', v);
   }
 
+  /** A chat line to channel `c` (s = say, w = world); dropped while the socket is down. */
+  sendChat(c: ChatChannel, text: string): void {
+    if (this.status === 'online' && this.room.connection.isOpen) this.room.send('chat', { c, t: clampChat(text) });
+  }
+
   /** Dev only (the server ignores it in production). */
   sendTeleport(x: number, z: number): void {
     if (this.status === 'online' && this.room.connection.isOpen) this.room.send('devTeleport', { x, z });
@@ -188,6 +196,11 @@ export class Connection {
     this.pending = [];
     for (const s of early) cb(s);
     return () => { this.snapshotListeners.delete(cb); };
+  }
+
+  onChat(cb: (m: ChatLineMsg) => void): () => void {
+    this.chatListeners.add(cb);
+    return () => { this.chatListeners.delete(cb); };
   }
 
   /** Fires for every welcome after the first as well, i.e. after each reconnect. */

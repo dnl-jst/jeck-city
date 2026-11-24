@@ -50,11 +50,13 @@ export type LampState = SchemaType<typeof LampState>;
 
 /**
  * A bike away from its manifest spot or with a rider, keyed by bike index. rider: slot, −1 without one. The pose (ground
- * under it, heading) is updated whenever the bike rests (while it moves or is ridden, snapshots carry it).
+ * under it, heading, fall as BikePose.fall) is updated whenever the bike rests (while it moves or is ridden, snapshots
+ * carry it).
  */
 export const BikeSlowState = schema({
   rider: t.int16().default(-1),
   x: t.float32(), y: t.float32(), z: t.float32(), heading: t.float32(),
+  fall: t.int8().default(0),
 }, 'BikeSlowState');
 export type BikeSlowState = SchemaType<typeof BikeSlowState>;
 

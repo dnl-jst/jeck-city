@@ -344,6 +344,11 @@ export class GameAudio {
     this.d.mixer.oneShot(id, { gain: hit * MIX.impact, at: { x, z } });
   }
 
+  /** A parked bike fell over at (x, z): a light clatter. */
+  bikeFallAt(x: number, z: number): void {
+    this.d.mixer.oneShot('impact1', { gain: 0.3 * MIX.impact, at: { x, z } });
+  }
+
   /** Someone was knocked down at (x, z). */
   knockAt(x: number, z: number): void {
     this.d.mixer.oneShot('impact1', { gain: 0.5 * MIX.impact, at: { x, z } });

@@ -14,7 +14,7 @@ const ALLOWED = /^[\p{L}\p{N} \-_.']+$/u;
 const LEET: Record<string, string> = { '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '@': 'a', $: 's' };
 
 /** Lowercase, umlauts → ae/oe/ue/ss, leetspeak undone, diacritics and non-letters dropped. */
-const normaliseForFilter = (name: string): string =>
+export const normaliseForFilter = (name: string): string =>
   name
     .toLowerCase()
     .replace(/ä/g, 'ae')

@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { Client, type Room } from '@colyseus/sdk';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, WORLD_INDEX_FILE,
-  worldHash, type PlayerInput, type Snapshot,
+  CHAT_TEXTS, decodeSnapshot, encodeInputs, headingOf, KNOCKDOWN_S, NEUTRAL_INPUT, PROTOCOL_VERSION, weatherPreset, WORLD_INDEX_FILE,
+  worldHash, type ChatLineMsg, type PlayerInput, type Snapshot,
 } from '@nn/shared';
 import { loadConfig } from './config';
 import { INPUT_BURST, QUEUE_MAX } from './inputs';
@@ -463,6 +463,105 @@ describe.skipIf(!haveAssets)('nippes room', () => {
     srv.room.setWeather(weatherPreset('rain')!);
     await until(() => w().weather.kind === 'rain');
     await leaveAll();
+  });
+
+  describe('chat', () => {
+    const collect = (r: Room): ChatLineMsg[] => {
+      const got: ChatLineMsg[] = [];
+      r.onMessage('chat', (m: ChatLineMsg) => got.push(m));
+      return got;
+    };
+    const slotOf = (r: Room) => srv.room.slotOf(r.sessionId)!;
+    /** Moves B to `dx` metres east of A; returns the real distance between the two. */
+    const placeB = (a: Room, b: Room, dx: number): number => {
+      const pa = srv.room.sim.player(slotOf(a)).pos;
+      srv.room.sim.removePlayer(slotOf(b));
+      srv.room.sim.addPlayer(slotOf(b), { x: pa.x + dx, z: pa.z });
+      const pb = srv.room.sim.player(slotOf(b)).pos;
+      return Math.hypot(pb.x - pa.x, pb.z - pa.z);
+    };
+
+    it('world chat reaches everyone, sender included, with name and slot', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a), gb = collect(b);
+      a.send('chat', { c: 'w', t: ' hallo ' });
+      await until(() => ga.length === 1 && gb.length === 1);
+      const line = { c: 'w', slot: slotOf(a), name: 'Anna', t: 'hallo' };
+      expect(ga[0]).toEqual(line);
+      expect(gb[0]).toEqual(line);
+      await leaveAll();
+    });
+
+    it('say reaches players within 50 m, else the sender hears "unheard"', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a), gb = collect(b);
+      expect(placeB(a, b, 200)).toBeGreaterThan(100);
+      a.send('chat', { c: 's', t: 'psst' });
+      await until(() => ga.length === 2);
+      expect(ga[0]).toMatchObject({ c: 's', t: 'psst' });
+      expect(ga[1]).toEqual({ c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.unheard });
+      await sleep(200);
+      expect(gb).toEqual([]);
+
+      expect(placeB(a, b, 10)).toBeLessThan(50);
+      a.send('chat', { c: 's', t: 'hi' });
+      await until(() => gb.length === 1 && ga.length === 3);
+      expect(gb[0]).toMatchObject({ c: 's', name: 'Anna', t: 'hi' });
+      await sleep(200);
+      expect(ga).toHaveLength(3);
+      await leaveAll();
+    });
+
+    it('an away player does not count as having heard a say line', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a);
+      expect(placeB(a, b, 10)).toBeLessThan(50);
+      // B's seat is away (as after a dropped connection, inside the reconnect window)
+      (srv.room as unknown as { seats: Map<string, { away: boolean }> }).seats.get(b.sessionId)!.away = true;
+      a.send('chat', { c: 's', t: 'hallo?' });
+      await until(() => ga.length === 2);
+      expect(ga[1]).toEqual({ c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.unheard });
+      await leaveAll();
+    });
+
+    it('chat is throttled: 6th message gives one "slow" notice and no kick', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a);
+      for (let i = 0; i < 8; i++) a.send('chat', { c: 'w', t: `m${i}` });
+      await sleep(400);
+      expect(ga.filter((m) => m.c === 'w')).toHaveLength(5);
+      expect(ga.filter((m) => m.c === 'sys' && m.t === CHAT_TEXTS.slow)).toHaveLength(1);
+      expect(srv.room.clients.length).toBe(2);
+      void b;
+      await leaveAll();
+    });
+
+    it('malformed or oversized-text chat does not kick', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a);
+      a.send('chat', 'x');
+      a.send('chat', { c: 'q', t: 'x' });
+      a.send('chat', { c: 'w', t: '😀'.repeat(120) });
+      await until(() => ga.length === 1);
+      expect(new TextEncoder().encode(ga[0]!.t).length).toBeLessThanOrEqual(400);
+      expect(srv.room.clients.length).toBe(2);
+      void b;
+      await leaveAll();
+    });
+
+    it('bad words are starred', async () => {
+      const a = await join('Anna');
+      const ga = collect(a);
+      a.send('chat', { c: 'w', t: 'du Vollidiot' });
+      await until(() => ga.length === 1);
+      expect(ga[0]!.t).toBe('du *********');
+      await leaveAll();
+    });
   });
 
   // Last: the announced restart stays in the shared room's state.
