@@ -1,6 +1,8 @@
 node_modules/
 dist/
 data/raw/
+# written next to the lock by `npm run raw:update`, renamed into place
+data/raw.lock.json.part
 .superpowers/
 .DS_Store
 shots/

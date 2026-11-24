@@ -2,12 +2,12 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { brotliDecompressSync } from 'node:zlib';
 import { DGM_TILES, fetchDgmTiles, fetchGtfs, fetchLod2Tiles, fetchOsm, fetchTransitRoutes, LOD2_TILES, TRANSIT_ROUTES_FILE } from '../fetch.js';
-import { GTFS_URL, gtfsCalendar, gtfsSampleDays } from '../gtfs.js';
+import { GTFS_TABLES, GTFS_URL, gtfsCalendar, gtfsSampleDays } from '../gtfs.js';
 import { encode, inPool } from '../publish/publish.js';
 import type { ObjectStore } from '../publish/store.js';
 import { contentHash } from '../worldindex.js';
 import { readZipText, zipEntryNames } from './gtfs-zip.js';
-import { GTFS_ZIP, parseRawLock, pipelineRawPaths, RAW_UPDATE_HINT, rawKey, type RawLock } from './lock.js';
+import { GTFS_ZIP, MIRROR_RE, parseRawLock, pipelineRawPaths, RAW_UPDATE_HINT, rawKey, type RawLock } from './lock.js';
 import { ensureRawFiles } from './resolve.js';
 
 /** What `npm run raw:update` can fetch anew from the origin servers. */
@@ -29,6 +29,8 @@ function sourceOf(path: string): RawSource | null {
 const STAGING = '.update';
 /** The licence notice in the mirror, next to the raw objects. */
 export const LICENSE_KEY = 'raw/LICENSE.txt';
+/** The licence notice is the one mirror key that is rewritten (when its text changes): cached for an hour only. */
+const LICENSE_CACHE_CONTROL = 'public, max-age=3600';
 const UPLOADS_IN_FLIGHT = 4;
 
 /** Plain-text notice uploaded as raw/LICENSE.txt (sources and licences of the mirrored raw data). */
@@ -110,7 +112,7 @@ async function fillMirror(store: ObjectStore, files: RawLock['files'], where: (p
   const notice = new TextEncoder().encode(licence);
   if (!existing.has(LICENSE_KEY) || Buffer.compare(await storedBytes(store, LICENSE_KEY), notice) !== 0) {
     const { body, meta } = await encode(notice, LICENSE_KEY);
-    await store.put(LICENSE_KEY, body, meta);
+    await store.put(LICENSE_KEY, body, { ...meta, cacheControl: LICENSE_CACHE_CONTROL });
     log(`mirror: ${LICENSE_KEY} written`);
   }
   // list once more: the lock must never name a mirror that lacks one of its files
@@ -151,6 +153,9 @@ export async function updateRaw(o: {
 }): Promise<RawLock> {
   const { dir, lockFile, store, fetchFn = fetch, now = new Date(), log = console.log } = o;
   const refresh = new Set(o.what);
+  if (o.mirror !== null && !MIRROR_RE.test(o.mirror)) {
+    throw new Error(`raw:update: the mirror URL must be http(s) with trailing slash (RAW_MIRROR_URL), got ${JSON.stringify(o.mirror)}`);
+  }
   const old = await readLockIfAny(lockFile);
 
   // every file a pipeline run needs is either fetched now or pinned already
@@ -186,8 +191,11 @@ export async function updateRaw(o: {
 
     let gtfsDays = old.gtfsDays;
     if (refresh.has('gtfs')) {
-      const calendar = await readZipText(where(GTFS_ZIP), 'calendar.txt');
-      if (calendar === null) throw new Error(`gtfs: the feed from ${GTFS_URL} has no calendar.txt`);
+      // a feed the build could not read is never pinned (the build would only find out after minutes of work)
+      const entries = new Set(await zipEntryNames(where(GTFS_ZIP)));
+      const lacking = GTFS_TABLES.filter((t) => !entries.has(t));
+      if (lacking.length) throw new Error(`gtfs: the feed from ${GTFS_URL} lacks ${lacking.join(', ')} (at the zip's root); not pinned`);
+      const calendar = (await readZipText(where(GTFS_ZIP), 'calendar.txt'))!;
       gtfsDays = gtfsSampleDays(gtfsCalendar(calendar), now);
       log(`gtfs: sample days ${gtfsDays.join(', ')} (Tuesday, Saturday, Sunday)`);
     }

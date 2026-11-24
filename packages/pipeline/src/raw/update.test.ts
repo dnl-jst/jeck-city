@@ -37,7 +37,7 @@ function body(path: string, version = 1): Uint8Array {
 }
 
 /** A fetch standing in for the origin servers; records every URL. `fail`: a URL part answered with HTTP 500. */
-function origins(o: { fail?: string; version?: number } = {}) {
+function origins(o: { fail?: string; version?: number; zip?: Uint8Array } = {}) {
   const calls: string[] = [];
   const fn = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
@@ -50,7 +50,7 @@ function origins(o: { fail?: string; version?: number } = {}) {
     else if (u.includes('dgm1_tiff')) path = `dgm1/${name}`;
     else if (u.includes('/api/interpreter')) path = new URLSearchParams(String(init?.body)).get('data') === TRANSIT_ROUTES_QUERY ? 'transit-routes.json' : 'osm.json';
     else return new Response('not found', { status: 404 });
-    return new Response(body(path, o.version));
+    return new Response(path === 'gtfs.zip' && o.zip ? o.zip : body(path, o.version));
   });
   return { fetchFn: fn as unknown as typeof fetch, calls };
 }
@@ -91,6 +91,7 @@ it('updateRaw uploads only files the mirror lacks and writes them under rawKey w
 
   const licence = store.meta.get('raw/LICENSE.txt')!;
   expect(licence.contentType).toMatch(/^text\/plain/);
+  expect(licence.cacheControl).toBe('public, max-age=3600'); // the one key that changes: not immutable
   const got = await store.get('raw/LICENSE.txt');
   const text = new TextDecoder().decode(got.contentEncoding === 'br' ? unbr(got.body) : got.body);
   expect(text).toContain('dl-de/zero-2.0');
@@ -170,5 +171,26 @@ it('updateRaw refuses a run that would leave a file the pipeline needs out of th
   const { fetchFn, calls } = origins();
   await expect(updateRaw({ dir: raw, lockFile, what: ['osm'], store: null, mirror: null, fetchFn, now: NOW, log })).rejects.toThrow(/raw:update -- tiles/);
   expect(calls).toEqual([]);
+  expect(existsSync(lockFile)).toBe(false);
+});
+
+it('a feed that lacks one of the six tables is refused: nothing uploaded, the old lock kept', async () => {
+  const store = memoryStore();
+  await updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: MIRROR, fetchFn: origins().fetchFn, now: NOW, log });
+  const before = await readFile(lockFile, 'utf8'), puts = store.puts.length;
+  const { 'stop_times.txt': _, ...rest } = GTFS_FIXTURE;
+  const { fetchFn } = origins({ zip: makeZip(rest) });
+  await expect(updateRaw({ dir: raw, lockFile, what: ['gtfs'], store, mirror: MIRROR, fetchFn, now: NOW, log })).rejects.toThrow(/stop_times\.txt/);
+  expect(store.puts.length).toBe(puts);
+  expect(await readFile(lockFile, 'utf8')).toBe(before);
+  expect(new Uint8Array(await readFile(join(raw, 'gtfs.zip')))).toEqual(ZIP);
+});
+
+it('updateRaw rejects a mirror URL without trailing slash before any download or upload', async () => {
+  const store = memoryStore();
+  const { fetchFn, calls } = origins();
+  await expect(updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: 'https://raw.example.org', fetchFn, now: NOW, log })).rejects.toThrow(/mirror/);
+  expect(calls).toEqual([]);
+  expect(store.puts).toEqual([]);
   expect(existsSync(lockFile)).toBe(false);
 });

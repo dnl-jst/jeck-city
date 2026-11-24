@@ -19,6 +19,8 @@ export const RAW_LOCK_FILE = 'data/raw.lock.json';
 export const RAW_UPDATE_HINT = 'npm run raw:update';
 
 const HASH_RE = /^[0-9a-f]{32}$/;
+/** A mirror's public base URL: http(s), with trailing slash. */
+export const MIRROR_RE = /^https?:\/\/.+\/$/;
 /** Forward-slash segments, no empty, '.' or '..' segment, no leading slash. */
 const PATH_RE = /^(?!.*(?:^|\/)\.{1,2}(?:\/|$))[^/\\]+(?:\/[^/\\]+)*$/;
 
@@ -28,7 +30,7 @@ export function parseRawLock(json: unknown): RawLock {
   if (!isRecord(json)) throw new Error('raw lock: not an object');
   if (json.version !== 1) throw new Error(`raw lock: unknown version ${JSON.stringify(json.version)}`);
   const { mirror } = json;
-  if (mirror !== null && (typeof mirror !== 'string' || !/^https?:\/\/.+\/$/.test(mirror))) {
+  if (mirror !== null && (typeof mirror !== 'string' || !MIRROR_RE.test(mirror))) {
     throw new Error(`raw lock: mirror must be null or an http(s) URL with trailing slash, got ${JSON.stringify(mirror)}`);
   }
   if (!isRecord(json.files)) throw new Error('raw lock: files must be an object');
