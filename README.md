@@ -103,6 +103,13 @@ Einrichten:
    S3_ACCESS_KEY_ID=…
    S3_SECRET_ACCESS_KEY=…
    ```
+4. Auf das schlanke Image umstellen, in dieser Reihenfolge:
+   1. Zuerst auf dem Server `WORLD_URL` in `deploy/.env` setzen und `docker compose up -d game` (die Welt des
+      laufenden Images muss dann schon im Bucket liegen: vorher `npm run world:publish`; `/healthz` zeigt
+      `"worldPublished":true`).
+   2. Erst danach die Repository-Variable `WORLD_URL` setzen: Ab dann baut die Action schlanke Images
+      (`WORLD_FILES=server`). Ein schlankes Image ohne `WORLD_URL` verweigert den Start – deshalb muss der Server die
+      Adresse schon haben, bevor das erste schlanke Image kommt.
 
 Veröffentlichen (die Action tut das bei gesetzter Repository-Variable `WORLD_URL` vor dem Image-Bau):
 
@@ -114,6 +121,8 @@ npm run world:publish
 
 Alte Welten aufräumen: behält die laufende Welt (aus `/healthz` des Live-Servers) und die letzten fünf. Erst ohne
 `--delete` ansehen, was entfernt würde, dann mit `--delete` löschen; nicht während eines Veröffentlichens laufen lassen.
+Objekte, die jünger als 24 Stunden sind, bleiben in jedem Fall liegen (ein Veröffentlichen könnte sie gerade brauchen);
+die Ausgabe listet sie gesondert.
 
 ```
 npm run world:prune -- --live https://<domain>/healthz
@@ -181,3 +190,9 @@ docker run -d --name nippes --restart unless-stopped -p 127.0.0.1:2567:2567 -e M
 `docker stop` schickt `SIGTERM`: Der Server kündigt den Neustart an, die Spieler sehen 60 s lang (`RESTART_NOTICE_S`)
 einen Countdown, danach beendet er sich. `-t 90` lässt ihm dafür Zeit (der Standard von 10 s würde ihn vorher
 abbrechen); ohne Spieler beendet er sich sofort. Nach dem Neustart lädt ein offener Client die Seite von selbst neu.
+`RESTART_NOTICE_S` muss kleiner bleiben als diese Wartezeit (`-t` bzw. `stop_grace_period`), sonst bricht Docker den
+Countdown ab.
+
+**Umstieg mit Docker Compose:** Vor dem ersten Image mit Countdown die neue `deploy/docker-compose.yml`
+(`stop_grace_period: 90s`) auf den Server kopieren. Mit der alten Datei gibt Docker dem Container nur die
+Standard-Wartezeit von 10 s und beendet den Server 10 s nach Beginn des 60-s-Countdowns hart.

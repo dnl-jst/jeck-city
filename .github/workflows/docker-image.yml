@@ -175,6 +175,14 @@ jobs:
             # the server checks in the background that the bucket holds this world
             for i in $(seq 1 10); do curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true' && break; sleep 1; done
             curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true'
+            # browsers load the world cross-origin: without the bucket's CORS rule nothing loads
+            hash=$(curl -fsS http://127.0.0.1:2567/healthz | sed -n 's/.*"worldHash":"\([0-9a-f]*\)".*/\1/p')
+            test -n "$hash"
+            if ! curl -fsS -o /dev/null -D - -H 'Origin: https://example.org' "${WORLD_URL%/}/worlds/$hash.json" \
+                | grep -qi '^access-control-allow-origin:'; then
+              echo "::error::The bucket answers without Access-Control-Allow-Origin: its CORS rule is missing, browsers cannot load the world. See README.md, section 'Welt im Objektspeicher' (Einrichten, step 2)."
+              exit 1
+            fi
           else
             curl -fsS http://127.0.0.1:2567/config.json | grep -q '"worldUrl":null'
           fi
