@@ -14,6 +14,9 @@ export async function buildWorldIndex(dir: string): Promise<WorldIndex> {
   const files: WorldIndex['files'] = {};
   for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
     if (!entry.isFile()) throw new Error(`world folder must be flat, found ${entry.name} (not a file)`);
+    if (/\.(br|gz)$/.test(entry.name)) {
+      throw new Error(`${entry.name} in ${dir}: this looks like a built dist/world (compressed copies), not the pipeline output; index apps/client/public/world`);
+    }
     const data = await readFile(join(dir, entry.name));
     files[entry.name] = { hash: contentHash(data), bytes: data.byteLength };
   }

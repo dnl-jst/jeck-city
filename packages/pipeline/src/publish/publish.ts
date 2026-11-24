@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { brotliCompress, constants } from 'node:zlib';
 import { objectKey, parseWorldIndex, WORLD_INDEX_FILE, worldHash, worldObjectKey } from '@nn/shared';
-import { buildWorldIndex } from '../worldindex.js';
+import { buildWorldIndex, contentHash } from '../worldindex.js';
 import type { ObjectStore, PutMeta } from './store.js';
 
 const compress = promisify(brotliCompress);
@@ -102,12 +102,25 @@ export async function publishWorld(
   let uploaded = 0;
   let uploadedBytes = 0;
   await inPool(missing, UPLOADS_IN_FLIGHT, async ([key, name]) => {
-    const { body, meta } = await encode(await readFile(join(dir, name)), name);
+    const raw = await readFile(join(dir, name));
+    // The key is never overwritten: bytes that changed since the check would stay wrong for good.
+    if (contentHash(raw) !== index.files[name]!.hash) {
+      throw new Error(`${name} changed while publishing; run npm run world:index and publish again`);
+    }
+    const { body, meta } = await encode(raw, name);
     await store.put(key, body, meta);
     uploaded++;
     uploadedBytes += body.byteLength;
     if (uploaded % 100 === 0) log(`  ${uploaded}/${missing.length} uploaded`);
   });
+
+  // List once more: the world file must never name an object that is not there.
+  const stored = new Set((await store.list('objects/')).map((o) => o.key));
+  const lost = [...byKey.keys()].filter((key) => !stored.has(key));
+  if (lost.length > 0) {
+    const shown = lost.slice(0, 5).join(', ') + (lost.length > 5 ? `, … (${lost.length} in all)` : '');
+    throw new Error(`objects missing from the bucket after the upload (${shown}); not listing world ${hash}, publish again`);
+  }
 
   const copy = await encode(indexBytes, WORLD_INDEX_FILE);
   await store.put(worldObjectKey(hash), copy.body, copy.meta);

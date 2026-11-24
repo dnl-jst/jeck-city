@@ -11,16 +11,18 @@ export interface ObjectStore {
 }
 
 /**
- * In-memory store for tests. `puts` records every put key in order, `meta` the last metadata per key.
- * `lastModified` advances one second per put, so "newest" is deterministic.
+ * In-memory store for tests. `puts` records every put key in order, `deletes` every delete call, `meta` the last
+ * metadata per key. `lastModified` advances one second per put, so "newest" is deterministic.
  */
-export function memoryStore(): ObjectStore & { puts: string[]; meta: Map<string, PutMeta> } {
+export function memoryStore(): ObjectStore & { puts: string[]; deletes: string[][]; meta: Map<string, PutMeta> } {
   const objects = new Map<string, { body: Uint8Array; lastModified: Date }>();
   const puts: string[] = [];
+  const deletes: string[][] = [];
   const meta = new Map<string, PutMeta>();
   let clock = Date.UTC(2026, 0, 1);
   return {
     puts,
+    deletes,
     meta,
     async list(prefix) {
       return [...objects]
@@ -40,6 +42,7 @@ export function memoryStore(): ObjectStore & { puts: string[]; meta: Map<string,
       puts.push(key);
     },
     async delete(keys) {
+      deletes.push([...keys]);
       for (const key of keys) {
         objects.delete(key);
         meta.delete(key);

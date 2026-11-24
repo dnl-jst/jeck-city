@@ -96,6 +96,32 @@ describe('publishWorld', () => {
     expect(store.puts).toEqual([]);
   });
 
+  it('rejects a file that changes between the check and its upload and writes no worlds/<hash>.json', async () => {
+    const changing: ObjectStore = {
+      ...store,
+      // listing runs after the check and before the first upload
+      list: async (prefix) => {
+        await writeFile(join(dir, 'b.glb'), 'glTF'.repeat(49) + 'XXXX');
+        return store.list(prefix);
+      },
+    };
+    await expect(publishWorld(dir, changing)).rejects.toThrow(/b\.glb.*world:index/);
+    expect(await store.list('worlds/')).toEqual([]);
+    expect(await store.list('objects/')).not.toContainEqual(expect.objectContaining({ key: key('b.glb') }));
+  });
+
+  it('fails before worlds/<hash>.json when an uploaded object is gone from the store', async () => {
+    const losing: ObjectStore = {
+      ...store,
+      put: async (k, body, meta) => {
+        await store.put(k, body, meta);
+        if (k === key('a.bin')) await store.delete([k]);
+      },
+    };
+    await expect(publishWorld(dir, losing)).rejects.toThrow(new RegExp(key('a.bin').replace(/[./]/g, '\\$&')));
+    expect(await store.list('worlds/')).toEqual([]);
+  });
+
   it('an interrupted run leaves no worlds/<hash>.json and the next run uploads only the rest', async () => {
     let calls = 0;
     const failing: ObjectStore = {

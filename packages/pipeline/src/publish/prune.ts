@@ -12,16 +12,19 @@ async function worldObjects(store: ObjectStore, hash: string): Promise<string[]>
   return Object.entries(index.files).map(([name, entry]) => objectKey(name, entry.hash));
 }
 
+/** Objects uploaded more recently than this are never removed: a publish may still be running for them. */
+export const RECENT_MS = 24 * 3600_000;
+
 /**
  * Keeps the live world and the newest `keep` worlds (by the upload time of worlds/<hash>.json), removes every other
  * world and every object no kept world names (also orphans left by an interrupted publish).
- * With `delete: false` it only reports. Must not run while a publish is in progress: the objects of a world being
- * published are named by no kept world yet.
+ * With `delete: false` it only reports. Objects younger than 24 h (relative to `now`) are kept and listed in
+ * `skippedRecent`: a publish in progress has uploaded them but no world names them yet.
  */
 export async function pruneWorlds(
   store: ObjectStore,
-  o: { liveHash: string; keep: number; delete: boolean },
-): Promise<{ keptWorlds: string[]; removedWorlds: string[]; removedObjects: string[] }> {
+  o: { liveHash: string; keep: number; delete: boolean; now?: Date },
+): Promise<{ keptWorlds: string[]; removedWorlds: string[]; removedObjects: string[]; skippedRecent: string[] }> {
   if (!Number.isInteger(o.keep) || o.keep < 0) throw new Error(`keep must be a whole number ≥ 0, got ${o.keep}`);
   const worlds = (await store.list('worlds/'))
     .flatMap(({ key, lastModified }) => {
@@ -40,12 +43,16 @@ export async function pruneWorlds(
   const kept = new Set<string>();
   for (const hash of keptWorlds) for (const key of await worldObjects(store, hash)) kept.add(key);
   // Every object no kept world names, including orphans an interrupted publish left behind.
-  const removedObjects = (await store.list('objects/')).map((x) => x.key).filter((key) => !kept.has(key)).sort();
+  const unnamed = (await store.list('objects/')).filter((x) => !kept.has(x.key));
+  const cutoff = (o.now ?? new Date()).getTime() - RECENT_MS;
+  const removedObjects = unnamed.filter((x) => x.lastModified.getTime() <= cutoff).map((x) => x.key).sort();
+  const skippedRecent = unnamed.filter((x) => x.lastModified.getTime() > cutoff).map((x) => x.key).sort();
 
   if (o.delete) {
-    // Objects first: should this stop halfway, the world files are still there and the next run removes the rest.
-    if (removedObjects.length > 0) await store.delete(removedObjects);
+    // World files first: should this stop halfway, no world file is left naming deleted objects; the objects that
+    // remain are orphans the next run removes.
     if (removedWorlds.length > 0) await store.delete(removedWorlds.map(worldObjectKey));
+    if (removedObjects.length > 0) await store.delete(removedObjects);
   }
-  return { keptWorlds, removedWorlds, removedObjects };
+  return { keptWorlds, removedWorlds, removedObjects, skippedRecent };
 }

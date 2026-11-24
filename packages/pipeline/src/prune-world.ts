@@ -43,5 +43,7 @@ if (import.meta.url === `file://${resolve(process.argv[1] ?? '')}`) {
   console.log(`removed worlds (${r.removedWorlds.length}): ${r.removedWorlds.join(' ')}`);
   console.log(`removed objects: ${r.removedObjects.length}`);
   for (const key of r.removedObjects) console.log(`  ${key}`);
+  console.log(`kept, younger than 24 h (a publish may still be running): ${r.skippedRecent.length}`);
+  for (const key of r.skippedRecent) console.log(`  ${key}`);
   if (!values.delete) console.log('dry run: nothing deleted (pass --delete to delete)');
 }

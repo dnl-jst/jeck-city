@@ -36,4 +36,10 @@ describe('world index', () => {
     await mkdir(join(dir, 'sub'));
     await expect(buildWorldIndex(dir)).rejects.toThrow(/flat/);
   });
+
+  it.each(['map.json.br', 'map.json.gz'])('rejects a built dist/world (%s)', async (name) => {
+    await writeFile(join(dir, 'map.json'), '{}');
+    await writeFile(join(dir, name), 'x');
+    await expect(buildWorldIndex(dir)).rejects.toThrow(/dist\/world/);
+  });
 });

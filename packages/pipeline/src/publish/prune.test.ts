@@ -90,6 +90,28 @@ describe('pruneWorlds', () => {
     expect(await keys('worlds/')).toHaveLength(4);
   });
 
+  it('keeps an orphan younger than 24 h (a publish may still be running) and lists it in skippedRecent', async () => {
+    const orphan = key('new.glb', 'uploaded by a running publish');
+    await store.put(orphan, Buffer.from('uploaded by a running publish'), {
+      contentType: 'model/gltf-binary',
+      cacheControl: 'public, max-age=31536000, immutable',
+    });
+    const uploadedAt = (await store.list('objects/')).find((o) => o.key === orphan)!.lastModified.getTime();
+    const young = await pruneWorlds(store, { liveHash: w4, keep: 5, delete: true, now: new Date(uploadedAt + 23 * 3600_000) });
+    expect(young.removedObjects).toEqual([]);
+    expect(young.skippedRecent).toEqual([orphan]);
+    expect(await keys('objects/')).toContain(orphan);
+    const old = await pruneWorlds(store, { liveHash: w4, keep: 5, delete: true, now: new Date(uploadedAt + 25 * 3600_000) });
+    expect(old.removedObjects).toEqual([orphan]);
+    expect(old.skippedRecent).toEqual([]);
+    expect(await keys('objects/')).not.toContain(orphan);
+  });
+
+  it('deletes the world files before their objects', async () => {
+    const r = await pruneWorlds(store, { liveHash: w4, keep: 0, delete: true });
+    expect(store.deletes).toEqual([r.removedWorlds.map(worldObjectKey), r.removedObjects]);
+  });
+
   it('throws when the live world has no worlds/<hash>.json in the store', async () => {
     await expect(pruneWorlds(store, { liveHash: 'ffffffffffff', keep: 5, delete: true })).rejects.toThrow(/live/);
     expect(await keys('worlds/')).toHaveLength(4);
