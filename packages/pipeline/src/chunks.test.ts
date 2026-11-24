@@ -3,11 +3,12 @@ import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
 import { readFileSync } from 'node:fs';
-import { expect, test } from 'vitest';
-import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
+import { expect, test, vi } from 'vitest';
+import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
 import { boxBuilding } from './fixture.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
+import * as ground from './ground.js';
 import { wallEaves } from '../../../apps/client/src/materials/facade';
 import type { Mesh } from './streets.js';
 
@@ -205,4 +206,34 @@ test('markings keep their per-vertex _MARK through chunk split and GLB', async (
   const prim = doc.getRoot().listMeshes().find((m) => m.getName() === 'markings')!.listPrimitives()[0]!;
   expect(prim.listSemantics().sort()).toEqual(['POSITION', 'TEXCOORD_0', '_MARK']);
   expect(Array.from(prim.getAttribute('_MARK')!.getArray()!)).toEqual([1, 0, 1]);
+});
+
+test('chunkGeometries yields exactly what buildChunks returned before: same keys in the same order, identical typed arrays', () => {
+  const area = { minX: 0, minZ: 0, maxX: 400, maxZ: 400 };
+  const extra = { road: twoTris(0.5), tram: twoTris(0.6) }; // bridge-deck pieces: appended to road, alone in tram
+  const yielded = [...chunkGeometries(buildings(), streets(), { B: 'models/b.glb' }, area, terrain(), extra)];
+  // union of building chunks (-1_0 lies outside the area), street chunks and ground squares, by (iz, ix)
+  expect(yielded.map((c) => c.key)).toEqual(['-1_0', '0_0', '1_0', '0_1', '1_1']);
+  expect(yielded).toEqual(buildChunks(buildings(), streets(), { B: 'models/b.glb' }, area, terrain(), extra));
+  const c = yielded.find((k) => k.key === '1_0')!;
+  expect(c.ground).toEqual(ground.groundMesh(terrain(), 1, 0));
+  expect(Array.from(c.streets.road!.positions)).toEqual([210, 0.01, 10, 210, 0.01, 20, 220, 0.01, 10, 210, 0.5, 10, 210, 0.5, 20, 220, 0.5, 10].map(Math.fround));
+  expect(Array.from(c.streets.road!.indices)).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(Array.from(c.streets.tram!.indices)).toEqual([0, 1, 2]);
+  expect(yielded.find((k) => k.key === '0_0')!.buildings!.ranges.map((r) => r.id)).toEqual(['A']);
+  expect(yielded.find((k) => k.key === '-1_0')!.ground).toBeUndefined();
+});
+
+test('the ground mesh of a chunk is built when the chunk is yielded, not before', () => {
+  const spy = vi.spyOn(ground, 'groundMesh');
+  try {
+    const it = chunkGeometries([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain(), {});
+    expect(spy).toHaveBeenCalledTimes(0);
+    expect(it.next().value!.key).toBe('0_0');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(it.next().value!.key).toBe('1_0');
+    expect(spy).toHaveBeenCalledTimes(2);
+  } finally {
+    spy.mockRestore();
+  }
 });

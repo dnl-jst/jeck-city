@@ -4,7 +4,7 @@ import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { BuildingMesh } from './buildings.js';
-import { groundMesh, type GroundMesh } from './ground.js';
+import { groundMesh, groundSpan, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
@@ -120,47 +120,69 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
  * Street triangles outside `area` are dropped (OSM ways reach far beyond the play area).
  * With `terrain`, every chunk square that intersects `area` (the whole grid without `area`) and overlaps the
  * grid gets its `ground` mesh, also when it holds no buildings or streets.
+ * Yields the chunks one at a time, sorted by (iz, ix): the set of keys is fixed up front, a chunk's building batch
+ * and ground mesh are built when it is yielded, and nothing of a yielded chunk is kept.
  */
-export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): ChunkGeometry[] {
-  const chunks = new Map<string, ChunkGeometry>();
-  const chunk = (key: string): ChunkGeometry => {
-    let c = chunks.get(key);
-    if (!c) {
-      const [ix, iz] = key.split('_').map(Number) as [number, number];
-      chunks.set(key, (c = { key, ix, iz, streets: {} }));
-    }
-    return c;
-  };
-  const batches = new Map<string, BatchBuilder>();
+export function* chunkGeometries(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect,
+  terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): Generator<ChunkGeometry> {
+  const keys = new Set<string>();
+  /** chunk key → its buildings, in `buildings` order */
+  const byChunk = new Map<string, BuildingMesh[]>();
   for (const b of buildings) {
     if (b.id in overrides) continue; // TODO: insert the replacement GLB from overrides[b.id] into this chunk
     const key = chunkKey(b.centroid.x, b.centroid.z);
-    chunk(key);
-    let batch = batches.get(key);
-    if (!batch) batches.set(key, (batch = new BatchBuilder()));
-    batch.add(b);
+    keys.add(key);
+    let list = byChunk.get(key);
+    if (!list) byChunk.set(key, (list = []));
+    list.push(b);
   }
-  for (const [key, batch] of batches) chunk(key).buildings = batch.build();
-  for (const name of STREET_MESHES) for (const [key, m] of splitMesh(streets[name], area)) chunk(key).streets[name] = m;
+  const parts = (meshes: Partial<StreetMeshes>) => STREET_MESHES.map((name) => {
+    const m = meshes[name];
+    const split = m ? splitMesh(m, area) : new Map<string, Mesh>();
+    for (const key of split.keys()) keys.add(key);
+    return split;
+  });
+  const own = parts(streets);
   // further triangles per mesh name (the bridge decks), appended chunk by chunk: no copy of the big draped meshes
-  for (const name of STREET_MESHES) {
-    const more = extra[name];
-    if (!more) continue;
-    for (const [key, m] of splitMesh(more, area)) {
-      const c = chunk(key), have = c.streets[name];
-      c.streets[name] = have ? concatMeshes([have, m]) : m;
-    }
-  }
+  const more = parts(extra);
+  const grounded = new Set<string>();
   if (terrain) {
     const r = area ?? { minX: terrain.x0, minZ: terrain.z0, maxX: terrain.x0 + terrain.cols - 1, maxZ: terrain.z0 + terrain.rows - 1 };
     for (let iz = Math.floor(r.minZ / CHUNK_SIZE); iz < Math.ceil(r.maxZ / CHUNK_SIZE); iz++) {
       for (let ix = Math.floor(r.minX / CHUNK_SIZE); ix < Math.ceil(r.maxX / CHUNK_SIZE); ix++) {
-        const g = groundMesh(terrain, ix, iz);
-        if (g) chunk(`${ix}_${iz}`).ground = g;
+        if (!groundSpan(terrain, ix, iz)) continue;
+        keys.add(`${ix}_${iz}`);
+        grounded.add(`${ix}_${iz}`);
       }
     }
   }
-  return [...chunks.values()].sort((a, b) => a.iz - b.iz || a.ix - b.ix);
+  const order = [...keys].map((key) => {
+    const [ix, iz] = key.split('_').map(Number) as [number, number];
+    return { key, ix, iz };
+  }).sort((a, b) => a.iz - b.iz || a.ix - b.ix);
+  for (const { key, ix, iz } of order) {
+    const c: ChunkGeometry = { key, ix, iz, streets: {} };
+    const list = byChunk.get(key);
+    if (list) {
+      const batch = new BatchBuilder();
+      for (const b of list) batch.add(b);
+      c.buildings = batch.build();
+      byChunk.delete(key);
+    }
+    STREET_MESHES.forEach((name, i) => {
+      const have = own[i]!.get(key), deck = more[i]!.get(key);
+      own[i]!.delete(key);
+      more[i]!.delete(key);
+      if (have || deck) c.streets[name] = have && deck ? concatMeshes([have, deck]) : (have ?? deck)!;
+    });
+    if (terrain && grounded.has(key)) c.ground = groundMesh(terrain, ix, iz)!;
+    yield c;
+  }
+}
+
+/** All chunks at once (see chunkGeometries). */
+export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): ChunkGeometry[] {
+  return [...chunkGeometries(buildings, streets, overrides, area, terrain, extra)];
 }
 
 let encoderReady: Promise<void> | undefined;

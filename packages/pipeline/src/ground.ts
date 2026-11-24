@@ -6,6 +6,14 @@ export type GroundMesh = Mesh & { normals: Float32Array };
 /** Tolerance for grid points that lie on a chunk edge up to float error. */
 const EPS = 1e-6;
 
+/** The grid columns/rows chunk (ix, iz) covers (inclusive); null when it overlaps the grid in less than one cell. */
+export function groundSpan(t: TerrainGrid, ix: number, iz: number): { c0: number; c1: number; r0: number; r1: number } | null {
+  const x = ix * CHUNK_SIZE, z = iz * CHUNK_SIZE;
+  const c0 = Math.max(0, Math.ceil(x - t.x0 - EPS)), c1 = Math.min(t.cols - 1, Math.floor(x + CHUNK_SIZE - t.x0 + EPS));
+  const r0 = Math.max(0, Math.ceil(z - t.z0 - EPS)), r1 = Math.min(t.rows - 1, Math.floor(z + CHUNK_SIZE - t.z0 + EPS));
+  return c1 <= c0 || r1 <= r0 ? null : { c0, c1, r0, r1 };
+}
+
 /**
  * Terrain surface of chunk (ix, iz): every grid point in [ix·200, ix·200+200] × [iz·200, iz·200+200] ∩ grid
  * (edge rows/columns are shared with the neighbour chunk, so there are no gaps), two triangles per 1 m cell
@@ -14,10 +22,9 @@ const EPS = 1e-6;
  * null when the chunk overlaps the grid in less than one cell.
  */
 export function groundMesh(t: TerrainGrid, ix: number, iz: number): GroundMesh | null {
-  const x = ix * CHUNK_SIZE, z = iz * CHUNK_SIZE;
-  const c0 = Math.max(0, Math.ceil(x - t.x0 - EPS)), c1 = Math.min(t.cols - 1, Math.floor(x + CHUNK_SIZE - t.x0 + EPS));
-  const r0 = Math.max(0, Math.ceil(z - t.z0 - EPS)), r1 = Math.min(t.rows - 1, Math.floor(z + CHUNK_SIZE - t.z0 + EPS));
-  if (c1 <= c0 || r1 <= r0) return null;
+  const span = groundSpan(t, ix, iz);
+  if (!span) return null;
+  const { c0, c1, r0, r1 } = span;
   const w = c1 - c0 + 1, h = r1 - r0 + 1;
   const H = (r: number, c: number) => t.heights[r * t.cols + c]!;
   const positions = new Float32Array(w * h * 3), normals = new Float32Array(w * h * 3), uv = new Float32Array(w * h * 2);

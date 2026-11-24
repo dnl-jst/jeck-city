@@ -3,7 +3,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path';
 import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
-import { buildChunks, buildCollision, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
+import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
 import { drapeMesh } from './drape.js';
 import { followDeviation, followTerrain } from './follow.js';
@@ -240,7 +240,8 @@ async function main() {
   for (const file of await readdir(outDir)) if (/^(chunk|model|transit)_.*\.glb$/.test(file)) await rm(join(outDir, file));
 
   const chunks: WorldManifest['chunks'] = [];
-  for (const c of buildChunks(buildings, streets, overrides, area, terrain, decks)) {
+  // one chunk at a time: build → punch → encode → write, then let it go
+  for (const c of chunkGeometries(buildings, streets, overrides, area, terrain, decks)) {
     const file = `chunk_${c.key}.glb`;
     // (triangles belong to the chunk of their centroid and may reach a little beyond its square)
     const x0 = c.ix * CHUNK_SIZE - 10, z0 = c.iz * CHUNK_SIZE - 10, x1 = x0 + CHUNK_SIZE + 20, z1 = z0 + CHUNK_SIZE + 20;
