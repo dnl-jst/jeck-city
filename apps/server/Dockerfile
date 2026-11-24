@@ -34,8 +34,9 @@ RUN for f in index.json manifest.json collision.bin terrain.bin; do \
 COPY packages ./packages
 COPY apps ./apps
 COPY scripts ./scripts
-# Brotli/gzip variants of earlier builds (scripts/precompress.mjs --cache; must exist, usually empty: `mkdir -p
-# .precompress-cache`): unchanged world files are not compressed again.
+# Brotli/gzip variants of earlier builds (CI fills it on the runner for the full image, see
+# .github/workflows/docker-image.yml; otherwise empty, but it must exist: `mkdir -p .precompress-cache`): unchanged
+# world files are not compressed again.
 COPY .precompress-cache/ /precompress-cache/
 # `npm run build` in its two steps: with WORLD_FILES=server everything but the server's world files is removed from the
 # bundle between the client build and the compression, so nothing is compressed that the image does not keep.

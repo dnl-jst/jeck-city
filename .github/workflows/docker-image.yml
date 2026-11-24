@@ -94,7 +94,31 @@ jobs:
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
 
-      # the Dockerfile copies .precompress-cache/ (compressed variants of earlier builds); empty here
+      # Full image only: compressing the >1 GB world takes most of the image build. The pipeline is deterministic, so
+      # between runs nearly every world file is unchanged: the compressed variants are kept in .precompress-cache (by
+      # content hash), which the image build copies in and reuses. Only new or changed files are compressed here; the
+      # cache is pruned to this world and saved under its hash (an unchanged world skips the save). The server image
+      # compresses only a few MB and needs no cache.
+      - id: worldhash
+        if: steps.variant.outputs.world_files == 'full'
+        run: echo "h=$(cd apps/client/public/world && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - id: precompress
+        if: steps.variant.outputs.world_files == 'full'
+        uses: actions/cache/restore@v6
+        with:
+          path: .precompress-cache
+          key: precompress-${{ steps.worldhash.outputs.h }}
+          restore-keys: precompress-
+      - name: Compress the world (only what the cache does not have yet)
+        if: steps.variant.outputs.world_files == 'full' && steps.precompress.outputs.cache-hit != 'true'
+        run: node scripts/precompress.mjs apps/client/public/world --cache .precompress-cache --cache-only --prune
+      - if: steps.variant.outputs.world_files == 'full' && steps.precompress.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .precompress-cache
+          key: precompress-${{ steps.worldhash.outputs.h }}
+
+      # the Dockerfile copies .precompress-cache/; it must exist in both variants (empty for the server image)
       - run: mkdir -p .precompress-cache
 
       - uses: docker/setup-buildx-action@v4
@@ -147,7 +171,7 @@ jobs:
           curl -fsS -o /dev/null -H 'Accept-Encoding: br' http://127.0.0.1:2567/world/manifest.json
           curl -fsS -o /dev/null http://127.0.0.1:2567/world/index.json
           if [ "$WORLD_FILES" = server ]; then
-            curl -fsS http://127.0.0.1:2567/config.json | grep -q worldUrl
+            curl -fsS http://127.0.0.1:2567/config.json | grep -q '"worldUrl":"http'
             # the server checks in the background that the bucket holds this world
             for i in $(seq 1 10); do curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true' && break; sleep 1; done
             curl -fsS http://127.0.0.1:2567/healthz | grep -q '"worldPublished":true'

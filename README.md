@@ -90,6 +90,7 @@ Einrichten:
    ```
    aws s3api put-bucket-cors --bucket <bucket> --cors-configuration file://deploy/object-storage-cors.json --endpoint-url <S3_ENDPOINT>
    ```
+   oder mit s3cmd und derselben Regel als XML: `s3cmd setcors deploy/object-storage-cors.xml s3://<bucket>`.
    **Stand:** Beim Hetzner-Bucket `jeck-city` wurde das Setzen mit `AccessDenied` abgelehnt (Schlüssel des Projekts) –
    noch offen. Solange die Regel fehlt, können Browser die Welt nicht aus dem Bucket laden: `WORLD_URL` weder in
    Produktion noch als Repository-Variable setzen; die Action baut dann das volle Image.
