@@ -18,6 +18,7 @@ import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
 import { RestartBanner, restartSecondsLeft } from './restart-banner';
+import { reloadWhenRestarted, RESTART_TEXT } from './restart-reload';
 import { Props } from './props';
 import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
@@ -264,6 +265,9 @@ let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
 const weatherBadge = new WeatherBadge(document.body);
 const restartBanner = new RestartBanner(document.body);
+/** While online: whether the last frame showed a restart announcement, and the server tick it estimated. */
+let restartAnnounced = false;
+let lastServerTick = 0;
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -341,7 +345,15 @@ renderer.setAnimationLoop((t: number) => {
     const wx = weatherOverride ?? game.session.weather?.() ?? UNKNOWN_WEATHER;
     weatherBlend.offer(wx);
     weatherBadge.set(wx.known ? wx : null, nightFactor > 0.5, onlineSession ? onlineSession.stats().players : null);
-    restartBanner.set(connection?.clock.ready ? restartSecondsLeft(connection.state.restartTick, connection.clock.estimate(performance.now())) : null);
+    {
+      const serverTick = connection?.clock.ready ? connection.clock.estimate(performance.now()) : null;
+      const left = connection && serverTick !== null ? restartSecondsLeft(connection.state.restartTick, serverTick) : null;
+      restartBanner.set(left);
+      if (connection?.status === 'online' && serverTick !== null) {
+        restartAnnounced = left !== null;
+        lastServerTick = serverTick;
+      }
+    }
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
     lighting.update(sun, camera.position, look);
@@ -394,6 +406,10 @@ async function loadMap(): Promise<MapData | null> {
 
 /** The server connection (online mode, once joined); the game then plays on an OnlineSession. */
 let connection: Connection | null = null;
+const LOST_TEXT = 'Verbindung verloren – bitte Seite neu laden.';
+/** An announced restart happened: the page polls for the new server and reloads (see reloadWhenRestarted; only once). */
+let waitingForRestart = false;
+let restartPolled = false;
 /**
  * Name dialog → join. Resolves with the connection (null offline). The world keeps loading meanwhile; a version
  * conflict leaves the dialog showing its text and never resolves.
@@ -410,7 +426,27 @@ async function connect(): Promise<Connection | null> {
     const hash = await hashing;
     try {
       const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
-      conn.onStatus((s) => hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? 'Verbindung verloren – bitte Seite neu laden.' : ''));
+      conn.onStatus((s) => {
+        // after an announced restart: wait for the new server and reload (the ticks keep the old one from counting)
+        if (s !== 'online' && restartAnnounced && !restartPolled) {
+          restartPolled = waitingForRestart = true;
+          void reloadWhenRestarted({
+            lastServerTick,
+            fetchHealth: async () => {
+              const r = await fetch('/healthz', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
+              return r.ok ? ((await r.json()) as { ticks: number }) : null;
+            },
+            reload: () => location.reload(),
+            sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          }).then((reloaded) => {
+            if (reloaded) return;
+            waitingForRestart = false;
+            hud.setNetStatus(conn.status === 'online' ? '' : LOST_TEXT);
+          });
+        }
+        if (waitingForRestart) hud.setNetStatus(s === 'online' ? '' : RESTART_TEXT);
+        else hud.setNetStatus(s === 'reconnecting' ? STATUS_TEXTS.reconnecting : s === 'lost' ? LOST_TEXT : '');
+      });
       setServerVersion(conn.welcome.version ?? null);
       conn.onWelcome((w) => setServerVersion(w.version ?? null)); // a reconnect may reach a newer server
       dialog.close();
