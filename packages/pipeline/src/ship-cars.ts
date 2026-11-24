@@ -2,6 +2,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { CAR_TYPES, type WorldManifest } from '@nn/shared';
 import { prepareProp } from './models.js';
+import { writeWorldIndex } from './worldindex.js';
 
 /** Car models, built by their build.py (data/models/cars/README.md). */
 export const CAR_MODELS = 'data/models/cars';
@@ -35,7 +36,7 @@ export async function shipCarModels(outDir: string, srcDir = CAR_MODELS): Promis
 /**
  * `npm run ship-cars [-- worldDir]`: ships only the car models into an existing world (default
  * apps/client/public/world) and updates its manifest (models, and the helicopter among the parked cars), without
- * rerunning the whole pipeline.
+ * rerunning the whole pipeline, then refreshes index.json.
  */
 if (import.meta.url === `file://${resolve(process.argv[1] ?? '')}`) {
   const dir = process.argv[2] ?? 'apps/client/public/world';
@@ -44,5 +45,6 @@ if (import.meta.url === `file://${resolve(process.argv[1] ?? '')}`) {
   manifest.carModels = await shipCarModels(dir);
   manifest.parked = withHeli(manifest.parked); // (a world built before there was a helicopter)
   await writeFile(path, JSON.stringify(manifest));
+  await writeWorldIndex(dir); // (last write: the content hashes changed)
   console.log(`car models: ${manifest.carModels.map((c) => `${c.type} ${(c.bytes / 1024).toFixed(0)} KB`).join(', ')}`);
 }
