@@ -17,6 +17,14 @@ const JITTER_MS = 5000;
  */
 const NEW_SERVER_MARGIN_TICKS = 5 * TICK_HZ;
 
+/**
+ * Whether the server had announced a restart, judged when the connection drops from the live state (a hidden tab
+ * renders no frames, so nothing the render loop saw is current). The announced tick may already be past by then.
+ */
+export function restartPending(restartTick: number | undefined, clockReady: boolean): boolean {
+  return clockReady && !!restartTick && restartTick > 0;
+}
+
 export type ReloadDeps = {
   /** The last server tick the client knew of the old server. */
   lastServerTick: number;

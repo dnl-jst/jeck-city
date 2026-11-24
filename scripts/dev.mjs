@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const detached = process.platform !== 'win32';
-const MANIFEST = fileURLToPath(new URL('../apps/client/public/world/index.json', import.meta.url));
+const WORLD_INDEX = fileURLToPath(new URL('../apps/client/public/world/index.json', import.meta.url));
 /** Quiet time after the last index.json change before the restart (the write may come in pieces). */
 const SETTLE_MS = 2000;
 
@@ -29,7 +29,7 @@ const exited = (c) => new Promise((r) => (c.exitCode !== null ? r() : c.once('ex
 function stop(code) {
   if (stopping) return;
   stopping = true;
-  unwatchFile(MANIFEST);
+  unwatchFile(WORLD_INDEX);
   for (const c of [server, client]) kill(c);
   setTimeout(() => process.exit(code), 3000).unref();
   Promise.all([server, client].map(exited)).then(() => process.exit(code));
@@ -56,10 +56,10 @@ async function restartServer() {
   restarting = false;
 }
 
-const mtime = () => { try { return statSync(MANIFEST).mtimeMs; } catch { return 0; } };
+const mtime = () => { try { return statSync(WORLD_INDEX).mtimeMs; } catch { return 0; } };
 let seen = mtime();
 let timer;
-watchFile(MANIFEST, { interval: 1000 }, () => {
+watchFile(WORLD_INDEX, { interval: 1000 }, () => {
   clearTimeout(timer);
   timer = setTimeout(() => {
     const now = mtime();

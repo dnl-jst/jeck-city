@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { reloadWhenRestarted, type ReloadDeps } from './restart-reload';
+import { reloadWhenRestarted, restartPending, type ReloadDeps } from './restart-reload';
 
 /** A fake clock driven by `sleep`; `answers` are the /healthz replies in order (the last one repeats). */
 function fake(answers: unknown[], random = 0) {
@@ -72,4 +72,11 @@ it('a failing health request counts as no answer', async () => {
   f.deps.fetchHealth = () => (first ? ((first = false), Promise.reject(new Error('down'))) : inner());
   await expect(reloadWhenRestarted(f.deps)).resolves.toBe(true);
   expect(f.log.find((e) => e.what === 'reload')!.at).toBe(2000);
+});
+
+it('restartPending: an announced restart tick with a synced clock counts, also when the tick is already past', () => {
+  expect(restartPending(undefined, true)).toBe(false);
+  expect(restartPending(0, true)).toBe(false);
+  expect(restartPending(54_000, true)).toBe(true); // whether the tick lies ahead or behind does not matter
+  expect(restartPending(54_000, false)).toBe(false);
 });

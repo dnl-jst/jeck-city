@@ -18,7 +18,7 @@ import { CLEAR_LOOK, WeatherBlend } from './weather/look';
 import { Precipitation } from './weather/precip';
 import { WeatherBadge } from './weather/badge';
 import { RestartBanner, restartSecondsLeft } from './restart-banner';
-import { reloadWhenRestarted, RESTART_TEXT } from './restart-reload';
+import { reloadWhenRestarted, RESTART_TEXT, restartPending } from './restart-reload';
 import { Props } from './props';
 import { BoundaryGlow } from './boundary-glow';
 import { loadTreeVariants } from './trees';
@@ -172,6 +172,10 @@ const input = new Input();
 const LOOK_HINT = 'Klicken zum Umsehen';
 // phones and tablets: sticks and buttons on screen (?touch=1 forces them, ?touch=0 hides them)
 const touchOn = touchPreferred(params.get('touch'), window.matchMedia('(pointer: coarse)').matches);
+// declared before the first top-level await: the lock callback below may run while the world index loads
+let game: Game | null = null;
+/** Minimap and big map; stay null when map.json fails to load (the game runs without a map). */
+let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 attachInput(input, canvas, (locked) => {
   hud.setHint(locked ? (game?.modeHint ?? '') : LOOK_HINT);
   game?.map.onLockChange(locked);
@@ -210,9 +214,6 @@ farGround.receiveShadow = true;
 farGround.visible = false; // until the manifest says how low it lies
 scene.add(farGround);
 
-let game: Game | null = null;
-/** Minimap and big map; stay null when map.json fails to load (the game runs without a map). */
-let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 let bigMapOpen = false;
 let fps = 0;
 /** The game's session once online (the debug overlay's net lines). */
@@ -265,9 +266,6 @@ let weatherOverride: Weather | null = null;
 const weatherBlend = new WeatherBlend();
 const weatherBadge = new WeatherBadge(document.body);
 const restartBanner = new RestartBanner(document.body);
-/** While online: whether the last frame showed a restart announcement, and the server tick it estimated. */
-let restartAnnounced = false;
-let lastServerTick = 0;
 /** The blended weather of this frame; Tasks 5-8 pass it on to lighting, particles, audio and HUD. */
 let look = CLEAR_LOOK;
 const timer = new Timer();
@@ -349,10 +347,6 @@ renderer.setAnimationLoop((t: number) => {
       const serverTick = connection?.clock.ready ? connection.clock.estimate(performance.now()) : null;
       const left = connection && serverTick !== null ? restartSecondsLeft(connection.state.restartTick, serverTick) : null;
       restartBanner.set(left);
-      if (connection?.status === 'online' && serverTick !== null) {
-        restartAnnounced = left !== null;
-        lastServerTick = serverTick;
-      }
     }
     look = weatherBlend.update(dt);
     gameAudio.weather(look.rain);
@@ -428,10 +422,11 @@ async function connect(): Promise<Connection | null> {
       const conn = await connectRoom(name, hash, dialog, CHARACTER_VARIANTS.indexOf(storedCharacter()));
       conn.onStatus((s) => {
         // after an announced restart: wait for the new server and reload (the ticks keep the old one from counting)
-        if (s !== 'online' && restartAnnounced && !restartPolled) {
+        // judged from the live state at the drop: a hidden tab renders no frames, so the render loop may have seen nothing
+        if (s !== 'online' && !restartPolled && restartPending(conn.state.restartTick, conn.clock.ready)) {
           restartPolled = waitingForRestart = true;
           void reloadWhenRestarted({
-            lastServerTick,
+            lastServerTick: conn.clock.estimate(performance.now()),
             fetchHealth: async () => {
               const r = await fetch('/healthz', { cache: 'no-store', signal: AbortSignal.timeout(5000) });
               return r.ok ? ((await r.json()) as { ticks: number }) : null;
