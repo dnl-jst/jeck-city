@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { Input } from './input';
+import { Input, isTypingTarget } from './input';
 
 const key = (code: string, extra: Partial<{ repeat: boolean; ctrlKey: boolean; metaKey: boolean; altKey: boolean }> = {}) =>
   ({ code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, ...extra });
@@ -74,4 +74,13 @@ test('takeWheel sums notches and resets', () => {
   i.wheel(-30);
   expect(i.takeWheel()).toBe(1);
   expect(i.takeWheel()).toBe(0);
+});
+
+test('isTypingTarget recognises text fields only', () => {
+  expect(isTypingTarget({ tagName: 'INPUT' })).toBe(true);
+  expect(isTypingTarget({ tagName: 'TEXTAREA' })).toBe(true);
+  expect(isTypingTarget({ tagName: 'DIV', isContentEditable: true })).toBe(true);
+  expect(isTypingTarget({ tagName: 'CANVAS' })).toBe(false);
+  expect(isTypingTarget(null)).toBe(false);
+  expect(isTypingTarget({})).toBe(false);
 });

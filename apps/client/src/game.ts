@@ -25,7 +25,9 @@ import { storeCharacter, storedCharacter, type CharacterModels } from './charact
 import { FollowCamera, FreeFly } from './camera';
 import { MapMode, type DriveControls } from './map/map-mode';
 import type { Session } from './session';
-import { RemotePlayers, streamedWheels } from './remote/remote-players';
+import { FIGURE_H, RemotePlayers, RIDER_H, ROOF_H, streamedWheels } from './remote/remote-players';
+import { LABEL_GAP } from './remote/name-label';
+import { BUBBLE_LIFT, SpeechBubbles } from './remote/speech-bubble';
 import { RemoteCarFeed } from './audio/remote-audio';
 import { CRASH_SPIN, KNOCK_SPIN, RagdollWorld, ragSpin } from './ragdoll';
 import type { Quality } from './quality';
@@ -110,6 +112,10 @@ export class Game {
   private wasDown = false;
   /** The own car's or bike's pose as drawn this frame (while driving or riding; others on it are drawn on it). */
   private drawnPose: CarPose | null = null;
+  /** The own feet as drawn this frame (on foot). */
+  private drawnFeet: Vec3 | null = null;
+  /** Chat speech bubbles over players (online only). */
+  private readonly bubbles: SpeechBubbles | null;
   /** Tumbling figures (own and other players') fall in a physics world of their own. */
   readonly ragdolls: RagdollWorld;
   /** Seconds in the air on foot (for landing sounds). */
@@ -168,6 +174,7 @@ export class Game {
       carPose: (i) => sim.cars.poses[i],
       onOwnRoof: (slot) => session.onOwnRoof?.(slot) ?? null,
     }) : null;
+    this.bubbles = session.remote ? new SpeechBubbles(scene) : null;
     if (devCam) this.follow.pitch = devCam.pitchDeg * DEG;
     this.sample();
     session.onStep = () => this.sample();
@@ -195,6 +202,30 @@ export class Game {
   focus(): Vec3 {
     if (this.mode === 'ride' && this.currBike) return this.currBike;
     return (this.mode === 'drive' || this.mode === 'sit') && this.currPose ? this.currPose : this.currPos;
+  }
+
+  /** `slot` said `text` in the say channel: a speech bubble over them (online only). */
+  say(slot: number, text: string): void {
+    this.bubbles?.say(slot, text, performance.now());
+  }
+
+  /** Live speech bubbles (dev hook). */
+  get bubbleCount(): number {
+    return this.bubbles?.size ?? 0;
+  }
+
+  /**
+   * The own bubble's anchor as drawn this frame (null before the first frame of the mode). Other players' bubbles sit
+   * above their name label; the own player has none, so the label's height comes off: the bubble starts where the
+   * label would (head or roof + LABEL_GAP).
+   */
+  ownAnchor(): Vec3 | null {
+    const lift = LABEL_GAP - BUBBLE_LIFT;
+    if (this.mode === 'walk') return this.drawnFeet ? { x: this.drawnFeet.x, y: this.drawnFeet.y + FIGURE_H + lift, z: this.drawnFeet.z } : null;
+    const p = this.drawnPose;
+    if (!p) return null;
+    if (this.mode === 'ride') return { x: p.x, y: p.y + RIDER_H + lift, z: p.z };
+    return { x: p.x, y: p.y - VEHICLE_REST_Y + ROOF_H + lift, z: p.z };
   }
 
   /** Type of the bike being ridden, else null. */
@@ -599,6 +630,7 @@ export class Game {
       this.wasDown = this.down;
       const p = lerp3(this.prevPos, this.currPos, a);
       p.x += off.x; p.y += off.y; p.z += off.z;
+      this.drawnFeet = p;
       const v = this.vel;
       this.figure.setDown(this.down ? 1 : 0);
       const out = this.boarding?.kind === 'out' ? this.boarding : null;
@@ -695,7 +727,8 @@ export class Game {
       // (helicopters have a rotor, not a car engine; the one ridden along in is the own view's)
       audio?.remoteCars(this.focus(), this.carFeed.build(cars, info, this.session.me, dt, this.pass?.car ?? null).filter((c) => !this.isHeli(c.id)), dt);
       audio?.remoteRotors([...cars.values()].filter((c) => c.hasDriver && this.isHeli(c.id) && c.id !== this.pass?.car));
-
+      const me = this.session.me, remotes = this.remotes;
+      this.bubbles?.update(performance.now(), (s) => (s === me ? this.ownAnchor() : remotes.anchorOf(s)), this.ctx.camera.position);
     }
     if (audio) {
       const f = this.focus();
