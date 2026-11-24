@@ -1,5 +1,6 @@
 import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
 import { concatMeshes } from './bridges.js';
+import { drapeChunk, type FlatSource } from './chunkdrape.js';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
@@ -84,7 +85,7 @@ export function worldRect(boundary: Pt[]): Rect {
 const inRect = (r: Rect | undefined, x: number, z: number) => !r || (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ);
 
 /** Copies the triangles of `m` whose centroid lies in each chunk (and in `area`) into per-chunk meshes (vertices remapped). */
-function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
+export function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
   const parts = new Map<string, { remap: Map<number, number>; pos: number[]; uv: number[]; mark: number[]; idx: number[] }>();
   const p = m.positions;
   for (let t = 0; t < m.indices.length; t += 3) {
@@ -122,9 +123,15 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
  * grid gets its `ground` mesh, also when it holds no buildings or streets.
  * Yields the chunks one at a time, sorted by (iz, ix): the set of keys is fixed up front, a chunk's building batch
  * and ground mesh are built when it is yielded, and nothing of a yielded chunk is kept.
+ * `draped`: flat street meshes draped onto `terrain` chunk by chunk (drapeChunk; needs `terrain` and `area`) in place
+ * of the same name in `streets`; the draped triangles per name are added up in `drapedTriangles`. A chunk that only
+ * such a mesh might reach (its triangles' bounding boxes) is left out when no draped triangle falls into it.
  */
-export function* chunkGeometries(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect,
-  terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): Generator<ChunkGeometry> {
+export function* chunkGeometries(buildings: BuildingMesh[], streets: Partial<StreetMeshes>, overrides: Overrides = {}, area?: Rect,
+  terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}, draped: Partial<Record<StreetName, FlatSource>> = {},
+  drapedTriangles: Partial<Record<StreetName, number>> = {}): Generator<ChunkGeometry> {
+  const sources = STREET_MESHES.map((name) => draped[name]);
+  if (sources.some(Boolean) && (!terrain || !area)) throw new Error('chunkGeometries: draping needs terrain and area');
   const keys = new Set<string>();
   /** chunk key → its buildings, in `buildings` order */
   const byChunk = new Map<string, BuildingMesh[]>();
@@ -156,6 +163,9 @@ export function* chunkGeometries(buildings: BuildingMesh[], streets: StreetMeshe
       }
     }
   }
+  // the chunks known to exist; draped meshes only add candidates
+  const certain = new Set(keys);
+  for (const src of sources) if (src) for (const key of src.trianglesByChunk.keys()) keys.add(key);
   const order = [...keys].map((key) => {
     const [ix, iz] = key.split('_').map(Number) as [number, number];
     return { key, ix, iz };
@@ -170,11 +180,14 @@ export function* chunkGeometries(buildings: BuildingMesh[], streets: StreetMeshe
       byChunk.delete(key);
     }
     STREET_MESHES.forEach((name, i) => {
-      const have = own[i]!.get(key), deck = more[i]!.get(key);
+      const src = sources[i];
+      const have = src ? drapeChunk(src, terrain!, ix, iz, area!) : own[i]!.get(key), deck = more[i]!.get(key);
+      if (src && have) drapedTriangles[name] = (drapedTriangles[name] ?? 0) + have.indices.length / 3;
       own[i]!.delete(key);
       more[i]!.delete(key);
       if (have || deck) c.streets[name] = have && deck ? concatMeshes([have, deck]) : (have ?? deck)!;
     });
+    if (!certain.has(key) && Object.keys(c.streets).length === 0) continue;
     if (terrain && grounded.has(key)) c.ground = groundMesh(terrain, ix, iz)!;
     yield c;
   }

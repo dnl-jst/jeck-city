@@ -4,7 +4,9 @@ import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
 import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
-import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
+import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, worldRect, type StreetMeshes, type StreetName } from './chunks.js';
+import { cropMesh, prepareFlat } from './chunkdrape.js';
+import { drapeMesh } from './drape.js';
 import { boxBuilding } from './fixture.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
@@ -236,4 +238,29 @@ test('the ground mesh of a chunk is built when the chunk is yielded, not before'
   } finally {
     spy.mockRestore();
   }
+});
+
+test('draped sources give the chunks of the globally draped meshes: same keys, same street meshes, drape counts', () => {
+  // terrain over x ∈ [0, 400]: chunks 2_* have no ground
+  const area = { minX: 0, minZ: 0, maxX: 800, maxZ: 400 };
+  // the big triangle's bbox reaches chunk 2_1, the triangle itself does not (x + z ≤ 600); 2_0 gets pieces of it
+  const big: Mesh = {
+    positions: new Float32Array([250, 0.01, 150, 250, 0.01, 350, 450, 0.01, 150]),
+    indices: new Uint32Array([0, 1, 2]),
+    uv: new Float32Array([0, 0, 0, 1, 1, 0]),
+  };
+  const flat = { ...noStreets(), road: twoTris(0.01), green: big };
+  const extra = { road: twoTris(0.5) };
+  const t = terrain();
+  const global = { ...flat };
+  for (const name of ['road', 'green'] as const) global[name] = drapeMesh(cropMesh(flat[name], area), t);
+  const expected = [...chunkGeometries(buildings(), global, {}, area, t, extra)];
+  const counts: Partial<Record<StreetName, number>> = {};
+  const { road: _r, green: _g, ...rest } = flat;
+  const got = [...chunkGeometries(buildings(), rest, {}, area, t, extra, { road: prepareFlat(flat.road, area), green: prepareFlat(big, area) }, counts)];
+  expect(got.map((c) => c.key)).toEqual(expected.map((c) => c.key));
+  expect(got.map((c) => c.key)).toContain('2_0');
+  expect(got.map((c) => c.key)).not.toContain('2_1');
+  expect(got).toEqual(expected);
+  expect(counts).toEqual({ road: global.road.indices.length / 3, green: global.green.indices.length / 3 });
 });

@@ -3,9 +3,9 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path';
 import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
-import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes } from './chunks.js';
+import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
-import { drapeMesh } from './drape.js';
+import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
@@ -31,7 +31,7 @@ import { assignShopLabels, isNeusserAddress } from './shops.js';
 import { placeShelter } from './stops.js';
 import { sidewalkFit } from './sidewalkmetric.js';
 import { allSidewalkWidths } from './sidewalkwidth.js';
-import { buildStreetGeometry, type Mesh } from './streets.js';
+import { buildStreetGeometry } from './streets.js';
 import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
 import { abutmentFills, bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
@@ -208,16 +208,13 @@ async function main() {
   for (const name of STREET_MESHES) decks[name] = liftOntoDecks(cropMesh(deckFlatAll[name], area), bridges);
   const deckSurfaces = (['road', 'sidewalk', 'curb', 'parking', 'green', 'squares', 'trackbed'] as const).map((n) => decks[n]);
   const bodies = bridgeBodies(bridges, deckSurfaces, terrain);
-  const streets = {} as StreetMeshes;
-  for (const name of STREET_MESHES) {
-    if (name === 'water' || name === 'bridge' || name === 'steel') continue;
-    streets[name] = drapeMesh(cropMesh(flatStreets[name], area), terrain);
-    console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${streets[name].indices.length / 3} triangles (${decks[name].indices.length / 3} on bridges)`);
-  }
-  streets.water = cropMesh(waterSurface(terrain, water), area);
-  streets.bridge = bodies.mesh;
-  streets.steel = bodies.steel;
-  console.log(`water surface: ${streets.water.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
+  // the street surfaces are draped chunk by chunk while the chunks are written (see chunkdrape.ts)
+  const DRAPED = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
+  const flatSources: Partial<Record<StreetName, FlatSource>> = {};
+  for (const name of DRAPED) flatSources[name] = prepareFlat(flatStreets[name], area);
+  const waterMesh = cropMesh(waterSurface(terrain, water), area);
+  const streets: Partial<StreetMeshes> = { water: waterMesh, bridge: bodies.mesh, steel: bodies.steel };
+  console.log(`water surface: ${waterMesh.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
   // the underground Stadtbahn: tunnel, stations and stairs; the stairwells are cut out of the ground and the pavement
   const onSidewalk = meshCovers(flat.sidewalk), onSquare = meshCovers(flat.squares);
   const cityEnv = { built: footprintTest(buildings), pavement: (p: { x: number; z: number }) => onSidewalk(p) || onSquare(p), roadway: meshCovers(flat.road) };
@@ -241,7 +238,8 @@ async function main() {
 
   const chunks: WorldManifest['chunks'] = [];
   // one chunk at a time: build → punch → encode → write, then let it go
-  for (const c of chunkGeometries(buildings, streets, overrides, area, terrain, decks)) {
+  const drapedTriangles: Partial<Record<StreetName, number>> = {};
+  for (const c of chunkGeometries(buildings, streets, overrides, area, terrain, decks, flatSources, drapedTriangles)) {
     const file = `chunk_${c.key}.glb`;
     // (triangles belong to the chunk of their centroid and may reach a little beyond its square)
     const x0 = c.ix * CHUNK_SIZE - 10, z0 = c.iz * CHUNK_SIZE - 10, x1 = x0 + CHUNK_SIZE + 20, z1 = z0 + CHUNK_SIZE + 20;
@@ -253,6 +251,7 @@ async function main() {
     await writeFile(join(outDir, file), glb);
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
   }
+  for (const name of DRAPED) console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${drapedTriangles[name] ?? 0} triangles (${decks[name].indices.length / 3} on bridges)`);
 
   const models: WorldManifest['models'] = [];
   const modelCollision: Float32Array[] = [];
@@ -480,18 +479,6 @@ function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest[
     n++;
   }
   console.log(`${n} shops on Neusser Straße`);
-}
-
-/** Triangles of `m` whose centroid lies in `r` (OSM ways reach far beyond the world area; no need to drape those). */
-function cropMesh(m: Mesh, r: Rect): Mesh {
-  const P = m.positions;
-  const idx: number[] = [];
-  for (let t = 0; t < m.indices.length; t += 3) {
-    const [a, b, c] = [m.indices[t]!, m.indices[t + 1]!, m.indices[t + 2]!];
-    const x = (P[a * 3]! + P[b * 3]! + P[c * 3]!) / 3, z = (P[a * 3 + 2]! + P[b * 3 + 2]! + P[c * 3 + 2]!) / 3;
-    if (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ) idx.push(a, b, c);
-  }
-  return { positions: m.positions, uv: m.uv, indices: Uint32Array.from(idx), ...(m.mark ? { mark: m.mark } : {}) };
 }
 
 /** Lowest height (local y) along the outer rows and columns of the grid. */

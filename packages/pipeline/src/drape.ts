@@ -18,7 +18,11 @@ type Line = { kind: 'x' | 'z' | 'd'; f: (x: number, z: number) => number; k: num
 /** Draped vertex source: position in xz, offset above terrain, uv. */
 type Src = { x: number; z: number; off: number; u: number; v: number };
 
-class Out {
+/** An xz window: only terrain cells near it are draped (see drapeTriangle). */
+export type DrapeWindow = { minX: number; minZ: number; maxX: number; maxZ: number };
+
+/** Collects draped triangles: positions and uv as numbers, vertices numbered by first use. */
+export class DrapeOut {
   pos: number[] = [];
   uv: number[] = [];
   idx: number[] = [];
@@ -26,6 +30,13 @@ class Out {
   private weld = new Map<string, number>();
   constructor(private t: TerrainGrid) {}
   begin(): void {
+    this.weld.clear();
+  }
+  /** Empties the collector (vertex numbering starts at 0 again). */
+  reset(): void {
+    this.pos.length = 0;
+    this.uv.length = 0;
+    this.idx.length = 0;
     this.weld.clear();
   }
   vert(p: Src): number {
@@ -55,20 +66,28 @@ const before = (a: { x: number; z: number }, b: { x: number; z: number }) => a.x
  */
 export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
   if (m.mark) return drapeMarked(m, m.mark, t);
-  const out = new Out(t);
-  const P = m.positions;
-  for (let i = 0; i < m.indices.length; i += 3) {
-    const tri: CV[] = [0, 1, 2].map((k) => {
-      const n = m.indices[i + k]!;
-      return { x: P[n * 3]!, off: P[n * 3 + 1]!, z: P[n * 3 + 2]!, u: m.uv[n * 2]!, v: m.uv[n * 2 + 1]!, mask: k === 0 ? 0b101 : k === 1 ? 0b011 : 0b110 };
-    });
-    const [a, b, c] = tri as [CV, CV, CV];
-    out.begin();
-    const area2 = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
-    if (Math.abs(area2) / 2 >= FLAT_MIN_AREA) drapeFlat(tri, area2, t, out);
-    else drapeVertical(tri, t, out);
-  }
+  const out = new DrapeOut(t);
+  for (let i = 0; i < m.indices.length; i += 3) drapeTriangle(m, i, t, out);
   return out.build();
+}
+
+/**
+ * Drapes the source triangle at `m.indices[i..i+2]` (ignoring `m.mark`) into `out`, as drapeMesh does: its pieces
+ * are appended in drapeMesh's order, vertices welded within this triangle only. With `window`, horizontal triangles
+ * skip the terrain cells more than a cell away from it; every piece that lies in the window is still produced, in
+ * the same order and with the same vertices (vertical triangles are always draped whole).
+ */
+export function drapeTriangle(m: Mesh, i: number, t: TerrainGrid, out: DrapeOut, window?: DrapeWindow): void {
+  const P = m.positions;
+  const tri: CV[] = [0, 1, 2].map((k) => {
+    const n = m.indices[i + k]!;
+    return { x: P[n * 3]!, off: P[n * 3 + 1]!, z: P[n * 3 + 2]!, u: m.uv[n * 2]!, v: m.uv[n * 2 + 1]!, mask: k === 0 ? 0b101 : k === 1 ? 0b011 : 0b110 };
+  });
+  const [a, b, c] = tri as [CV, CV, CV];
+  out.begin();
+  const area2 = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
+  if (Math.abs(area2) / 2 >= FLAT_MIN_AREA) drapeFlat(tri, area2, t, out, window);
+  else drapeVertical(tri, t, out);
 }
 
 /**
@@ -104,7 +123,7 @@ function lerp(p: CV, q: CV, s: number, x: number, z: number, mask: number): CV {
   return { x, z, off: p.off + s * (q.off - p.off), u: p.u + s * (q.u - p.u), v: p.v + s * (q.v - p.v), mask };
 }
 
-function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
+function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: DrapeOut, window?: DrapeWindow): void {
   const [a, b, c] = tri as [CV, CV, CV];
   const bary = (x: number, z: number, mask: number): CV => {
     const wb = ((x - a.x) * (c.z - a.z) - (z - a.z) * (c.x - a.x)) / -area2;
@@ -185,8 +204,14 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
 
   const minX = Math.min(a.x, b.x, c.x);
   const maxX = Math.max(a.x, b.x, c.x);
-  const c0 = Math.floor(minX - t.x0);
-  const c1 = Math.max(c0, Math.ceil(maxX - t.x0) - 1);
+  let c0 = Math.floor(minX - t.x0);
+  let c1 = Math.max(c0, Math.ceil(maxX - t.x0) - 1);
+  // a window keeps the cells around it (one cell of margin against rounding); each cell's pieces lie within the cell
+  // and do not depend on other cells, so the kept pieces and their order are the same
+  if (window) {
+    c0 = Math.max(c0, Math.floor(window.minX - t.x0) - 1);
+    c1 = Math.min(c1, Math.floor(window.maxX - t.x0) + 1);
+  }
   for (let ci = c0; ci <= c1; ci++) {
     const X = t.x0 + ci;
     const X1 = t.x0 + ci + 1;
@@ -199,8 +224,12 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
       minZ = Math.min(minZ, p.z);
       maxZ = Math.max(maxZ, p.z);
     }
-    const r0 = Math.floor(minZ - t.z0);
-    const r1 = Math.max(r0, Math.ceil(maxZ - t.z0) - 1);
+    let r0 = Math.floor(minZ - t.z0);
+    let r1 = Math.max(r0, Math.ceil(maxZ - t.z0) - 1);
+    if (window) {
+      r0 = Math.max(r0, Math.floor(window.minZ - t.z0) - 1);
+      r1 = Math.min(r1, Math.floor(window.maxZ - t.z0) + 1);
+    }
     for (let ri = r0; ri <= r1; ri++) {
       const Z = t.z0 + ri;
       const Z1 = t.z0 + ri + 1;
@@ -220,7 +249,7 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: Out): void {
 /** Point of a vertical triangle in its plane: s along the xz trace A→B, y = offset. */
 type SV = { s: number; x: number; z: number; off: number; u: number; v: number };
 
-function drapeVertical(tri: CV[], t: TerrainGrid, out: Out): void {
+function drapeVertical(tri: CV[], t: TerrainGrid, out: DrapeOut): void {
   // Trace endpoints: the two vertices farthest apart in xz, canonically ordered.
   let best = -1;
   let A = tri[0]!;
