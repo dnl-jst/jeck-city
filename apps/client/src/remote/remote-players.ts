@@ -141,6 +141,8 @@ export class RemotePlayers {
   private readonly lastFoot = new Map<number, { x: number; z: number }>();
   private readonly freeCars: CarView[] = [];
   private readonly hiding = new Set<number>();
+  /** Where each slot's name label went in the last update (its lower edge); for speech bubbles. */
+  private anchors = new Map<number, Vec3>();
 
   constructor(private readonly scene: Scene, private readonly parked: ParkedHider, private readonly opts: RemoteOptions) {}
 
@@ -156,6 +158,8 @@ export class RemotePlayers {
     seats?: ReadonlyMap<number, readonly (number | undefined)[]>,
   ): void {
     const cp = camera.position;
+    const anchors = new Map<number, Vec3>();
+    this.anchors = anchors;
     for (const w of this.walkers.values()) w.seen = false;
     const riding = new Set<number>();
     for (const r of sample.riders?.values() ?? []) riding.add(r.slot);
@@ -240,6 +244,7 @@ export class RemotePlayers {
       w.fig.setDown(s.state === 2 ? 1 : 0);
       if (train?.seat) sitOnBench(w.fig, train.seat);
       else w.fig.update(at.x, at.y, at.z, { x: w.vx, y: 0, z: w.vz }, dt, false, s.yaw);
+      anchors.set(s.slot, { x: at.x, y: at.y + FIGURE_H + LABEL_GAP, z: at.z });
       w.label = this.label(w.label, names.get(s.slot), at.x, at.y + FIGURE_H + LABEL_GAP, at.z, cp);
     }
     for (const [slot, w] of this.walkers) {
@@ -281,6 +286,7 @@ export class RemotePlayers {
         // no bike model: the figure glides along where the bike is
         r.fig.update(s.x, s.y, s.z, { x: Math.sin(s.heading) * s.speed, y: 0, z: Math.cos(s.heading) * s.speed }, dt);
       }
+      anchors.set(s.slot, { x: s.x, y: s.y + RIDER_H + LABEL_GAP, z: s.z });
       r.label = this.label(r.label, names.get(s.slot), s.x, s.y + RIDER_H + LABEL_GAP, s.z, cp);
     }
     for (const [slot, r] of this.riders) {
@@ -329,6 +335,7 @@ export class RemotePlayers {
         // lamp level from the slow state (the flicker while cranking is local), brake light from the snapshot
         d.view.setLights(night, c?.brakeLight ?? false, lampPower(info?.level ?? 0, Math.random));
         const who = others.map((o) => names.get(o.slot)).filter((n) => n !== undefined && n !== '').join(' · ');
+        for (const o of others) anchors.set(o.slot, { x: pose.x, y: pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, z: pose.z });
         d.label = this.label(d.label, who === '' ? undefined : who, pose.x, pose.y - VEHICLE_REST_Y + ROOF_H + LABEL_GAP, pose.z, cp);
         view = d.view;
       }
@@ -385,6 +392,11 @@ export class RemotePlayers {
       this.driven.delete(id);
     }
     this.parked.setHidden(this.hiding);
+  }
+
+  /** Where the slot's name label sat in the last update (lower edge), or null if the slot was not seen. */
+  anchorOf(slot: number): Vec3 | null {
+    return this.anchors.get(slot) ?? null;
   }
 
   /** A rider crashing into something: thrown on with the bike's speed, over it if it is low enough (as the sim). */

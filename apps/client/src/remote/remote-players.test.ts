@@ -72,6 +72,15 @@ function setup(me = 0) {
 }
 
 describe('RemotePlayers', () => {
+  test('anchorOf gives the label position of a seen slot, null once gone', () => {
+    const { frame, rp } = setup();
+    frame([walker(2, 4)], [], new Map([[2, 'Zed']]));
+    expect(rp.anchorOf(2)).toEqual({ x: 4, y: 1.8 + 0.35, z: 0 });
+    frame([walker(3)], [], new Map());
+    expect(rp.anchorOf(2)).toBeNull();
+    expect(rp.anchorOf(3)).not.toBeNull();
+  });
+
   test('figures are pooled', () => {
     const { scene, frame } = setup();
     const names = new Map([1, 2, 3, 4, 5].map((s) => [s, `P${s}`] as const));
