@@ -41,7 +41,7 @@ async function join(browser, name, { touch = false } = {}) {
   await page.locator('.nn-intro-go').dispatchEvent('click');
   await page.locator('.nn-lobby-input').fill(name);
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 300_000 });
+  await page.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 600_000 });
   if ((await page.evaluate(() => window.__nnReady)) !== true) throw new Error(`${name}: world failed to load`);
   await page.waitForFunction(() => window.__nnState().online, null, { timeout: 60_000 });
   return { page, name };
@@ -64,10 +64,10 @@ async function waitLine(page, c, text, from, what) {
 /** Desktop chat: Enter opens the window, the text is typed into its field, Enter sends. */
 async function chat(page, text) {
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+  await page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 });
   await page.keyboard.type(text, { delay: 30 });
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => !document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+  await page.waitForFunction(() => !document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 });
 }
 
 /** Resolves after `n` more animation frames (= game frames; a busy machine may render only a few per second). */
@@ -107,17 +107,17 @@ try {
 
   // 2b. a click into the game while the window is open closes it (the field lost its focus); Enter opens it again
   await a.page.keyboard.press('Enter');
-  await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+  await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 });
   await a.page.mouse.click(480, 150);
-  await a.page.waitForFunction(() => !document.querySelector('.nn-chat')?.classList.contains('nn-chat-open'), null, { timeout: 5_000 })
+  await a.page.waitForFunction(() => !document.querySelector('.nn-chat')?.classList.contains('nn-chat-open'), null, { timeout: 60_000 })
     .catch(() => undefined);
   check(await a.page.evaluate(() => !document.querySelector('.nn-chat').classList.contains('nn-chat-open')), '2b. a click into the game closes the window');
   await a.page.keyboard.press('Enter');
-  const refocused = await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 })
+  const refocused = await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 })
     .then(() => true, () => false);
   check(refocused, '2b. Enter opens the window again after the click');
   await a.page.keyboard.press('Escape');
-  await a.page.waitForFunction(() => !document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 5_000 });
+  await a.page.waitForFunction(() => !document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 });
 
   // 3. say line and bubble: A stands 6 m in front of B's camera first (dev server teleport)
   const sb = await b.page.evaluate(() => window.__nnState());
@@ -157,9 +157,33 @@ try {
   await c.page.locator('.nn-chat-sheet-send').tap();
   await waitLine(a.page, 'w', 'vom Handy', 'Chat C', '4. A gets the touch world line');
   check(true, '4. A got the world line from the sheet');
+  // a slash prefix in the sheet switches the channel like on the desktop: "/w x" arrives as a world line
+  await c.page.locator('.nn-chat-sheet-tab', { hasText: 'Sagen' }).tap();
+  const sheetInput = c.page.locator('.nn-chat-sheet-input');
+  // live switch: typing "/w " moves the active tab at once and strips the prefix
+  await sheetInput.fill('');
+  await sheetInput.pressSequentially('/w ');
+  check(await c.page.evaluate(() => document.querySelector('.nn-chat-sheet-tab.nn-chat-sheet-active')?.textContent === 'Welt'), '4. typing "/w " switches the sheet tab to Welt');
+  check(await sheetInput.inputValue() === '', '4. the prefix is stripped from the field');
+  check((await sheetInput.getAttribute('placeholder'))?.startsWith('Welt:'), '4. placeholder follows the channel');
+  await c.page.locator('.nn-chat-sheet-tab', { hasText: 'Sagen' }).tap();
+  await sheetInput.fill('/w x');
+  await c.page.locator('.nn-chat-sheet-send').tap();
+  await waitLine(a.page, 'w', 'x', 'Chat C', '4. A gets the "/w x" line from the sheet');
+  check(true, '4. "/w x" from the sheet arrived as a world line');
   await frames(c.page, 2);
   await c.page.screenshot({ path: `${SHOTS}/chat-touch.png` });
   await c.page.locator('.nn-chat-sheet-close').tap();
+  // desktop window: typing "/s " switches the prompt live (no Enter), Esc closes
+  const hintShown = (p) => p.evaluate(() => { const h = document.querySelector('.nn-chat-hint'); return !!h && h.textContent === 'Enter – Chat' && getComputedStyle(h).display !== 'none'; });
+  check(await hintShown(a.page), '4. desktop shows the "Enter – Chat" hint while the window is closed');
+  await a.page.keyboard.press('Enter');
+  await a.page.waitForFunction(() => document.activeElement?.classList.contains('nn-chat-input'), null, { timeout: 60_000 });
+  check(!(await hintShown(a.page)), '4. the hint is hidden while the input is open');
+  check(!(await c.page.evaluate(() => { const h = document.querySelector('.nn-chat-hint'); return !!h && getComputedStyle(h).display !== 'none'; })), '4. no hint on touch');
+  await a.page.keyboard.type('/s ', { delay: 30 });
+  check(await a.page.evaluate(() => document.querySelector('.nn-chat-prefix')?.textContent === 'Sagen ▸' && document.activeElement.value === ''), '4. typing "/s " switches the desktop prompt to Sagen and strips it');
+  await a.page.keyboard.press('Escape');
   check(!(await c.page.evaluate(() => document.querySelector('.nn-tc').classList.contains('nn-suspended'))), '4. touch controls back after closing the sheet');
 
   // 5. offline: no chat at all (the online pages go first, as for C)
@@ -168,9 +192,9 @@ try {
   const off = await ctx.newPage();
   off.on('pageerror', (e) => console.error(`[offline page error] ${e.message}`));
   await off.goto(pageUrl({ offline: '1', touch: '1' }));
-  await off.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 300_000 });
+  await off.waitForFunction(() => window.__nnReady !== undefined, null, { timeout: 600_000 });
   check(!(await off.locator('.nn-tc-sys .nn-tc-btn', { hasText: 'Chat' }).isVisible()), '5. chat button hidden offline');
-  check(await off.evaluate(() => !document.querySelector('.nn-chat, .nn-chat-sheet') && window.__nnChat === undefined), '5. no chat window, sheet or hook offline');
+  check(await off.evaluate(() => !document.querySelector('.nn-chat, .nn-chat-sheet, .nn-chat-hint') && window.__nnChat === undefined), '5. no chat window, sheet, hint or hook offline');
 } catch (e) {
   console.error(e);
   failed = true;

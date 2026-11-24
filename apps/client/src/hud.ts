@@ -8,6 +8,9 @@ export function bootErrorMessage(e: unknown): string {
   return 'Da ist was schiefgelaufen. Bitte lade die Seite neu.';
 }
 
+/** Loading-screen hint: the controls, plus the chat key when playing online. */
+export const controlsHint = (online: boolean): string => (online ? `${CONTROLS_HINT} · Enter Chat` : CONTROLS_HINT);
+
 export const CONTROLS_HINT = 'WASD laufen · Shift rennen · Leertaste springen · E Auto/Rad ein-/aussteigen · H hupen · R Radio · N Ton · M Karte · G Grafik · Maus umsehen (klicken)';
 
 /** Stylesheet of the HUD. The faded-out loading box must not catch the click that requests pointer lock. */
@@ -116,7 +119,7 @@ export class Hud {
   private readonly dlFill: HTMLDivElement;
   private readonly dlRows = new Map<DownloadCategory, { row: HTMLDivElement; fill: HTMLDivElement; size: HTMLDivElement }>();
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, online = false) {
     this.loading = el('div', 'nn-loading', root);
     el('div', 'nn-loading-label', this.loading).textContent = 'Jeck City lädt …';
     this.bar = el('div', 'nn-loading-fill', el('div', 'nn-loading-track', this.loading));
@@ -125,7 +128,7 @@ export class Hud {
     this.dl.hidden = true;
     this.dlSummary = el('div', 'nn-dl-summary', this.dl);
     this.dlFill = el('div', 'nn-dl-fill', el('div', 'nn-dl-track', this.dl));
-    el('div', 'nn-loading-controls', this.loading).textContent = CONTROLS_HINT;
+    el('div', 'nn-loading-controls', this.loading).textContent = controlsHint(online);
     this.attribution = el('div', 'nn-attribution', root);
     this.hint = el('div', 'nn-hint', root);
     this.note = el('div', 'nn-note', root);

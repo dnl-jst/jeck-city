@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CHANNEL_LABEL, ChatLog, formatLine, parseChatInput, type ChatLine } from './chat-log';
+import { CHANNEL_LABEL, ChatLog, channelPlaceholder, formatLine, parseChatInput, takeChannelPrefix, type ChatLine } from './chat-log';
 
 const line = (i: number, over: Partial<ChatLine> = {}): ChatLine => ({
   c: 's',
@@ -36,6 +36,31 @@ describe('parseChatInput', () => {
 
   it('rejects blank input', () => {
     expect(parseChatInput('   ', 's')).toEqual({ channel: 's', text: null });
+  });
+});
+
+describe('takeChannelPrefix', () => {
+  it('takes a known prefix followed by a space, any case', () => {
+    expect(takeChannelPrefix('/w ')).toEqual({ channel: 'w', rest: '' });
+    expect(takeChannelPrefix('/Welt hallo')).toEqual({ channel: 'w', rest: 'hallo' });
+    expect(takeChannelPrefix('/S hi du')).toEqual({ channel: 's', rest: 'hi du' });
+    expect(takeChannelPrefix('/SAGEN x')).toEqual({ channel: 's', rest: 'x' });
+  });
+
+  it('waits for the space and ignores unknown or prototype names', () => {
+    expect(takeChannelPrefix('/w')).toBeNull();
+    expect(takeChannelPrefix('/wurst ')).toBeNull();
+    expect(takeChannelPrefix('/constructor ')).toBeNull();
+    expect(takeChannelPrefix('hallo /w ')).toBeNull();
+  });
+});
+
+describe('channelPlaceholder', () => {
+  it('explains the channel, with slash hints on the desktop only', () => {
+    expect(channelPlaceholder('s', true)).toBe('Sagen: hören alle in der Nähe · /w für Welt');
+    expect(channelPlaceholder('w', true)).toBe('Welt: lesen alle im Spiel · /s für Sagen');
+    expect(channelPlaceholder('s', false)).toBe('Sagen: hören alle in der Nähe');
+    expect(channelPlaceholder('w', false)).toBe('Welt: lesen alle im Spiel');
   });
 });
 

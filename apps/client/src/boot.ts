@@ -102,7 +102,7 @@ const OFFLINE_ME = 0;
 const DEG = Math.PI / 180;
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
-const hud = new Hud(document.body);
+const hud = new Hud(document.body, !offline);
 // every download while the game boots is counted; if loading takes a while the loading screen shows the details
 const downloads = new DownloadMeter();
 const untrackFetch = trackFetch(downloads);
@@ -279,7 +279,8 @@ renderer.setAnimationLoop((t: number) => {
   if (game && lighting && props) {
     if (chat) {
       // Enter opens the chat (not over the big map; a press there is dropped, it would open the chat on closing it)
-      if (input.consume('Enter') && !chat.isOpen && !bigMapOpen) chat.openInput();
+      const enter = input.consume('Enter'), numEnter = input.consume('NumpadEnter');
+      if ((enter || numEnter) && !chat.isOpen && !bigMapOpen) chat.openInput();
       chat.tick(performance.now());
     }
     if (input.consume('KeyG')) {

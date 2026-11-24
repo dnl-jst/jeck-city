@@ -161,6 +161,7 @@ export class TouchControls {
   /** Tap on the chat button (set by the game). */
   onChat: (() => void) | null = null;
   private shown = false;
+  private suspended = false;
   private last = '';
   private walk = true;
 
@@ -237,7 +238,7 @@ export class TouchControls {
     // swiping on the open screen above the zones looks around, too
     const canvas = document.getElementById('game');
     canvas?.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch' || !this.shown) return;
+      if (e.pointerType !== 'touch' || !this.shown || this.suspended) return;
       canvas.setPointerCapture(e.pointerId);
       this.swipes.set(e.pointerId, { x: e.clientX, y: e.clientY });
     });
@@ -277,6 +278,7 @@ export class TouchControls {
 
   /** Hides the controls and lets go of every finger while the chat sheet is open. */
   setSuspended(on: boolean): void {
+    this.suspended = on;
     this.root.classList.toggle('nn-suspended', on);
     if (on) {
       this.releaseAll();

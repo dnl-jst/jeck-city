@@ -1,5 +1,5 @@
-import { checkChat, type ChatChannel } from '@nn/shared';
-import { CHANNEL_LABEL, formatLine, type ChatLog } from './chat-log';
+import type { ChatChannel } from '@nn/shared';
+import { CHANNEL_LABEL, channelPlaceholder, formatLine, parseChatInput, takeChannelPrefix, type ChatLog } from './chat-log';
 
 const CSS = `
   .nn-chat-sheet { position: fixed; z-index: 28; left: 0; right: 0; top: env(safe-area-inset-top); height: 50%;
@@ -11,7 +11,8 @@ const CSS = `
   .nn-chat-sheet-tab, .nn-chat-sheet-close, .nn-chat-sheet-send { font: inherit; color: #fff; cursor: pointer;
     background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; padding: 6px 12px;
     -webkit-tap-highlight-color: transparent; }
-  .nn-chat-sheet-tab.nn-chat-sheet-active { background: rgba(242,196,107,0.35); border-color: #f2c46b; }
+  .nn-chat-sheet-tab.nn-chat-sheet-active { background: rgba(255,255,255,0.3); border-color: #fff; }
+  .nn-chat-sheet-tab.nn-chat-sheet-active.nn-chat-sheet-w { background: rgba(242,196,107,0.35); border-color: #f2c46b; }
   .nn-chat-sheet-close { margin-left: auto; min-width: 40px; }
   .nn-chat-sheet-lines { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
     touch-action: pan-y; user-select: text; }
@@ -89,6 +90,16 @@ export class ChatSheet {
       if (e.repeat || e.isComposing) return;
       this.submit();
     });
+    this.input.addEventListener('input', () => {
+      const p = takeChannelPrefix(this.input.value);
+      if (!p) return;
+      this.channel = p.channel;
+      this.input.value = p.rest;
+      this.renderTabs();
+    });
+    // the on-screen keyboard shrinks the visual viewport: keep the whole sheet (input row included) in it
+    window.visualViewport?.addEventListener('resize', () => this.layout());
+    window.visualViewport?.addEventListener('scroll', () => this.layout());
     this.log.onChange(() => {
       if (this.opened) {
         this.log.markRead();
@@ -110,6 +121,7 @@ export class ChatSheet {
     this.el.classList.add('nn-chat-sheet-open');
     this.renderTabs();
     this.renderLines();
+    this.layout();
     this.input.focus();
     this.onToggle?.(true);
   }
@@ -124,14 +136,33 @@ export class ChatSheet {
   }
 
   private submit(): void {
-    const res = checkChat(this.input.value);
-    if (!res.ok) return;
-    this.send(this.channel, res.text);
+    const parsed = parseChatInput(this.input.value, this.channel);
+    if (parsed.channel !== this.channel) {
+      this.channel = parsed.channel;
+      this.renderTabs();
+    }
+    if (parsed.text === null) {
+      // a bare "/w" only switches the channel; an empty or invalid text stays as typed
+      if (/^\s*\/\S+\s*$/.test(this.input.value)) this.input.value = '';
+      return;
+    }
+    this.send(parsed.channel, parsed.text);
     this.input.value = '';
   }
 
+  private layout(): void {
+    const vv = window.visualViewport;
+    if (!vv) return; // CSS fallback: top of the screen, half its height
+    this.el.style.top = `${vv.offsetTop}px`;
+    this.el.style.height = `${Math.min(vv.height, window.innerHeight * 0.5)}px`;
+  }
+
   private renderTabs(): void {
-    for (const [c, tab] of this.tabs) tab.classList.toggle('nn-chat-sheet-active', c === this.channel);
+    for (const [c, tab] of this.tabs) {
+      tab.classList.toggle('nn-chat-sheet-active', c === this.channel);
+      tab.classList.toggle('nn-chat-sheet-w', c === 'w');
+    }
+    this.input.placeholder = channelPlaceholder(this.channel, false);
   }
 
   private renderLines(): void {

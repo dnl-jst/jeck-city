@@ -270,7 +270,7 @@ export abstract class NippesRoom extends Room<{ state: NippesState }> {
         const p = this.sim.player(to.slot).pos;
         if (Math.hypot(p.x - from.x, p.z - from.z) > SAY_RANGE_M) continue;
       }
-      if (to !== seat) heard++;
+      if (to !== seat && !to.away && !to.kicked) heard++;
       deliver(to, line);
     }
     if (send.c === 's' && heard === 0) deliver(seat, { c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.unheard });

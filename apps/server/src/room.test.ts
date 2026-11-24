@@ -490,6 +490,19 @@ describe.skipIf(!haveAssets)('nippes room', () => {
       await leaveAll();
     });
 
+    it('an away player does not count as having heard a say line', async () => {
+      const a = await join('Anna');
+      const b = await join('Bert');
+      const ga = collect(a);
+      expect(placeB(a, b, 10)).toBeLessThan(50);
+      // B's seat is away (as after a dropped connection, inside the reconnect window)
+      (srv.room as unknown as { seats: Map<string, { away: boolean }> }).seats.get(b.sessionId)!.away = true;
+      a.send('chat', { c: 's', t: 'hallo?' });
+      await until(() => ga.length === 2);
+      expect(ga[1]).toEqual({ c: 'sys', slot: -1, name: '', t: CHAT_TEXTS.unheard });
+      await leaveAll();
+    });
+
     it('chat is throttled: 6th message gives one "slow" notice and no kick', async () => {
       const a = await join('Anna');
       const b = await join('Bert');

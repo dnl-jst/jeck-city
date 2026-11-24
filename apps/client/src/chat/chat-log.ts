@@ -40,6 +40,19 @@ export class ChatLog {
   }
 }
 
+/** Input placeholder per channel (German). `hints`: with the slash hints (desktop), without on the mobile sheet (it has tabs). */
+export function channelPlaceholder(c: ChatChannel, hints: boolean): string {
+  if (c === 's') return `Sagen: hören alle in der Nähe${hints ? ' · /w für Welt' : ''}`;
+  return `Welt: lesen alle im Spiel${hints ? ' · /s für Sagen' : ''}`;
+}
+
+/** A leading "/w ", "/welt ", "/s " or "/sagen " (any case, space required): the channel and the rest of the input. */
+export function takeChannelPrefix(raw: string): { channel: ChatChannel; rest: string } | null {
+  const m = /^\s*\/(\S+) ([\s\S]*)$/.exec(raw);
+  const channel = m ? PREFIX.get((m[1] ?? '').toLowerCase()) : undefined;
+  return m && channel ? { channel, rest: m[2] ?? '' } : null;
+}
+
 /** Splits an optional /w, /welt, /s, /sagen prefix off the input; text is null when nothing sendable remains. */
 export function parseChatInput(raw: string, current: ChatChannel): { channel: ChatChannel; text: string | null } {
   const m = /^\s*\/(\S+)(?:\s+([\s\S]*))?$/.exec(raw);
