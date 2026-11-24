@@ -11,4 +11,6 @@ apps/client/public/world/
 
 # deploy settings with the real domain
 deploy/.env
+# local credentials (S3 for publishing the world)
+.env
 data/cache/
