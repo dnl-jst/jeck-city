@@ -5,6 +5,9 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { BOUNDARY_IDS } from './osm.js';
 
+// The tile lists define what the pipeline reads (see raw/lock.ts). The download functions ask the origin servers and
+// are not part of a pipeline run: a run reads the pinned raw data (data/raw.lock.json, raw/resolve.ts).
+
 const LOD2_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/3dg/lod2_gml/lod2_gml/';
 const DGM_BASE = 'https://www.opengeodata.nrw.de/produkte/geobasis/hm/dgm1_tiff/dgm1_tiff/';
 /**

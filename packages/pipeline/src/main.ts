@@ -14,7 +14,9 @@ import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
 import { writeWorldIndex } from './worldindex.js';
 import { parseCityGml } from './citygml.js';
-import { DGM_TILES, fetchDgmTiles, fetchLod2Tiles, fetchOsm, fetchTransitRoutes, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
+import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
+import { readRawLock } from './raw/lock.js';
+import { ensureRawFiles } from './raw/resolve.js';
 import { generatedLamps } from './lamps.js';
 import { buildMapData } from './map.js';
 import { parseOsm } from './osm.js';
@@ -80,18 +82,6 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 
-/** Raw data present → never touch the network; `--skip-fetch` additionally insists on it. */
-async function ensureRaw(skipFetch: boolean): Promise<void> {
-  const have = existsSync(join(RAW_DIR, 'osm.json')) && existsSync(join(RAW_DIR, TRANSIT_ROUTES_FILE)) && LOD2_TILES.every((t) => existsSync(join(RAW_DIR, 'lod2', t)))
-    && DGM_TILES.every((t) => existsSync(join(RAW_DIR, 'dgm1', t)));
-  if (have) return console.log('raw data present, no fetch');
-  if (skipFetch) throw new Error(`--skip-fetch: ${RAW_DIR} is incomplete`);
-  await fetchLod2Tiles(join(RAW_DIR, 'lod2'));
-  await fetchDgmTiles(join(RAW_DIR, 'dgm1'));
-  await fetchOsm(RAW_DIR);
-  await fetchTransitRoutes(RAW_DIR);
-}
-
 /** `--out <dir>`: the world folder to write (and, with `--transit-only`, to read); default DEFAULT_OUT_DIR. */
 function parseOutDir(args: string[]): string {
   const i = args.indexOf('--out');
@@ -104,8 +94,8 @@ function parseOutDir(args: string[]): string {
 async function main() {
   const args = process.argv.slice(2);
   const outDir = parseOutDir(args);
-  await ensureRaw(args.includes('--skip-fetch'));
-  if (args.includes('--fetch-only')) return;
+  // the pinned raw data, checked file by file (missing or changed files come from the mirror, never an origin server)
+  await ensureRawFiles(await readRawLock(), RAW_DIR);
   if (args.includes('--transit-only')) return transitOnly(outDir);
 
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
