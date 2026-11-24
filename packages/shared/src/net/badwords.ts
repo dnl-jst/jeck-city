@@ -10,3 +10,7 @@ export const BAD_WORDS: readonly string[] = [
   'siegheil', 'fuck', 'shit', 'bitch', 'cunt', 'nigger', 'nigga', 'faggot', 'whore', 'asshole',
   'dickhead', 'bastard', 'motherfucker', 'retard', 'tranny', 'kackbratze',
 ];
+
+/** Chat filter list: the name list minus words too common or mild for free-form chat. */
+const CHAT_EXEMPT = new Set(['scheisse', 'scheisser', 'shit', 'fuck']);
+export const CHAT_BAD_WORDS: readonly string[] = BAD_WORDS.filter((w) => !CHAT_EXEMPT.has(w));
