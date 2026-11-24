@@ -68,3 +68,13 @@ describe('SpeechBubbles', () => {
     expect(made[0]!.disposed).toBe(true);
   });
 });
+
+test('size counts live bubbles (one per slot) until they expire', () => {
+  const { sb } = setup();
+  sb.say(1, 'a', 0);
+  sb.say(1, 'b', 0);
+  sb.say(2, 'c', 0);
+  expect(sb.size).toBe(2);
+  sb.update(60_000, origin, cam);
+  expect(sb.size).toBe(0);
+});

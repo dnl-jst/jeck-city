@@ -3,7 +3,7 @@ import {
 } from 'three';
 import {
   CHARACTER_VARIANTS, decodeCollision, decodeTerrain, heightAt, localToWgs84, parseManifest, parseMapData, parseTimeOverride, SECTION_STRIDE, sectionStates, sunState, surfaceY, withTransitCollision, UNKNOWN_WEATHER, weatherPreset, worldHash, WorldSim,
-  type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
+  type ChatChannel, type MapData, type SunState, type TerrainGrid, type Weather, type WorldManifest,
 } from '@nn/shared';
 import { NoWebGLError } from './errors';
 import { fadeOutIntroMusic } from './intro-music';
@@ -40,6 +40,8 @@ import { MapGrid } from './map/grid';
 import { StreetTracker } from './map/street';
 import { Minimap } from './map/minimap';
 import { BigMap } from './map/big-map';
+import { ChatController } from './chat/chat';
+import type { ChatLine } from './chat/chat-log';
 
 declare global {
   interface Window {
@@ -78,6 +80,8 @@ declare global {
     __nnWheelNudge?: (dx: number, dy: number) => void;
     /** Where free-fly is allowed: puts the free-fly camera at (x, y, z) looking along yaw / pitch (degrees, as ?cam), e.g. for stills. */
     __nnFlyTo?: (x: number, y: number, z: number, yawDeg: number, pitchDeg: number) => void;
+    /** Online, where write hooks are allowed: send a chat line, the chat log, live speech bubbles. */
+    __nnChat?: { send: (c: ChatChannel, t: string) => void; lines: () => readonly ChatLine[]; bubbles: () => number };
   }
   interface ImportMeta { readonly env: { readonly DEV: boolean } }
 }
@@ -202,6 +206,8 @@ farGround.visible = false; // until the manifest says how low it lies
 scene.add(farGround);
 
 let game: Game | null = null;
+/** The chat (online only). */
+let chat: ChatController | null = null;
 /** Minimap and big map; stay null when map.json fails to load (the game runs without a map). */
 let maps: { minimap: Minimap; bigMap: BigMap; tracker: StreetTracker } | null = null;
 let bigMapOpen = false;
@@ -271,6 +277,11 @@ renderer.setAnimationLoop((t: number) => {
   const dt = Math.min(timer.getDelta(), 0.1);
   if (dt > 0) fps += (1 / dt - fps) * 0.1;
   if (game && lighting && props) {
+    if (chat) {
+      // Enter opens the chat (not over the big map; a press there is dropped, it would open the chat on closing it)
+      if (input.consume('Enter') && !chat.isOpen && !bigMapOpen) chat.openInput();
+      chat.tick(performance.now());
+    }
     if (input.consume('KeyG')) {
       qualityLevel = nextQuality(qualityLevel);
       storeQuality(qualityLevel);
@@ -488,6 +499,13 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
     }
   }
   if (params.get('map') === 'open') game.map.toggle();
+  if (conn) {
+    const c = chat = new ChatController(conn, { root: document.body, touch, touchOn, me: conn.welcome.slot });
+    c.onSay = (slot, text) => game!.say(slot, text);
+    // keys held when the chat opens would never see their key-up (it goes to the text field)
+    c.onOpen = () => input.releaseAll();
+    if (allowed.writeHooks) window.__nnChat = { send: (ch, t) => conn.sendChat(ch, t), lines: () => c.log.lines, bubbles: () => game!.bubbleCount };
+  }
   window.__nnState = () => {
     const f = game!.focus();
     return {

@@ -77,6 +77,7 @@ export class ChatWindow {
     document.exitPointerLock();
     this.input.value = '';
     this.render();
+    this.el.style.display = 'block'; // before the next tick(): a hidden field cannot take the focus
     this.input.focus();
   }
 
@@ -101,6 +102,8 @@ export class ChatWindow {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       e.stopPropagation();
+      // a held Enter (the one that opened the window) or an IME confirming a word does not send
+      if (e.repeat || e.isComposing) return;
       this.submit();
     }
   }

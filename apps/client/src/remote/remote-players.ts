@@ -15,13 +15,13 @@ import { CRASH_SPIN, KNOCK_SPIN, ragSpin as spin, type RagdollWorld } from '../r
 import { LABEL_GAP, NameLabel, type Label } from './name-label';
 
 /** Figure height (m) the label floats above. */
-const FIGURE_H = 1.8;
+export const FIGURE_H = 1.8;
 /** A rider's head above the ground (m; seated a little higher than standing). */
-const RIDER_H = 1.9;
+export const RIDER_H = 1.9;
 /** Crank angle (rad) per metre ridden, as the sim's bike. */
 const CRANK_PER_M = 1 / (BIKE_WHEEL_RADIUS * BIKE_GEAR);
 /** Roof of a car above the road (m). */
-const ROOF_H = 1.5;
+export const ROOF_H = 1.5;
 /** A walker that moved further than this in one frame was teleported: no running animation for it. */
 const JUMP_M = 3;
 /** Moving slower than this (m/s) on the local player's car roof: standing still. */

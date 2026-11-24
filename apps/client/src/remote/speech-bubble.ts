@@ -71,11 +71,18 @@ export class BubbleSprite implements Bubble {
     h.fillStyle = '#fff';
     h.strokeStyle = 'rgba(0,0,0,0.35)';
     h.lineWidth = 3;
+    // one outline round body and tail (a separate tail path would draw the outline across the tail's base)
+    const x0 = 4, y0 = 4, x1 = 4 + bw, y1 = 4 + bh, r = 22, cx = c.width / 2;
     h.beginPath();
-    h.roundRect(4, 4, bw, bh, 22);
-    h.moveTo(c.width / 2 - 14, 4 + bh - 1);
-    h.lineTo(c.width / 2, 4 + bh + TAIL);
-    h.lineTo(c.width / 2 + 14, 4 + bh - 1);
+    h.moveTo(x0 + r, y0);
+    h.arcTo(x1, y0, x1, y1, r);
+    h.arcTo(x1, y1, x0, y1, r);
+    h.lineTo(cx + 14, y1);
+    h.lineTo(cx, y1 + TAIL);
+    h.lineTo(cx - 14, y1);
+    h.arcTo(x0, y1, x0, y0, r);
+    h.arcTo(x0, y0, x1, y0, r);
+    h.closePath();
     h.fill();
     h.stroke();
     h.fillStyle = '#16181d';
@@ -118,6 +125,11 @@ export class SpeechBubbles {
   private readonly live = new Map<number, Live>();
 
   constructor(private readonly scene: Parent, private readonly make: (lines: string[]) => Bubble = (l) => new BubbleSprite(l)) {}
+
+  /** Bubbles currently shown or fading. */
+  get size(): number {
+    return this.live.size;
+  }
 
   /** `slot` says `text` (replaces their bubble). `now` in ms. */
   say(slot: number, text: string, now: number): void {
