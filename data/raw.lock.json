@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mirror": null,
+  "mirror": "https://jeck-city.nbg1.your-objectstorage.com/",
   "files": {
     "dgm1/dgm1_32_353_5642_1_nw_2022.tif": {
       "hash": "76ba59d9436788952687bfbfaee88d84",
@@ -225,6 +225,10 @@
     "dgm1/dgm1_32_359_5649_1_nw_2022.tif": {
       "hash": "fce4096e407d3c2c48047a65472a80ef",
       "bytes": 1745522
+    },
+    "gtfs.zip": {
+      "hash": "03a790b9ab58984ae47cf7d153c68079",
+      "bytes": 56654989
     },
     "lod2/LoD2_32_353_5642_1_NW.gml": {
       "hash": "5d72f6d08af4383eea2f538b720df394",
@@ -458,5 +462,10 @@
       "hash": "c3654d86207372f2f1c33f9db3e56d19",
       "bytes": 236355
     }
-  }
+  },
+  "gtfsDays": [
+    20261124,
+    20261128,
+    20261129
+  ]
 }
