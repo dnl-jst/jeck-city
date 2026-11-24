@@ -18,6 +18,7 @@
     "board-shots": "node scripts/board-shots.mjs",
     "car-shots": "node scripts/car-shots.mjs",
     "ship-cars": "tsx packages/pipeline/src/ship-cars.ts",
+    "world:index": "tsx packages/pipeline/src/write-index.ts",
     "screenshot": "node scripts/screenshot.mjs",
     "drive-check": "node scripts/drive-check.mjs",
     "accept": "node scripts/accept.mjs",
