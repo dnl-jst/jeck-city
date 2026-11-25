@@ -313,8 +313,13 @@ mit der Referenz (`4f2df36c7e41`). Gemessen mit vorhandenem Gebäude-Cache: 350 
 ≈ 414 s und ≈ 2,9 GB); RSS nach den Geländefassungen ≈ 1,26 GB (vorher ≈ 1,7 GB nach der Geländephase). Weiter mit
 der Fläche wachsen: das Planen auf den Vektordaten der ganzen Stadt, der globale Kollisionsschritt (`followTerrain`
 über alle Bordsteine und `buildCollision`, zusammen ≈ 54 s und der größte Speicherbedarf des Laufs), die dünnen
-Wasser-Raster entlang des Flusses, und die Höhen werden weiter relativ zum globalen tiefsten Punkt jeder Fassung
-gerundet (absolute Rundung mit dem Kachelformat in Stufe 2).
+Wasser-Raster entlang des Flusses, der Arbeitsordner auf der Platte (8 Byte je Rasterpunkt für T0–T3, 6 Byte,
+solange die Zwischendatei von T0 besteht), das DGM-Band beim Bau von T0 (wächst mit der BREITE des Rasters: eine
+Kachelzeile plus die Zeilen der Unschärfe), und die Höhen werden weiter relativ zum globalen tiefsten Punkt jeder
+Fassung gerundet (absolute Rundung mit dem Kachelformat in Stufe 2). Die Aussage über Speicher und Laufzeit ist an
+nur einer Weltgröße gemessen. Zur Abnahme durch Daniel, drei Abweichungen vom Plan: Arbeitsordner je Lauf, deren
+Reste toter Läufe der nächste Lauf wegräumt (statt „zu Beginn jedes Laufs geleert“), Fenster in Zellkoordinaten des
+ganzen Rasters ausgewertet (R3), und 256 Cache-Blöcke für den Kollisionsschritt (R5).
 
 ## Prüfungen und Budgets
 
