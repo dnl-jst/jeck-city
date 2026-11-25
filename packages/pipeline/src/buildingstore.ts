@@ -46,8 +46,15 @@ async function baseKey(terrain: TerrainFile, datum: number, boundary: Pt[]): Pro
 }
 
 /**
+ * The largest window groundOf reads (cells): a LoD2 tile is 1 km square, its buildings reach a little beyond it.
+ * A bogus coordinate far off (a broken building, dropped later) would widen the window towards the whole grid.
+ */
+export const GROUND_WINDOW_CELLS = 1300 * 1300;
+
+/**
  * The ground under a tile's buildings: point queries on the terrain file, with a window over the buildings' extent
- * (clipped to the grid, one cell of margin) as the fast way.
+ * (clipped to the grid, one cell of margin) as the fast way – if that window has at most GROUND_WINDOW_CELLS cells
+ * (else point queries alone; the heights are the same either way).
  */
 function groundOf(terrain: TerrainFile, buildings: CityBuilding[]): Heights {
   let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
@@ -65,7 +72,10 @@ function groundOf(terrain: TerrainFile, buildings: CityBuilding[]): Heights {
   maxX = Math.min(maxX, terrain.x0 + terrain.cols - 1);
   maxZ = Math.min(maxZ, terrain.z0 + terrain.rows - 1);
   if (!(minX <= maxX && minZ <= maxZ)) return new TerrainSampler(terrain);
-  return new TerrainSampler(terrain, terrain.windowAt({ minX, minZ, maxX, maxZ }, 1));
+  const rect = { minX, minZ, maxX, maxZ };
+  const b = terrain.windowBounds(rect, 1);
+  if ((b.c1 - b.c0 + 1) * (b.r1 - b.r0 + 1) > GROUND_WINDOW_CELLS) return new TerrainSampler(terrain);
+  return new TerrainSampler(terrain, terrain.windowAt(rect, 1));
 }
 
 type TileFile = {

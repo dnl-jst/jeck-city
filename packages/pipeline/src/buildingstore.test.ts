@@ -2,13 +2,13 @@ import { decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { BuildingStore, decodeTileFile } from './buildingstore.js';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { BuildingStore, decodeTileFile, GROUND_WINDOW_CELLS } from './buildingstore.js';
 import { codeHash } from './codehash.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { footprintOf } from './footprint.js';
-import { type TerrainFile, writeTerrainFile } from './terrain/file.js';
+import { TerrainFile, writeTerrainFile } from './terrain/file.js';
 
 const fixture = (n: string) => readFileSync(new URL(`../fixtures/${n}.gml`, import.meta.url), 'utf8');
 /** The <core:cityObjectMember> blocks of a fixture (one building each). */
@@ -140,6 +140,32 @@ test('buildings dropped by classifyBuildings are in neither records nor cache', 
   expect(store.records.map((r) => r.id)).not.toContain('FIXTURE_BROKEN');
   const cached = readdirSync(cache).flatMap((f) => decodeTileFile(readFileSync(join(cache, f))).meshes.map((m) => m.id));
   expect(cached.sort()).toEqual(['FIXTURE_GABLE', 'FIXTURE_GABLE2', 'FIXTURE_U']);
+});
+
+test('a far-off building in a tile never widens the ground window beyond GROUND_WINDOW_CELLS; the meshes stay the same', async () => {
+  // a terrain larger than the limit (1500 × 1500 cells, the houses near its north-east corner): tile B's broken
+  // building lies ~356 km west and ~5600 km south, so the window over tile B's buildings would span the whole grid
+  expect(GROUND_WINDOW_CELLS).toBe(1300 * 1300);
+  const cols = 1500, rows = 1500;
+  const big = decodeTerrain(encodeTerrain({ x0: -1600, z0: 640, cols, rows, datum: 35, heights: Float32Array.from({ length: cols * rows }, (_, i) => 4.0 + 0.0006 * (i % cols) + 0.0003 * Math.floor(i / cols)) }));
+  const sizes: number[] = [];
+  const original = TerrainFile.prototype.window;
+  const spy = vi.spyOn(TerrainFile.prototype, 'window').mockImplementation(function (this: TerrainFile, ...a: [number, number, number, number]) {
+    const [c0, r0, c1, r1] = a;
+    sizes.push((Math.min(c1, this.cols - 1) - Math.max(c0, 0) + 1) * (Math.min(r1, this.rows - 1) - Math.max(r0, 0) + 1));
+    return original.apply(this, a);
+  });
+  try {
+    const store = await build({ terrain: big });
+    expect(sizes.length).toBeGreaterThan(0); // tiles A and C still use a window
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(GROUND_WINDOW_CELLS);
+    const want = (tile: number, id: string) => buildBuildingMesh(parseCityGml(TEXT[tile]!).find((b) => b.id === id)!, { datum: 35, terrain: big })!;
+    sameMesh(await store.mesh(0), want(0, 'FIXTURE_GABLE'));
+    sameMesh(await store.mesh(1), want(1, 'FIXTURE_U'));
+    sameMesh(await store.mesh(2), want(2, 'FIXTURE_GABLE2'));
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test('inChunk lists the records whose centroid lies in the chunk, in global order', async () => {

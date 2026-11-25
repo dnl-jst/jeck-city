@@ -1,9 +1,9 @@
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, encodeCollision, openingTest, ORIGIN_UTM, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
 import { BuildingStore, type BuildingRecord } from './buildingstore.js';
-import { parsePipelineArgs, UsageError } from './args.js';
+import { parsePipelineArgs, type PipelineArgs, UsageError } from './args.js';
 import { CODE_ROOTS, codeHash } from './codehash.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { readDgmTile, TERRAIN_SIGMA } from './dgm.js';
@@ -11,6 +11,7 @@ import { buildT0 } from './terrain/dgmstream.js';
 import { TerrainFile } from './terrain/file.js';
 import { heightAt, TerrainSampler } from './terrain/height.js';
 import { terrainVersions, type TerrainVersions } from './terrain/versions.js';
+import { withRunDir } from './terrain/workdir.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
@@ -60,7 +61,10 @@ const TRANSIT_ENV = 'data/cache/transit-env.bin';
 const TRANSIT_COLLISION = 'transit-collision.bin';
 /** The full building meshes, one file per LoD2 tile (see BuildingStore). */
 const BUILDING_CACHE = 'data/cache/buildings';
-/** The work folder of the terrain versions T0–T3 (see terrain/versions.ts): emptied at the start of every run. */
+/**
+ * The work folders of the terrain versions T0–T3 (see terrain/versions.ts): every run writes into a folder of its own
+ * below this one, removed at its end (see withRunDir).
+ */
 const TERRAIN_DIR = 'data/cache/terrain';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
@@ -85,6 +89,11 @@ const YARD_TREES = [{ x: 286.3, z: 1203.0 }, { x: 263.5, z: 1202.4 }];
 const KERB_EDGE = 8;
 const KERB_TOLERANCE = 0.02;
 const KERB_MIN_EDGE = 0.05;
+/**
+ * Cached 256 × 256 blocks of T3 while the kerbs follow the terrain (≈ 68 MB): measured 51 s for followTerrain and
+ * followDeviation against 63 s with the default 64 blocks; 1024 blocks took 42 s but raised the peak RSS by ≈ 1.2 GB.
+ */
+const KERB_TERRAIN_BLOCKS = 256;
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude und Gelände: Geobasis NRW (dl-de/zero-2.0)';
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -102,7 +111,12 @@ async function main() {
   // unpacked before any work too: a feed the build cannot read fails here, not after terrain, buildings and streets
   const timetable = { dir: await unpackGtfs(join(RAW_DIR, GTFS_ZIP), pinned.hash), hash: pinned.hash, days: pinned.days };
   if (args.transitOnly) return transitOnly(outDir, timetable);
+  await withRunDir(TERRAIN_DIR, (terrainDir) => buildWorld(args, timetable, terrainDir));
+}
 
+/** The full run: the world into `args.outDir`, the terrain versions into `terrainDir` (this run's own work folder). */
+async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: string): Promise<void> {
+  const { outDir } = args;
   // (V8 keeps the locals of this async function alive to its end, used or not: the big ones are let go by hand once
   // they are done with, or never get a name)
   let osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
@@ -114,10 +128,8 @@ async function main() {
   // (quantized), so the pipeline sees exactly the heights the client reads from terrain.bin. T0: the blurred DGM,
   // computed band by band from the tiles (never a whole mosaic or grid in memory).
   const area = worldRect(f.boundary);
-  await rm(TERRAIN_DIR, { recursive: true, force: true }); // (never a version left by an earlier run)
-  await mkdir(TERRAIN_DIR, { recursive: true });
   const t0 = await buildT0({
-    tiles: DGM_TILES, area, sigma: TERRAIN_SIGMA, path: join(TERRAIN_DIR, 't0.bin'),
+    tiles: DGM_TILES, area, sigma: TERRAIN_SIGMA, path: join(terrainDir, 't0.bin'),
     read: async (t) => {
       const buf = await readFile(join(RAW_DIR, 'dgm1', t));
       return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
@@ -151,7 +163,7 @@ async function main() {
   // T1: the terrain lowered under the models' cut surfaces; the Rhine on T1 and its bed (T2), the bridges over it
   // planned on T2 and the ramps behind their abutments (T3: the world's terrain)
   // (not kept whole: the water is let go below)
-  let versions: TerrainVersions | undefined = terrainVersions({ t0, cuts: [...prepared.values()].filter((p) => p.m.cut.length).map((p) => p.m.cut), features: f, dir: TERRAIN_DIR, log: console.log });
+  let versions: TerrainVersions | undefined = terrainVersions({ t0, cuts: [...prepared.values()].filter((p) => p.m.cut.length).map((p) => p.m.cut), features: f, dir: terrainDir, log: console.log });
   const { t1, t2, t3, bridges, carved } = versions;
   let water: Water | undefined = versions.water;
   versions = undefined;
@@ -270,12 +282,17 @@ async function main() {
 
   // collision: the 1 m drape would put millions of kerb triangles into the trimesh; a coarse terrain-following copy
   // of the flat kerbs and sidewalks is enough (rendering keeps the draped meshes)
-  const curb = punchMesh(followTerrain(cropMesh(flatStreets.curb, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
-  const sidewalk = punchMesh(followTerrain(cropMesh(flatStreets.sidewalk, area), terrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
+  // (followTerrain asks the terrain point by point along every kerb of the city: T3 opened once more with a larger block
+  // cache for it, let go right after)
+  const kerbFile = TerrainFile.open(t3.path, { blocks: KERB_TERRAIN_BLOCKS });
+  const kerbTerrain = new TerrainSampler(kerbFile);
+  const curb = punchMesh(followTerrain(cropMesh(flatStreets.curb, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
+  const sidewalk = punchMesh(followTerrain(cropMesh(flatStreets.sidewalk, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
   for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
-    const d = followDeviation(m, terrain);
+    const d = followDeviation(m, kerbTerrain);
     console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
   }
+  kerbFile.close();
   const deckCollision = [...deckSurfaces.map(triangleSoup), bodies.collision];
   const collision = await buildCollision({ buildings: store.meshes(), curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain: t3 });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
@@ -450,23 +467,27 @@ async function transitOnly(outDir: string, timetable: Timetable): Promise<void> 
   for (const file of [join(outDir, 'manifest.json'), join(outDir, 'terrain.bin'), TRANSIT_ENV]) {
     if (!existsSync(file)) throw new Error(`--transit-only: ${file} is missing; run the full pipeline once`);
   }
-  // the world's terrain, read point by point from the file (never decoded whole)
+  // the world's terrain, read point by point from the file (never decoded whole); closed however this part ends
   const file = TerrainFile.open(join(outDir, 'terrain.bin'));
-  // the cached raster must belong to this folder's world (the last full run may have written another folder)
-  let cached: ReturnType<typeof decodeEnv>;
+  let build: TransitBuild | null, f: ReturnType<typeof parseOsm>, manifest: WorldManifest;
   try {
-    cached = decodeEnv(await readFile(TRANSIT_ENV));
-  } catch (err) {
-    throw new Error(`--transit-only: ${TRANSIT_ENV}: ${err instanceof Error ? err.message : String(err)}; run the full pipeline into ${outDir} first`);
+    // the cached raster must belong to this folder's world (the last full run may have written another folder)
+    let cached: ReturnType<typeof decodeEnv>;
+    try {
+      cached = decodeEnv(await readFile(TRANSIT_ENV));
+    } catch (err) {
+      throw new Error(`--transit-only: ${TRANSIT_ENV}: ${err instanceof Error ? err.message : String(err)}; run the full pipeline into ${outDir} first`);
+    }
+    checkEnvTerrain(cached.terrain, fileContentHash(file));
+    const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
+    f = parseOsm(osmJson);
+    const terrain = new TerrainSampler(file);
+    manifest = JSON.parse(await readFile(join(outDir, 'manifest.json'), 'utf8')) as WorldManifest;
+    build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
+      { terrain, area: worldRect(f.boundary), ...cached.env });
+  } finally {
+    file.close();
   }
-  checkEnvTerrain(cached.terrain, fileContentHash(file));
-  const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
-  const f = parseOsm(osmJson);
-  const terrain = new TerrainSampler(file);
-  const manifest = JSON.parse(await readFile(join(outDir, 'manifest.json'), 'utf8')) as WorldManifest;
-  const build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
-    { terrain, area: worldRect(f.boundary), ...cached.env });
-  file.close();
   if (!build) throw new Error('--transit-only: the OSM data has no transit line');
   await withTimetable(build, worldRect(f.boundary), timetable);
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);

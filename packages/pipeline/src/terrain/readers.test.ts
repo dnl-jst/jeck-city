@@ -153,21 +153,68 @@ describe('scattered readers on point queries', () => {
     expect(fileContentHash(file)).toBe(contentHash(readFileSync(file.path)));
   });
 
+  it('the @nn/shared import scan catches every form that can bring heightAt in', () => {
+    const scan = (src: string) => sharedHeightAtUses(src);
+    expect(scan("import { heightAt } from '@nn/shared';")).toEqual(['named import']);
+    expect(scan("import { CHUNK_SIZE, heightAt as h } from \"@nn/shared\";")).toEqual(['named import']);
+    expect(scan("import type { TerrainGrid } from '@nn/shared';\nimport {\n  type X,\n  heightAt,\n} from '@nn/shared';")).toEqual(['named import']);
+    expect(scan("import shared, { heightAt } from '@nn/shared';")).toEqual(['named import']);
+    expect(scan("import * as shared from '@nn/shared';")).toEqual(['namespace import']);
+    expect(scan("import shared, * as all from '@nn/shared';")).toEqual(['namespace import']);
+    expect(scan("export { heightAt } from '@nn/shared';")).toEqual(['re-export']);
+    expect(scan("export { heightAt as h } from \"@nn/shared\";")).toEqual(['re-export']);
+    expect(scan("export * from '@nn/shared';")).toEqual(['re-export']);
+    expect(scan("export * as s from '@nn/shared';")).toEqual(['re-export']);
+    expect(scan("const s = await import('@nn/shared');")).toEqual(['dynamic import']);
+    expect(scan("const s = await import( \"@nn/shared\" );")).toEqual(['dynamic import']);
+    // not a use: other names, other packages, type-only imports of other names
+    expect(scan("import { CHUNK_SIZE, heightAtOther, type TerrainGrid } from '@nn/shared';")).toEqual([]);
+    expect(scan("import { heightAt } from './terrain/height.js';")).toEqual([]);
+    expect(scan("import * as fs from 'node:fs';\nexport { heightAt } from './height.js';")).toEqual([]);
+  });
+
   it('heightAt is imported from @nn/shared only in terrain/height.ts', () => {
     const root = join(import.meta.dirname, '..');
+    /** Files that may bring in @nn/shared wholesale (a namespace import, a dynamic import, `export *`), with the reason. */
+    const ALLOWED: Record<string, string> = {};
     const offenders: string[] = [];
     const walk = (d: string) => {
       for (const e of readdirSync(d, { withFileTypes: true })) {
         const p = join(d, e.name);
         if (e.isDirectory()) walk(p);
         else if (e.name.endsWith('.ts') && !e.name.endsWith('.test.ts')) {
-          const src = readFileSync(p, 'utf8');
-          for (const imp of src.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'@nn\/shared'/g))
-            if (/(^|[\s,])heightAt\b/.test(imp[1]!)) offenders.push(p.slice(root.length + 1));
+          const file = p.slice(root.length + 1).split('\\').join('/');
+          for (const use of sharedHeightAtUses(readFileSync(p, 'utf8')))
+            if (!(use === 'named import' && file === 'terrain/height.ts') && !(use !== 'named import' && file in ALLOWED)) offenders.push(`${file}: ${use}`);
         }
       }
     };
     walk(root);
-    expect(offenders).toEqual(['terrain/height.ts']);
+    expect(offenders).toEqual([]);
+    // and height.ts does import it (the scan works on the real sources)
+    expect(sharedHeightAtUses(readFileSync(join(root, 'terrain/height.ts'), 'utf8'))).toEqual(['named import']);
   });
 });
+
+const SHARED = String.raw`(?:'@nn\/shared'|"@nn\/shared")`;
+/**
+ * The ways a source can reach @nn/shared's heightAt: a named import or re-export of it (also renamed, next to a default
+ * import, over several lines, either quote), and the forms that bring in the whole module (a namespace import,
+ * `export *`, a dynamic import) – those count wherever they appear.
+ */
+function sharedHeightAtUses(src: string): string[] {
+  const out: string[] = [];
+  const names = (list: string) => list.split(',').map((n) => n.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0]!.trim());
+  for (const m of src.matchAll(new RegExp(String.raw`\bimport\s+(type\s+)?([^'";]*?)\s*from\s*${SHARED}`, 'g'))) {
+    const clause = m[2]!;
+    if (/\*\s*as\s+[\w$]+/.test(clause)) out.push('namespace import');
+    const braces = /\{([^}]*)\}/.exec(clause);
+    if (braces && names(braces[1]!).includes('heightAt')) out.push('named import');
+  }
+  for (const m of src.matchAll(new RegExp(String.raw`\bexport\s+(type\s+)?(\*(?:\s*as\s+[\w$]+)?|\{[^}]*\})\s*from\s*${SHARED}`, 'g'))) {
+    const clause = m[2]!;
+    if (clause.startsWith('*') || names(clause.slice(1, -1)).includes('heightAt')) out.push('re-export');
+  }
+  for (const _ of src.matchAll(new RegExp(String.raw`\bimport\s*\(\s*${SHARED}\s*\)`, 'g'))) out.push('dynamic import');
+  return out;
+}

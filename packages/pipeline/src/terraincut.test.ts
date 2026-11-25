@@ -102,6 +102,21 @@ function randomTris(t: TerrainGrid, n: number, seed: number, y0: number, dy: num
 }
 
 describe('cuts and fills as sparse edits equal the dense functions', () => {
+  it('the cut targets are stored as Float32 like the dense version: a target just below the terrain in float64 but equal in Float32 changes nothing', () => {
+    // flat at 1.01 (decoded Float32(1.01)); a level triangle at the Float32 y whose y − CUT_MARGIN lies, in float64,
+    // just below that height, yet rounds to it as a Float32 – a Float64 store would lower every point under the cut
+    const { file, dense } = fileOf(flat(1.01));
+    const h = dense.heights[0]!, y = 1.059999942779541;
+    expect(Math.fround(y)).toBe(y);
+    expect(y - CUT_MARGIN).toBeLessThan(h);
+    expect(Math.fround(y - CUT_MARGIN)).toBe(h);
+    const tri = Float32Array.from([4, y, 4, 8, y, 4, 4, y, 8]);
+    expect(applyTerrainCuts(dense, tri)).toBe(0);
+    const e = noEdits(file.cols, file.rows);
+    expect(terrainCutEdits(file, e, tri)).toBe(0);
+    expect(bytes(commit(file, e)).equals(encoded(dense))).toBe(true);
+  });
+
   it('terrainCutEdits + commitVersion gives the bytes of: applyTerrainCuts on the decoded grid, then encodeTerrain', () => {
     for (let seed = 1; seed <= 6; seed++) {
       const { file, dense } = fileOf(randomGrid(180 + 13 * seed, 150 + 7 * seed, seed, seed % 2 ? -1234.5 : 300, 567));

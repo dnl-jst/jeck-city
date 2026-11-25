@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
-import { commitVersion, TerrainFile, writeTerrainFile } from './file.js';
+import { commitVersion, DEFAULT_MAX_WINDOW_CELLS, TerrainFile, writeTerrainFile } from './file.js';
 import { SparseRaster } from './sparse.js';
 import { randomGrid, rng } from './testgrid.js';
 
@@ -94,6 +94,22 @@ describe('TerrainFile', () => {
     expect([near.x0 - grid.x0, near.z0 - grid.z0, near.cols, near.rows]).toEqual([3, 4, 2, 2]);
     expect(() => f.window(400, 0, 500, 10)).toThrow(/outside/);
     expect(() => f.window(0.5, 0, 10, 10)).toThrow(/integer/);
+  });
+
+  it('a window larger than maxWindowCells is refused with its size; windowBounds gives the clipped cells without reading', () => {
+    const f = writeGrid(grid);
+    expect(f.maxWindowCells).toBe(DEFAULT_MAX_WINDOW_CELLS);
+    expect(DEFAULT_MAX_WINDOW_CELLS).toBe(4_000_000);
+    const small = keep(TerrainFile.open(f.path, { maxWindowCells: 100 * 50 }));
+    expect(small.window(0, 0, 99, 49).cols).toBe(100); // exactly at the limit
+    expect(() => small.window(0, 0, 100, 49)).toThrow(/window of 101 × 50 = 5050 cells exceeds the limit of 5000 cells/);
+    expect(() => small.windowAt({ minX: -1e6, minZ: -1e6, maxX: 1e6, maxZ: 1e6 }, 0)).toThrow(/300 × 270 = 81000 cells exceeds/);
+    // the bounds windowAt would read, clipped to the grid
+    expect(small.windowBounds({ minX: -1e6, minZ: -1e6, maxX: 1e6, maxZ: 1e6 }, 0)).toEqual({ c0: 0, r0: 0, c1: 299, r1: 269 });
+    expect(small.windowBounds({ minX: grid.x0 + 3.7, minZ: grid.z0 + 4.2, maxX: grid.x0 + 3.9, maxZ: grid.z0 + 4.3 }, 1)).toEqual({ c0: 2, r0: 3, c1: 5, r1: 6 });
+    expect(() => TerrainFile.open(f.path, { maxWindowCells: 0 })).toThrow(/bad maxWindowCells/);
+    // the next version keeps the limit
+    expect(commitVersion(small, null, null, join(dir, 'next.bin')).maxWindowCells).toBe(5000);
   });
 
   it('min, max and borderMin equal the reductions over the decoded grid', () => {

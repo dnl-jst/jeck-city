@@ -304,6 +304,18 @@ dabei wie heute relativ zum tiefsten Punkt der jeweiligen Geländefassung (als a
 damit der Bytevergleich mit der Referenzwelt erhalten bleibt; die absolute Rundung kommt mit dem Kachelformat in
 Stufe 2. Plan: `docs/superpowers/plans/2026-11-25-tiled-world-stage-4-terrain.md`.
 
+*Umgesetzt (25.11.2026):* Kein Pipeline-Code legt mehr ein Feld mit einem Eintrag je Rasterpunkt an (ein Test prüft
+das an den Quellen). Die Fassungen T0–T3 sind Dateien im Format von `terrain.bin` in einem Arbeitsordner je Lauf;
+T0 entsteht Band für Band aus den DGM-Kacheln, Einschnitte, Flussbett und Aufschüttungen sind dünne Änderungen, die
+beim Schreiben der nächsten Fassung eingerechnet werden, Wasser liegt in dünnen Rastern, und jeder Leser holt sich
+Fenster (höchstens 4 Mio. Punkte, sonst Fehler) oder Punktabfragen über einen Block-Cache. Die Welt bleibt bytegleich
+mit der Referenz (`4f2df36c7e41`). Gemessen mit vorhandenem Gebäude-Cache: 350 s, Spitzen-RSS ≈ 2,07 GB (vorher
+≈ 414 s und ≈ 2,9 GB); RSS nach den Geländefassungen ≈ 1,26 GB (vorher ≈ 1,7 GB nach der Geländephase). Weiter mit
+der Fläche wachsen: das Planen auf den Vektordaten der ganzen Stadt, der globale Kollisionsschritt (`followTerrain`
+über alle Bordsteine und `buildCollision`, zusammen ≈ 54 s und der größte Speicherbedarf des Laufs), die dünnen
+Wasser-Raster entlang des Flusses, und die Höhen werden weiter relativ zum globalen tiefsten Punkt jeder Fassung
+gerundet (absolute Rundung mit dem Kachelformat in Stufe 2).
+
 ## Prüfungen und Budgets
 
 - **Parität (Stufe 1):** Bytevergleich alt gegen neu, als Befehl im Repository, solange die alte Pipeline existiert.

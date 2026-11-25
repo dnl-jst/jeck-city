@@ -225,6 +225,30 @@ describe('the water on sparse rasters equals the dense version', () => {
     expect(n).toBeGreaterThan(0);
   });
 
+  it('findWater: meanLevel is summed in the dense version\'s order (levels of mixed magnitude, where the order changes the sum)', () => {
+    // a low river (levels a few cm, stepping along it: Float32 values with many fraction bits) and a high one (≈ 600),
+    // each in its own valley; many cells: the float64 sum rounds, so its order matters
+    const cols = 700, rows = 600;
+    const heights = new Float32Array(cols * rows);
+    for (let r = 0; r < rows; r++)
+      for (let c = 0; c < cols; c++) {
+        const low = Math.abs(c - 150) < 60, high = Math.abs(c - 520) < 70;
+        const noise = 0.13 * Math.sin(c * 1.7 + r * 0.9) + 0.07 * Math.cos(c * 0.37 - r * 2.3);
+        heights[r * cols + c] = low ? 0.03 + r * 0.00013 + noise : high ? 603.17 + r * 0.0007 + noise : 650;
+      }
+    const t: TerrainGrid = { x0: -350, z0: 200, cols, rows, datum: 40, heights };
+    const { s, d } = sameWater(t, [[{ x: -200, z: 205 }, { x: -200, z: 795 }], [{ x: 170, z: 795 }, { x: 170, z: 205 }]]);
+    expect(s.area).toBeGreaterThan(100_000);
+    // the data is order-sensitive: the levels summed in row-major order forwards and backwards differ
+    const levels: number[] = [];
+    for (let i = 0; i < d.mask.length; i++) if (d.mask[i]) levels.push(d.level[i]!);
+    let fwd = 0, bwd = 0;
+    for (const v of levels) fwd += v;
+    for (let i = levels.length - 1; i >= 0; i--) bwd += levels[i]!;
+    expect(fwd).not.toBe(bwd);
+    expect(Object.is(s.meanLevel, d.meanLevel)).toBe(true);
+  });
+
   it('carveRiverBed: a lake wider than one page (distance > 256 cells from the shore)', () => {
     const cols = 1200, rows = 1100, cx = 600, cy = 560;
     const heights = new Float32Array(cols * rows);

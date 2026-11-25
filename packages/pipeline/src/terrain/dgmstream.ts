@@ -7,8 +7,9 @@ import { gaussKernel, NODATA, type Mosaic } from '../dgm.js';
 import { type TerrainFile, writeTerrainFile } from './file.js';
 
 // T0 – the blurred DGM sampled on the world grid – computed in bands, never holding the mosaic, its blurred copy or the
-// grid. The arithmetic is that of dgm.ts (mosaic → gaussBlur → terrainFromMosaic/sampleMosaic) step by step, in the
-// same order and with the same Float32 stores, so the result is byte-identical:
+// grid. The arithmetic is that of the dense reference chain in dgm.dense.test-util.ts (mosaic → gaussBlur →
+// terrainFromMosaic/sampleMosaic) step by step, in the same order and with the same Float32 stores, so the result is
+// byte-identical:
 //   raw mosaic row j (tiles pasted in list order) → horizontal pass (float64 sum, d = -r..r, stored as Float32)
 //   → vertical pass over 2r + 1 horizontal rows (row index clamped to the MOSAIC, float64 sum, stored as Float32)
 //   → bilinear sample at the integer grid points (sampleMosaic's index and clamping rules) → minus datum → Float32.
@@ -16,7 +17,7 @@ import { type TerrainFile, writeTerrainFile } from './file.js';
 
 /** Where a tile sits in the mosaic, in pixels (column `left`, row `top`; row 0 = north). */
 type TileBox = { name: string; order: number; left: number; top: number; width: number; height: number; e0: number; n0: number };
-/** The mosaic as dgm.ts's `mosaic` would build it, without its pixels. */
+/** The mosaic as the dense `mosaic` (dgm.dense.test-util.ts) would build it, without its pixels. */
 type Layout = { e0: number; n0: number; width: number; height: number; tiles: TileBox[] };
 type Read = (name: string) => Promise<Mosaic>;
 
@@ -163,14 +164,25 @@ class BlurStream {
   release(j: number): void {
     for (const [y, row] of this.bRows) if (y < j) (this.bRows.delete(y), this.free.push(row));
   }
+
+  /** Lets go of everything (rows, row pool, decoded tiles) once the band is done: no row is asked for any more. */
+  dispose(): void {
+    this.hRows.clear();
+    this.bRows.clear();
+    this.free.length = 0;
+    this.held.clear();
+    this.nextTile = this.wanted.length;
+    this.nextB = Infinity;
+  }
 }
 
 type RowSink = (r: number, s: Float64Array) => void;
 
 /**
  * Samples the blurred mosaic bilinearly at the integer grid points (x0 + c, z0 + r), c < cols, r < rows, in the
- * arithmetic of sampleMosaic (dgm.ts). Plans the band (and refuses a maxTiles it cannot keep) right away; the returned
- * function, called once, calls onRow(r, samples) for every row in order (samples: cols doubles, reused).
+ * arithmetic of sampleMosaic (dgm.dense.test-util.ts). Plans the band (and refuses a maxTiles it cannot keep) right
+ * away; the returned function, called once, calls onRow(r, samples) for every row in order (samples: cols doubles,
+ * reused), then lets go of the band's rows and tiles.
  */
 function gridSampler(m: Layout, read: Read, k: Float64Array, maxTiles: number,
   g: { x0: number; z0: number; cols: number; rows: number }): (onRow: RowSink) => Promise<void> {
@@ -198,18 +210,23 @@ function gridSampler(m: Layout, read: Read, k: Float64Array, maxTiles: number,
   const stream = new BlurStream(m, read, k, ci[0]!, ci1[g.cols - 1]!, rj[0]!, rj1[g.rows - 1]!, maxTiles);
   return async (onRow) => {
     const s = new Float64Array(g.cols);
-    for (let r = 0; r < g.rows; r++) {
-      const top = await stream.blurred(rj[r]!);
-      const bot = await stream.blurred(rj1[r]!);
-      const fy = fys[r]!;
-      for (let c = 0; c < g.cols; c++) {
-        const i = ci[c]!, i1 = ci1[c]!, fx = fxs[c]!;
-        const t = top[i]! * (1 - fx) + top[i1]! * fx;
-        const b = bot[i]! * (1 - fx) + bot[i1]! * fx;
-        s[c] = t * (1 - fy) + b * fy;
+    try {
+      for (let r = 0; r < g.rows; r++) {
+        const top = await stream.blurred(rj[r]!);
+        const bot = await stream.blurred(rj1[r]!);
+        const fy = fys[r]!;
+        for (let c = 0; c < g.cols; c++) {
+          const i = ci[c]!, i1 = ci1[c]!, fx = fxs[c]!;
+          const t = top[i]! * (1 - fx) + top[i1]! * fx;
+          const b = bot[i]! * (1 - fx) + bot[i1]! * fx;
+          s[c] = t * (1 - fy) + b * fy;
+        }
+        onRow(r, s);
+        stream.release(rj[r]!);
       }
-      onRow(r, s);
-      stream.release(rj[r]!);
+    } finally {
+      // (buildT0 keeps this closure until its write passes are done: the last tile row and the row pools go now)
+      stream.dispose();
     }
   };
 }
