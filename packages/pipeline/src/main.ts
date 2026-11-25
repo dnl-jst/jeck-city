@@ -11,7 +11,7 @@ import { buildT0 } from './terrain/dgmstream.js';
 import { TerrainFile } from './terrain/file.js';
 import { heightAt, TerrainSampler } from './terrain/height.js';
 import { terrainVersions, type TerrainVersions } from './terrain/versions.js';
-import { withRunDir } from './terrain/workdir.js';
+import { unlinkRunFile, withRunDir } from './terrain/workdir.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
@@ -63,7 +63,7 @@ const TRANSIT_COLLISION = 'transit-collision.bin';
 const BUILDING_CACHE = 'data/cache/buildings';
 /**
  * The work folders of the terrain versions T0–T3 (see terrain/versions.ts): every run writes into a folder of its own
- * below this one, removed at its end (see withRunDir).
+ * below this one, removed at its end and on SIGINT/SIGTERM (see withRunDir).
  */
 const TERRAIN_DIR = 'data/cache/terrain';
 const PARKING_SEED = 2613766;
@@ -91,7 +91,7 @@ const KERB_TOLERANCE = 0.02;
 const KERB_MIN_EDGE = 0.05;
 /**
  * Cached 256 × 256 blocks of T3 while the kerbs follow the terrain (≈ 68 MB): measured 51 s for followTerrain and
- * followDeviation against 63 s with the default 64 blocks; 1024 blocks took 42 s but raised the peak RSS by ≈ 1.2 GB.
+ * followDeviation against 62.7 s with the default 64 blocks, for ≈ 110 MB more peak RSS.
  */
 const KERB_TERRAIN_BLOCKS = 256;
 const ATTRIBUTION = '© OpenStreetMap-Mitwirkende (ODbL) · 3D-Gebäude und Gelände: Geobasis NRW (dl-de/zero-2.0)';
@@ -111,11 +111,22 @@ async function main() {
   // unpacked before any work too: a feed the build cannot read fails here, not after terrain, buildings and streets
   const timetable = { dir: await unpackGtfs(join(RAW_DIR, GTFS_ZIP), pinned.hash), hash: pinned.hash, days: pinned.days };
   if (args.transitOnly) return transitOnly(outDir, timetable);
-  await withRunDir(TERRAIN_DIR, (terrainDir) => buildWorld(args, timetable, terrainDir));
+  await withRunDir(TERRAIN_DIR, async (terrainDir) => {
+    // the terrain files buildWorld opens, closed when it ends however it ends (close is idempotent)
+    const open = new Set<TerrainFile>();
+    try {
+      await buildWorld(args, timetable, terrainDir, open);
+    } finally {
+      for (const t of open) t.close();
+    }
+  });
 }
 
-/** The full run: the world into `args.outDir`, the terrain versions into `terrainDir` (this run's own work folder). */
-async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: string): Promise<void> {
+/**
+ * The full run: the world into `args.outDir`, the terrain versions into `terrainDir` (this run's own work folder).
+ * Every terrain version it opens goes into `open` at once (the caller closes them all once it ends).
+ */
+async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: string, open: Set<TerrainFile>): Promise<void> {
   const { outDir } = args;
   // (V8 keeps the locals of this async function alive to its end, used or not: the big ones are let go by hand once
   // they are done with, or never get a name)
@@ -135,6 +146,7 @@ async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: 
       return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
     },
   });
+  open.add(t0);
   const { datum } = t0;
   console.log(`terrain: ${t0.cols}×${t0.rows}, datum ${datum} m, ${(t0.min() + datum).toFixed(1)}–${(t0.max() + datum).toFixed(1)} m NHN, σ ${TERRAIN_SIGMA} m`);
 
@@ -165,6 +177,7 @@ async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: 
   // (not kept whole: the water is let go below)
   let versions: TerrainVersions | undefined = terrainVersions({ t0, cuts: [...prepared.values()].filter((p) => p.m.cut.length).map((p) => p.m.cut), features: f, dir: terrainDir, log: console.log });
   const { t1, t2, t3, bridges, carved } = versions;
+  for (const t of [t1, t2, t3]) open.add(t);
   let water: Water | undefined = versions.water;
   versions = undefined;
   // LoD2 models the Rhine bridges as solid blocks from the water up to the deck: the bridges are built from OSM instead
@@ -175,8 +188,13 @@ async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: 
   console.log(`buildings over the water dropped: ${wetBuildings.size}`);
   console.log(`water: ${water.area} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
   // T3 is never decoded whole: each chunk reads its window of the file, every other reader asks it point by point
-  // (a sampler); the world's terrain.bin is a copy of the file
-  for (const t of new Set([t0, t1, t2])) if (t !== t3) t.close();
+  // (a sampler); the world's terrain.bin is a copy of the file. T0–T2 have had their last reader: closed and removed,
+  // the work folder holds only T3 from here (without cuts T1 is T0 itself, one file)
+  for (const t of new Set([t0, t1, t2]))
+    if (t !== t3) {
+      t.close();
+      unlinkRunFile(terrainDir, t.path);
+    }
   const terrain = new TerrainSampler(t3);
   const terrainBytes = (await stat(t3.path)).size;
 
@@ -211,7 +229,7 @@ async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: 
   for (const name of DRAPED) flatSources[name] = prepareFlat(flatStreets[name], area);
   const waterMesh = cropMesh(waterSurface(t3, water), area);
   const waterLines = waterOutlines(t3, water); // (for the map; it only needs the grid's size, which no longer changes)
-  water = undefined; // (mask and levels: ≈ 190 MB)
+  water = undefined; // (mask and levels, sparse: only pages with water)
   const streets: Partial<StreetMeshes> = { water: waterMesh, bridge: bodies.mesh, steel: bodies.steel };
   console.log(`water surface: ${waterMesh.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
   // the underground Stadtbahn: tunnel, stations and stairs; the stairwells are cut out of the ground and the pavement
