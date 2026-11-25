@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildWorldIndex, contentHash, writeWorldIndex } from './worldindex.js';
+import { beginWorldWrite, buildWorldIndex, contentHash, writeWorldIndex } from './worldindex.js';
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'worldindex-')); });
@@ -41,5 +41,21 @@ describe('world index', () => {
     await writeFile(join(dir, 'map.json'), '{}');
     await writeFile(join(dir, name), 'x');
     await expect(buildWorldIndex(dir)).rejects.toThrow(/dist\/world/);
+  });
+});
+
+describe('beginWorldWrite', () => {
+  it('removes index.json and the GLBs matching the pattern, keeps everything else, and creates a missing folder', async () => {
+    for (const f of ['index.json', 'manifest.json', 'terrain.bin', 'chunk_0_0.glb', 'model_dom.glb', 'transit_1_2.glb', 'bike_1.glb']) await writeFile(join(dir, f), 'x');
+    await beginWorldWrite(dir, /^(chunk|model|transit)_.*\.glb$/);
+    expect((await readdir(dir)).sort()).toEqual(['bike_1.glb', 'manifest.json', 'terrain.bin']);
+    // the Stadtbahn alone: its GLBs and the index go, the city's chunks stay
+    for (const f of ['index.json', 'chunk_0_0.glb', 'transit_1_2.glb']) await writeFile(join(dir, f), 'x');
+    await beginWorldWrite(dir, /^transit_.*\.glb$/);
+    expect((await readdir(dir)).sort()).toEqual(['bike_1.glb', 'chunk_0_0.glb', 'manifest.json', 'terrain.bin']);
+    // a folder without an index (or not there at all) is fine
+    await beginWorldWrite(dir, /^transit_.*\.glb$/);
+    await beginWorldWrite(join(dir, 'new', 'world'), /^transit_.*\.glb$/);
+    expect(await readdir(join(dir, 'new', 'world'))).toEqual([]);
   });
 });

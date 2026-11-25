@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WORLD_INDEX_FILE, type WorldIndex } from '@nn/shared';
 
@@ -28,4 +28,15 @@ export async function writeWorldIndex(dir: string): Promise<WorldIndex> {
   const index = await buildWorldIndex(dir);
   await writeFile(join(dir, WORLD_INDEX_FILE), JSON.stringify(index));
   return index;
+}
+
+/**
+ * Before the first write into a world folder: removes its index.json (a folder without a finished run never carries
+ * an index: an aborted run leaves none, and the index is written last) and the old GLBs matching `glbs` (the run
+ * writes their current set). Creates the folder if needed.
+ */
+export async function beginWorldWrite(dir: string, glbs: RegExp): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  await rm(join(dir, WORLD_INDEX_FILE), { force: true });
+  for (const file of await readdir(dir)) if (glbs.test(file)) await rm(join(dir, file));
 }

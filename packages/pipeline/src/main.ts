@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
 import { BuildingStore, type BuildingRecord } from './buildingstore.js';
+import { parsePipelineArgs, UsageError } from './args.js';
 import { CODE_ROOTS, codeHash } from './codehash.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
@@ -13,7 +14,7 @@ import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
-import { contentHash, writeWorldIndex } from './worldindex.js';
+import { beginWorldWrite, contentHash, writeWorldIndex } from './worldindex.js';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { GTFS_ZIP, readRawLock, requireTimetable } from './raw/lock.js';
 import { unpackGtfs } from './raw/gtfs-zip.js';
@@ -85,25 +86,17 @@ const r2 = (v: number) => Math.round(v * 100) / 100;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 
-/** `--out <dir>`: the world folder to write (and, with `--transit-only`, to read); default DEFAULT_OUT_DIR. */
-function parseOutDir(args: string[]): string {
-  const i = args.indexOf('--out');
-  if (i < 0) return DEFAULT_OUT_DIR;
-  const dir = args[i + 1];
-  if (!dir || dir.startsWith('--')) throw new Error('--out needs a folder');
-  return dir;
-}
-
 async function main() {
-  const args = process.argv.slice(2);
-  const outDir = parseOutDir(args);
+  // (refused with the usage line and exit code 2 if not understood: a typo must not start a build into the default folder)
+  const args = parsePipelineArgs(process.argv.slice(2), DEFAULT_OUT_DIR);
+  const { outDir } = args;
   // the pinned raw data, checked file by file (missing or changed files come from the mirror, never an origin server)
   const lock = await readRawLock();
   const pinned = requireTimetable(lock); // (before any work: the timetable is not optional)
   await ensureRawFiles(lock, RAW_DIR);
   // unpacked before any work too: a feed the build cannot read fails here, not after terrain, buildings and streets
   const timetable = { dir: await unpackGtfs(join(RAW_DIR, GTFS_ZIP), pinned.hash), hash: pinned.hash, days: pinned.days };
-  if (args.includes('--transit-only')) return transitOnly(outDir, timetable);
+  if (args.transitOnly) return transitOnly(outDir, timetable);
 
   // (V8 keeps the locals of this async function alive to its end, used or not: the big ones are let go by hand once
   // they are done with, or never get a name)
@@ -178,7 +171,7 @@ async function main() {
   console.log(`water: ${water.mask.reduce((n, v) => n + v, 0)} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
 
   const placedShops = assignShops(f.shops, f.boundary, active);
-  if (args.includes('--list-shops')) return listNeusserShops(f, placedShops, active);
+  if (args.listShops) return listNeusserShops(f, placedShops, active);
   const curated: Record<string, string> = existsSync(SHOP_NAMES) ? JSON.parse(await readFile(SHOP_NAMES, 'utf8')) : {};
   const labels = assignShopLabels(f.shops, curated, SHOP_SEED);
   const shops = assignShops(f.shops.map((s, i) => ({ ...s, label: labels[i]!.label })), f.boundary, active, f.roads);
@@ -231,8 +224,8 @@ async function main() {
   const graph = buildRoadGraph(f);
   const spawn = placeSpawn(SPAWN_AT, SPAWN_LOOK_AT, f.boundary, buildings);
 
-  await mkdir(outDir, { recursive: true });
-  for (const file of await readdir(outDir)) if (/^(chunk|model|transit)_.*\.glb$/.test(file)) await rm(join(outDir, file));
+  // (no index.json from here until the run has finished: see beginWorldWrite)
+  await beginWorldWrite(outDir, /^(chunk|model|transit)_.*\.glb$/);
 
   const chunks: WorldManifest['chunks'] = [];
   // one chunk at a time: build → punch → encode → write, then let it go
@@ -400,6 +393,13 @@ async function main() {
   const chunkBytes = sizes.filter(([n]) => n.startsWith('chunk_')).map(([, s]) => s);
   console.log(`  chunk_*.glb (${chunkBytes.length})       ${mb(chunkBytes.reduce((a, b) => a + b, 0))} (max ${mb(Math.max(...chunkBytes))})`);
   console.log(`world total: ${mb(total)}`); // report only: visual quality wins over download size
+  await logWorldHash(outDir);
+}
+
+/** The last line of a run: `world hash <12 hex>`, the hash of the index.json just written (CI and humans compare it). */
+async function logWorldHash(outDir: string): Promise<void> {
+  const index = await readFile(join(outDir, WORLD_INDEX_FILE));
+  console.log(`world hash ${await worldHash(new Uint8Array(index).buffer)}`);
 }
 
 /** Writes via `<file>.part` and a rename: an aborted write never leaves a truncated file behind. */
@@ -470,13 +470,14 @@ async function transitOnly(outDir: string, timetable: Timetable): Promise<void> 
   await withTimetable(build, worldRect(f.boundary), timetable);
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);
   if (before !== after) console.warn('transit: the stairwells moved; the ground and the pavement are only cut out for them by a full pipeline run');
-  for (const file of await readdir(outDir)) if (/^transit_.*\.glb$/.test(file)) await rm(join(outDir, file));
+  await beginWorldWrite(outDir, /^transit_.*\.glb$/); // (the index goes too, until the new one is written)
   const files = await writeTransit(outDir, build, new Set(manifest.chunks.map((c) => c.key)));
   manifest.models = [...manifest.models.filter((m) => !m.id.startsWith('transit_')), ...files.models];
   manifest.transit = build.transit;
   manifest.transitCollision = files.collision;
   await writeFile(join(outDir, 'manifest.json'), JSON.stringify(manifest));
   await writeWorldIndex(outDir); // (last: the dev script restarts the game server when index.json changes)
+  await logWorldHash(outDir);
 }
 
 /**
@@ -512,6 +513,10 @@ function fail(msg: string): never {
 }
 
 main().catch((err) => {
+  if (err instanceof UsageError) {
+    console.error(err.message);
+    process.exit(2);
+  }
   console.error(err);
   process.exit(1);
 });
