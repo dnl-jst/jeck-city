@@ -1,8 +1,9 @@
-import { CHUNK_SIZE, chunkKey, heightAt, STATION, type TerrainGrid, type Transit } from '@nn/shared';
+import { CHUNK_SIZE, chunkKey, STATION, type Transit } from '@nn/shared';
 import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
 import { EXTMeshoptCompression, KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { OsmFeatures, Pt } from './osm.js';
+import { gridFrame, heightAt, type Heights } from './terrain/height.js';
 import type { CityEnv } from './transitenv.js';
 
 /**
@@ -118,7 +119,7 @@ export type TransitBuild = {
   openings: Pt[][];
 };
 
-type Env = CityEnv & { terrain: TerrainGrid };
+type Env = CityEnv & { terrain: Heights };
 
 const dist = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.z - b.z);
 
@@ -684,7 +685,7 @@ export async function buildTransit(f: OsmFeatures, env: Env, line: Line = LINES[
     openings: openings.map((ring) => ring.flatMap((p) => [r2(p.x), r2(p.z)])),
   };
   for (const s of stations) {
-    console.log(`transit: ${s.name}: ${(s.i1 - s.i0) * STEP} m ${s.island ? 'island' : 'side'} platform${s.island ? '' : 's'}, rail ${(rail[s.i0]! + terrain.datum).toFixed(1)} m NHN, ${s.stairs.length} stair(s)`
+    console.log(`transit: ${s.name}: ${(s.i1 - s.i0) * STEP} m ${s.island ? 'island' : 'side'} platform${s.island ? '' : 's'}, rail ${(rail[s.i0]! + gridFrame(terrain).datum).toFixed(1)} m NHN, ${s.stairs.length} stair(s)`
       + s.stairs.map((t) => { const p = P(t.top, (t.u0 + t.u1) / 2, 0); return ` → (${p[0].toFixed(1)}, ${p[2].toFixed(1)})`; }).join(''));
   }
   return { transit, models: await encodeModels(inside, outside), collision: Float32Array.from(col), openings };

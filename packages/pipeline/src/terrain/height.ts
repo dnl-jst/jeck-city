@@ -4,6 +4,19 @@ import { BLOCK, TerrainFile, windowInfo, type WindowInfo } from './file.js';
 /** Where heights come from: a grid (the whole world, or a window of a TerrainFile) or point queries on a file. */
 export type Heights = TerrainGrid | TerrainSampler;
 
+/** The lattice of a terrain: origin and size of the WHOLE grid (a TerrainFile and a whole TerrainGrid are frames). */
+export type GridFrame = { x0: number; z0: number; cols: number; rows: number; datum: number };
+
+/**
+ * The whole grid's frame behind `h`: the file of a sampler or of a window made by TerrainFile, else the grid itself.
+ * Lattice arithmetic on positions (cell of a point, grid lines) must use this, never a window's own x0/z0: x − x0
+ * rounds differently for a different origin.
+ */
+export function gridFrame(h: Heights): GridFrame {
+  if (h instanceof TerrainSampler) return h.file;
+  return windowInfo(h)?.file ?? h;
+}
+
 /** Point queries on a TerrainFile through its block cache; `fast`, a window of the same file, is tried first. */
 export class TerrainSampler {
   /** @internal */

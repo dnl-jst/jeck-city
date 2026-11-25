@@ -1,4 +1,3 @@
-import type { TerrainGrid } from '@nn/shared';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { ptKey } from './polyline.js';
 import type { Mesh } from './streets.js';
@@ -464,7 +463,7 @@ const sideOut = (from: V3, other: V3): V3 => [from[0] - other[0], 0, from[2] - o
  * parapets along both edges where the deck is clear of the ground, and piers in the water. Returns the body mesh
  * (uv: metres along / up) and its collision triangles (slab, parapets, piers).
  */
-export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): { mesh: Mesh; steel: Mesh; collision: Float32Array } {
+export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: Heights): { mesh: Mesh; steel: Mesh; collision: Float32Array } {
   const bins = plan.structures.map((s) => {
     const n = Math.max(2, Math.ceil((s.s1 - s.s0) / BIN) + 1);
     return { lo: new Array<number>(n).fill(Infinity), hi: new Array<number>(n).fill(-Infinity), y: new Array<number>(n).fill(Infinity) };
@@ -602,7 +601,7 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
 }
 
 /** True if p lies on a bridge structure (within its profile, at least 1 m above the ground), e.g. to keep props off. */
-export function onBridge(plan: BridgePlan, t: TerrainGrid, p: Pt): boolean {
+export function onBridge(plan: BridgePlan, t: Heights, p: Pt): boolean {
   const at = deckAt(plan, p.x, p.z);
   if (!at || at.d > 40) return false;
   const s = plan.structures[at.st]!;

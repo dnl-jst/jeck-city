@@ -1,13 +1,15 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, encodeCollision, openingTest, ORIGIN_UTM, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
 import { BuildingStore, type BuildingRecord } from './buildingstore.js';
 import { parsePipelineArgs, UsageError } from './args.js';
 import { CODE_ROOTS, codeHash } from './codehash.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { readDgmTile, TERRAIN_SIGMA } from './dgm.js';
 import { buildT0 } from './terrain/dgmstream.js';
+import { TerrainFile } from './terrain/file.js';
+import { heightAt, TerrainSampler } from './terrain/height.js';
 import { terrainVersions, type TerrainVersions } from './terrain/versions.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
 import { followDeviation, followTerrain } from './follow.js';
@@ -15,7 +17,7 @@ import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
-import { beginWorldWrite, contentHash, writeWorldIndex } from './worldindex.js';
+import { beginWorldWrite, fileContentHash, writeWorldIndex } from './worldindex.js';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { GTFS_ZIP, readRawLock, requireTimetable } from './raw/lock.js';
 import { unpackGtfs } from './raw/gtfs-zip.js';
@@ -160,10 +162,11 @@ async function main() {
   active = active.filter((b) => !wetBuildings.has(b));
   console.log(`buildings over the water dropped: ${wetBuildings.size}`);
   console.log(`water: ${water.area} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
-  // (transition: the later steps still read T3 as one decoded grid; terrain.bin is the T3 file's bytes)
-  const terrainBin = ownBuffer(await readFile(t3.path));
-  for (const t of new Set([t0, t1, t2, t3])) t.close();
-  const terrain = decodeTerrain(terrainBin);
+  // T3 is never decoded whole: each chunk reads its window of the file, every other reader asks it point by point
+  // (a sampler); the world's terrain.bin is a copy of the file
+  for (const t of new Set([t0, t1, t2])) if (t !== t3) t.close();
+  const terrain = new TerrainSampler(t3);
+  const terrainBytes = (await stat(t3.path)).size;
 
   const placedShops = assignShops(f.shops, f.boundary, active);
   if (args.listShops) return listNeusserShops(f, placedShops, active);
@@ -194,8 +197,8 @@ async function main() {
   const DRAPED = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking'] as const;
   const flatSources: Partial<Record<StreetName, FlatSource>> = {};
   for (const name of DRAPED) flatSources[name] = prepareFlat(flatStreets[name], area);
-  const waterMesh = cropMesh(waterSurface(terrain, water), area);
-  const waterLines = waterOutlines(terrain, water); // (for the map; it only needs the grid's size, which no longer changes)
+  const waterMesh = cropMesh(waterSurface(t3, water), area);
+  const waterLines = waterOutlines(t3, water); // (for the map; it only needs the grid's size, which no longer changes)
   water = undefined; // (mask and levels: ≈ 190 MB)
   const streets: Partial<StreetMeshes> = { water: waterMesh, bridge: bodies.mesh, steel: bodies.steel };
   console.log(`water surface: ${waterMesh.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
@@ -205,8 +208,8 @@ async function main() {
   const transitBuild = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f, { terrain, area, ...cityEnv });
   osmJson = undefined;
   // (remembered along the tunnel tracks, so the Stadtbahn alone can be rebuilt later: --transit-only), stamped with
-  // the hash of the terrain.bin bytes (terrainBin is final since the fills above); written once terrain.bin is
-  const envBin = encodeEnv(cityEnv, f.tunnelTracks.map((t) => t.pts), contentHash(new Uint8Array(terrainBin)));
+  // the hash of the terrain.bin bytes (the T3 file's); written once terrain.bin is
+  const envBin = encodeEnv(cityEnv, f.tunnelTracks.map((t) => t.pts), fileContentHash(t3));
   await mkdir(dirname(TRANSIT_ENV), { recursive: true }); // (the trip cache lives there too)
   const holes = transitBuild?.openings ?? [];
   const holeBox = holes.map((ring) => ({
@@ -225,7 +228,7 @@ async function main() {
   const chunks: WorldManifest['chunks'] = [];
   // one chunk at a time: build → punch → encode → write, then let it go
   const drapedTriangles: Partial<Record<StreetName, number>> = {};
-  for await (const c of chunkGeometries(store, streets, overrides, area, terrain, decks, flatSources, drapedTriangles)) {
+  for await (const c of chunkGeometries(store, streets, overrides, area, t3, decks, flatSources, drapedTriangles)) {
     const file = `chunk_${c.key}.glb`;
     // (triangles belong to the chunk of their centroid and may reach a little beyond its square)
     const x0 = c.ix * CHUNK_SIZE - 10, z0 = c.iz * CHUNK_SIZE - 10, x1 = x0 + CHUNK_SIZE + 20, z1 = z0 + CHUNK_SIZE + 20;
@@ -274,14 +277,14 @@ async function main() {
     console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
   }
   const deckCollision = [...deckSurfaces.map(triangleSoup), bodies.collision];
-  const collision = await buildCollision({ buildings: store.meshes(), curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain });
+  const collision = await buildCollision({ buildings: store.meshes(), curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain: t3 });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   // the spawn stands on the walkable surface there: pavement if any, else the terrain
   const spawnGround = heightAt(terrain, spawn.x, spawn.z);
   const spawnY = topSurface(collision, spawn.x, spawn.z, spawnGround);
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) on the Domplatte, ${(spawnY - spawnGround).toFixed(2)} m above the terrain`);
   await writeFile(join(outDir, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
-  await writeFile(join(outDir, 'terrain.bin'), new Uint8Array(terrainBin));
+  await copyFile(t3.path, join(outDir, 'terrain.bin'));
   await writeAtomic(TRANSIT_ENV, envBin);
 
   const roundPt = (p: { x: number; z: number }) => ({ x: r2(p.x), z: r2(p.z) });
@@ -367,12 +370,13 @@ async function main() {
       ...scooters.map(({ down, ...b }) => ({ ...b, x: r2(b.x), z: r2(b.z), heading: r3(b.heading), ...(down ? { down } : {}) })),
     ],
     parked: withHeli(parkedCars(carSpots, PARKING_SEED).map((p) => ({ ...p, x: r2(p.x), z: r2(p.z), heading: r3(p.heading) }))),
-    terrain: { file: 'terrain.bin', bytes: terrainBin.byteLength },
+    terrain: { file: 'terrain.bin', bytes: terrainBytes },
     datum,
-    farGroundY: r2(borderMin(terrain) - 0.5),
+    farGroundY: r2(t3.borderMin() - 0.5),
     ...(transitBuild && transitFiles ? { transit: transitBuild.transit, transitCollision: transitFiles.collision } : {}),
     attribution: ATTRIBUTION,
   };
+  t3.close();
   await writeFile(join(outDir, 'manifest.json'), JSON.stringify(manifest));
   await writeWorldIndex(outDir); // (last write: the dev script restarts the game server when index.json changes)
   console.log(`manifest: ${chunks.length} chunks, ${manifest.shops.length} shops, ${manifest.tramStops.length} tram stops, ${manifest.parked.length} parked cars`);
@@ -446,7 +450,8 @@ async function transitOnly(outDir: string, timetable: Timetable): Promise<void> 
   for (const file of [join(outDir, 'manifest.json'), join(outDir, 'terrain.bin'), TRANSIT_ENV]) {
     if (!existsSync(file)) throw new Error(`--transit-only: ${file} is missing; run the full pipeline once`);
   }
-  const bin = await readFile(join(outDir, 'terrain.bin'));
+  // the world's terrain, read point by point from the file (never decoded whole)
+  const file = TerrainFile.open(join(outDir, 'terrain.bin'));
   // the cached raster must belong to this folder's world (the last full run may have written another folder)
   let cached: ReturnType<typeof decodeEnv>;
   try {
@@ -454,13 +459,14 @@ async function transitOnly(outDir: string, timetable: Timetable): Promise<void> 
   } catch (err) {
     throw new Error(`--transit-only: ${TRANSIT_ENV}: ${err instanceof Error ? err.message : String(err)}; run the full pipeline into ${outDir} first`);
   }
-  checkEnvTerrain(cached.terrain, contentHash(bin));
+  checkEnvTerrain(cached.terrain, fileContentHash(file));
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
-  const terrain = decodeTerrain(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength) as ArrayBuffer);
+  const terrain = new TerrainSampler(file);
   const manifest = JSON.parse(await readFile(join(outDir, 'manifest.json'), 'utf8')) as WorldManifest;
   const build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
     { terrain, area: worldRect(f.boundary), ...cached.env });
+  file.close();
   if (!build) throw new Error('--transit-only: the OSM data has no transit line');
   await withTimetable(build, worldRect(f.boundary), timetable);
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);
@@ -492,20 +498,6 @@ function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest[
     n++;
   }
   console.log(`${n} shops on Neusser Straße`);
-}
-
-/** Lowest height (local y) along the outer rows and columns of the grid. */
-function borderMin(t: TerrainGrid): number {
-  let min = Infinity;
-  const h = (c: number, r: number) => t.heights[r * t.cols + c]!;
-  for (let c = 0; c < t.cols; c++) min = Math.min(min, h(c, 0), h(c, t.rows - 1));
-  for (let r = 0; r < t.rows; r++) min = Math.min(min, h(0, r), h(t.cols - 1, r));
-  return min;
-}
-
-/** The bytes as an ArrayBuffer of their own (a Buffer may be a view into a larger one). */
-function ownBuffer(b: Uint8Array): ArrayBuffer {
-  return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength && b.buffer instanceof ArrayBuffer ? b.buffer : (b.slice().buffer as ArrayBuffer);
 }
 
 function fail(msg: string): never {

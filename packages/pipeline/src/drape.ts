@@ -1,5 +1,6 @@
-import { heightAt, TERRAIN_DIAGONAL, type TerrainGrid } from '@nn/shared';
+import { TERRAIN_DIAGONAL } from '@nn/shared';
 import type { Mesh } from './streets.js';
+import { type GridFrame, gridFrame, heightAt, type Heights } from './terrain/height.js';
 
 /** Triangles with less xz area are treated as vertical (kerb faces). */
 const FLAT_MIN_AREA = 1e-6;
@@ -28,7 +29,7 @@ export class DrapeOut {
   idx: number[] = [];
   /** Welds bit-identical vertices within one source triangle (cleared per triangle by `begin`). */
   private weld = new Map<string, number>();
-  constructor(private t: TerrainGrid) {}
+  constructor(private t: Heights) {}
   begin(): void {
     this.weld.clear();
   }
@@ -64,7 +65,7 @@ const before = (a: { x: number; z: number }, b: { x: number; z: number }) => a.x
  * Horizontal triangles are clipped against cell edges and diagonals; vertical ones (zero xz area, e.g. kerb faces)
  * are cut into slabs wherever their xz trace crosses a grid line or diagonal.
  */
-export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
+export function drapeMesh(m: Mesh, t: Heights): Mesh {
   if (m.mark) return drapeMarked(m, m.mark, t);
   const out = new DrapeOut(t);
   for (let i = 0; i < m.indices.length; i += 3) drapeTriangle(m, i, t, out);
@@ -77,7 +78,8 @@ export function drapeMesh(m: Mesh, t: TerrainGrid): Mesh {
  * skip the terrain cells more than a cell away from it; every piece that lies in the window is still produced, in
  * the same order and with the same vertices (vertical triangles are always draped whole).
  */
-export function drapeTriangle(m: Mesh, i: number, t: TerrainGrid, out: DrapeOut, window?: DrapeWindow): void {
+export function drapeTriangle(m: Mesh, i: number, t: Heights, out: DrapeOut, window?: DrapeWindow): void {
+  const g = gridFrame(t); // (the cell lattice is the whole grid's, also for a window or a sampler)
   const P = m.positions;
   const tri: CV[] = [0, 1, 2].map((k) => {
     const n = m.indices[i + k]!;
@@ -86,15 +88,15 @@ export function drapeTriangle(m: Mesh, i: number, t: TerrainGrid, out: DrapeOut,
   const [a, b, c] = tri as [CV, CV, CV];
   out.begin();
   const area2 = (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z);
-  if (Math.abs(area2) / 2 >= FLAT_MIN_AREA) drapeFlat(tri, area2, t, out, window);
-  else drapeVertical(tri, t, out);
+  if (Math.abs(area2) / 2 >= FLAT_MIN_AREA) drapeFlat(tri, area2, g, out, window);
+  else drapeVertical(tri, g, out);
 }
 
 /**
  * `mark` is constant per triangle (markings: per strip or quad), so each mark value is draped on its own and the
  * pieces are concatenated with that value on every output vertex.
  */
-function drapeMarked(m: Mesh, mark: Float32Array, t: TerrainGrid): Mesh {
+function drapeMarked(m: Mesh, mark: Float32Array, t: Heights): Mesh {
   const groups = new Map<number, number[]>();
   for (let i = 0; i < m.indices.length; i += 3) {
     const v = mark[m.indices[i]!]!;
@@ -123,7 +125,7 @@ function lerp(p: CV, q: CV, s: number, x: number, z: number, mask: number): CV {
   return { x, z, off: p.off + s * (q.off - p.off), u: p.u + s * (q.u - p.u), v: p.v + s * (q.v - p.v), mask };
 }
 
-function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: DrapeOut, window?: DrapeWindow): void {
+function drapeFlat(tri: CV[], area2: number, t: GridFrame, out: DrapeOut, window?: DrapeWindow): void {
   const [a, b, c] = tri as [CV, CV, CV];
   const bary = (x: number, z: number, mask: number): CV => {
     const wb = ((x - a.x) * (c.z - a.z) - (z - a.z) * (c.x - a.x)) / -area2;
@@ -250,7 +252,7 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: DrapeOut, wind
 /** Point of a vertical triangle in its plane: s along the xz trace A→B, y = offset. */
 type SV = { s: number; x: number; z: number; off: number; u: number; v: number };
 
-function drapeVertical(tri: CV[], t: TerrainGrid, out: DrapeOut): void {
+function drapeVertical(tri: CV[], t: GridFrame, out: DrapeOut): void {
   // Trace endpoints: the two vertices farthest apart in xz, canonically ordered.
   let best = -1;
   let A = tri[0]!;
