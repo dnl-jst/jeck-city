@@ -6,7 +6,7 @@ import type { Rect } from './chunks.js';
 export type Mosaic = { e0: number; n0: number; width: number; height: number; data: Float32Array };
 
 export const TERRAIN_SIGMA = 1;
-const NODATA = -9999;
+export const NODATA = -9999;
 
 export async function readDgmTile(buf: ArrayBuffer): Promise<Mosaic> {
   const image = await (await fromArrayBuffer(buf)).getImage();
@@ -38,13 +38,20 @@ export function mosaic(tiles: Mosaic[]): Mosaic {
   return { e0, n0, width, height, data };
 }
 
-/** Separable Gaussian blur, edges clamped. */
-export function gaussBlur(m: Mosaic, sigma: number): Mosaic {
+/** The normalised Gaussian kernel of gaussBlur: radius r = max(1, ceil(3σ)), 2r + 1 weights. */
+export function gaussKernel(sigma: number): Float64Array {
   const r = Math.max(1, Math.ceil(sigma * 3));
   const k = new Float64Array(2 * r + 1);
   let sum = 0;
   for (let i = -r; i <= r; i++) sum += k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma));
   for (let i = 0; i < k.length; i++) k[i]! /= sum;
+  return k;
+}
+
+/** Separable Gaussian blur, edges clamped. */
+export function gaussBlur(m: Mosaic, sigma: number): Mosaic {
+  const k = gaussKernel(sigma);
+  const r = (k.length - 1) / 2;
   const { width: w, height: h } = m;
   const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);
