@@ -34,7 +34,7 @@ import { buildStreetGeometry } from './streets.js';
 import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
 import { abutmentFills, bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
-import { carveRiverBed, findWater, waterOutlines, waterShare, waterSurface } from './water.js';
+import { carveRiverBed, findWater, waterOutlines, waterShare, waterSurface, type Water } from './water.js';
 import { railMesh } from './streets.js';
 import { meshCovers, punchMesh } from './punch.js';
 import type { TransitBuild } from './transit.js';
@@ -104,7 +104,9 @@ async function main() {
   const timetable = { dir: await unpackGtfs(join(RAW_DIR, GTFS_ZIP), pinned.hash), hash: pinned.hash, days: pinned.days };
   if (args.includes('--transit-only')) return transitOnly(outDir, timetable);
 
-  const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
+  // (V8 keeps the locals of this async function alive to its end, used or not: the big ones are let go by hand once
+  // they are done with, or never get a name)
+  let osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
   if (f.boundary.length < 3) throw new Error('OSM boundary missing');
   console.log(`osm: ${f.roads.length} roads, ${f.shops.length} shops, ${f.trees.length} trees, ${f.lamps.length} lamps`);
@@ -112,11 +114,11 @@ async function main() {
   // terrain first: buildings are placed relative to its datum. From here on only the decoded grid is used, so the
   // pipeline sees exactly the (quantized) heights the client reads from terrain.bin.
   const area = worldRect(f.boundary);
-  const dgm = mosaic(await Promise.all(DGM_TILES.map(async (t) => {
+  // (the tiles, the mosaic and its blurred copy are temporaries: nothing holds them once the grid is sampled)
+  let terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(mosaic(await Promise.all(DGM_TILES.map(async (t) => {
     const buf = await readFile(join(RAW_DIR, 'dgm1', t));
     return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-  })));
-  let terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(dgm, TERRAIN_SIGMA), area));
+  }))), TERRAIN_SIGMA), area));
   const terrain = decodeTerrain(terrainBin);
   const { datum } = terrain;
   let hMin = Infinity, hMax = -Infinity;
@@ -156,7 +158,7 @@ async function main() {
   }
 
   // the Rhine: water found on the DGM water surface, the bed carved below it; then the bridges over it
-  const water = findWater(terrain, f.rivers);
+  let water: Water | undefined = findWater(terrain, f.rivers);
   const carved = carveRiverBed(terrain, water);
   terrainBin = encodeTerrain(terrain);
   terrain.heights.set(decodeTerrain(terrainBin).heights);
@@ -167,7 +169,7 @@ async function main() {
   terrain.heights.set(decodeTerrain(terrainBin).heights);
   console.log(`terrain fills: ${filled} grid points raised behind ${bridges.ends.length} abutments`);
   // LoD2 models the Rhine bridges as solid blocks from the water up to the deck: the bridges are built from OSM instead
-  const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(terrain, water, b) > 0.5));
+  const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(terrain, water!, b) > 0.5));
   store = store.without((b) => wetBuildings.has(b));
   buildings = store.records;
   active = active.filter((b) => !wetBuildings.has(b));
@@ -204,12 +206,15 @@ async function main() {
   const flatSources: Partial<Record<StreetName, FlatSource>> = {};
   for (const name of DRAPED) flatSources[name] = prepareFlat(flatStreets[name], area);
   const waterMesh = cropMesh(waterSurface(terrain, water), area);
+  const waterLines = waterOutlines(terrain, water); // (for the map; it only needs the grid's size, which no longer changes)
+  water = undefined; // (mask and levels: ≈ 190 MB)
   const streets: Partial<StreetMeshes> = { water: waterMesh, bridge: bodies.mesh, steel: bodies.steel };
   console.log(`water surface: ${waterMesh.indices.length / 3} triangles; bridge bodies: ${bodies.mesh.indices.length / 3} triangles, steel arches: ${bodies.steel.indices.length / 3} triangles`);
   // the underground Stadtbahn: tunnel, stations and stairs; the stairwells are cut out of the ground and the pavement
   const onSidewalk = meshCovers(flat.sidewalk), onSquare = meshCovers(flat.squares);
   const cityEnv = { built: footprintTest(buildings), pavement: (p: { x: number; z: number }) => onSidewalk(p) || onSquare(p), roadway: meshCovers(flat.road) };
   const transitBuild = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f, { terrain, area, ...cityEnv });
+  osmJson = undefined;
   // (remembered along the tunnel tracks, so the Stadtbahn alone can be rebuilt later: --transit-only)
   await mkdir('data/cache', { recursive: true });
   await writeFile(TRANSIT_ENV, encodeEnv(cityEnv, f.tunnelTracks.map((t) => t.pts)));
@@ -295,7 +300,7 @@ async function main() {
     stops: graph.stops.map((s) => ({ ...s, pos: roundPt(s.pos) })),
   }));
 
-  const map = buildMapData(f, buildings, waterOutlines(terrain, water));
+  const map = buildMapData(f, buildings, waterLines);
   await writeFile(join(outDir, 'map.json'), JSON.stringify(map));
   console.log(`map: ${map.roads.length} roads (${map.roads.filter((r) => r.name).length} named), ${map.buildings.length} buildings, ${map.greens.length} greens`);
 
