@@ -1,11 +1,11 @@
 import { chunkKey, type TerrainGrid } from '@nn/shared';
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { endianness } from 'node:os';
-import { join, relative, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
+import { CODE_ROOTS, codeHash } from './codehash.js';
 import { footprintOf, type Footprint } from './footprint.js';
 import type { Pt } from './osm.js';
 import { classifyBuildings, wallsOf, type Wall } from './placements.js';
@@ -27,11 +27,6 @@ export function recordOf(m: BuildingMesh, tile: number): BuildingRecord {
 /** Bump when the cache file layout changes. */
 const FORMAT = 2;
 const MAGIC = 0x4342_4e4e; // 'NNBC' little-endian
-/**
- * The code the meshes are built by: every non-test .ts file of the pipeline and of @nn/shared (a hand-kept list
- * misses helpers such as polyline.ts). Any edit there rebuilds the cache once: the safe direction.
- */
-const CODE_ROOTS = [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../../shared/src/', import.meta.url))];
 const PACKAGE_LOCK = new URL('../../../package-lock.json', import.meta.url);
 
 const sha = (...parts: (string | Uint8Array)[]) => {
@@ -40,20 +35,6 @@ const sha = (...parts: (string | Uint8Array)[]) => {
   return h.digest('hex').slice(0, 32);
 };
 const f64bytes = (v: number[]) => new Uint8Array(Float64Array.from(v).buffer);
-
-/** Hash over the non-test .ts files under `roots` (not *.test.ts, *.test-util.ts): root index, relative path and content, sorted by path. */
-export async function codeHash(roots: string[]): Promise<string> {
-  const parts: (string | Uint8Array)[] = [];
-  for (const [i, root] of roots.entries()) {
-    const files = (await readdir(root, { recursive: true, withFileTypes: true }))
-      .filter((e) => e.isFile() && e.name.endsWith('.ts') && !/\.test(-util)?\.ts$/.test(e.name))
-      .map((e) => relative(root, join(e.parentPath, e.name)).split(sep).join('/'))
-      .filter((path) => !path.split('/').includes('node_modules'))
-      .sort();
-    for (const path of files) parts.push(`${i}:${path}`, await readFile(join(root, path)));
-  }
-  return sha(...parts);
-}
 
 /** The key of everything a tile's meshes depend on besides the tile itself (and the tiles before it). */
 async function baseKey(terrain: TerrainGrid, datum: number, boundary: Pt[]): Promise<string> {

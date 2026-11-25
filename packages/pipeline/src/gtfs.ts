@@ -1,5 +1,5 @@
 import { createReadStream, existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { TRAIN_LENGTH, wgs84ToLocal, type Transit } from '@nn/shared';
@@ -79,15 +79,14 @@ export function gtfsSampleDays(calendar: { start: number; end: number }[], from:
 /**
  * The trips of `lines` (KVB Stadtbahn: route ids de:vrs:<line>:104) on the three sample `days` (yyyymmdd; bit i of a
  * trip's `days` is days[i]), read from the unpacked feed in `dir`. Stops outside `keep` are left out. Cached in `cache`
- * under the feed's hash (`feed`), the lines and the days (stop_times.txt has 400 MB).
+ * (stop_times.txt has 400 MB) under everything the trips depend on: the lines, the days and `key` — the feed's hash,
+ * the area `keep` stands for (as a string) and the hash of the code (codeHash). An unreadable cache counts as absent.
  */
-export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: number, z: number) => boolean, cache: string, days: [number, number, number], feed: string): Promise<GtfsTrip[]> {
+export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: number, z: number) => boolean, cache: string, days: [number, number, number], key: { feed: string; area: string; code: string }): Promise<GtfsTrip[]> {
   for (const f of GTFS_TABLES) if (!existsSync(join(dir, f))) throw new Error(`gtfs: ${join(dir, f)} is missing`);
-  const stamp = `${feed}|${lines.join(',')}|${days.join(',')}`;
-  if (existsSync(cache)) {
-    const c = JSON.parse(await readFile(cache, 'utf8')) as { stamp: string; trips: GtfsTrip[] };
-    if (c.stamp === stamp) return c.trips;
-  }
+  const stamp = `${key.feed}|${key.area}|${key.code}|${lines.join(',')}|${days.join(',')}`;
+  const cached = await readTripCache(cache);
+  if (cached?.stamp === stamp) return cached.trips;
   const routes = new Map(lines.map((l) => [`de:vrs:${l}:104`, l]));
   // service → weekday flags and validity; removals per service
   const cal = new Map<string, { flags: number[]; start: number; end: number }>();
@@ -136,8 +135,22 @@ export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: numb
     const idx = order.map((_, i) => i).sort((a, b) => order[a]! - order[b]!);
     out.push({ ...trip, stops: idx.map((i) => trip.stops[i]!) });
   }
-  await writeFile(cache, JSON.stringify({ stamp, trips: out }));
+  // (via a .part file: an aborted write never leaves a truncated cache behind)
+  await writeFile(`${cache}.part`, JSON.stringify({ stamp, trips: out }));
+  await rename(`${cache}.part`, cache);
   return out;
+}
+
+/** The trip cache, or null when it is missing or not a readable cache (truncated, hand-edited): then it is rebuilt. */
+async function readTripCache(cache: string): Promise<{ stamp: string; trips: GtfsTrip[] } | null> {
+  let c: unknown;
+  try {
+    c = JSON.parse(await readFile(cache, 'utf8'));
+  } catch {
+    return null;
+  }
+  const ok = typeof c === 'object' && c !== null && typeof (c as { stamp?: unknown }).stamp === 'string' && Array.isArray((c as { trips?: unknown }).trips);
+  return ok ? (c as { stamp: string; trips: GtfsTrip[] }) : null;
 }
 
 /** A stop of a trip belongs to a path's stop within this distance (m; GTFS gives the platform's middle, OSM the stop position on the track). */

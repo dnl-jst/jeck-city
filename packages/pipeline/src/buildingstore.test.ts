@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { BuildingStore, codeHash, decodeTileFile } from './buildingstore.js';
+import { BuildingStore, decodeTileFile } from './buildingstore.js';
+import { codeHash } from './codehash.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { footprintOf } from './footprint.js';

@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
 import { BuildingStore, type BuildingRecord } from './buildingstore.js';
+import { CODE_ROOTS, codeHash } from './codehash.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
@@ -12,7 +13,7 @@ import { prepareModel, prepareProp, type PreparedModel } from './models.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
-import { writeWorldIndex } from './worldindex.js';
+import { contentHash, writeWorldIndex } from './worldindex.js';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { GTFS_ZIP, readRawLock, requireTimetable } from './raw/lock.js';
 import { unpackGtfs } from './raw/gtfs-zip.js';
@@ -41,7 +42,7 @@ import type { TransitBuild } from './transit.js';
 import { buildNetwork } from './transitgen.js';
 import { parseRoutes, railWays } from './transitnet.js';
 import { applyTimetable, loadGtfsTrips } from './gtfs.js';
-import { decodeEnv, encodeEnv, footprintTest } from './transitenv.js';
+import { checkEnvTerrain, decodeEnv, encodeEnv, footprintTest } from './transitenv.js';
 
 const RAW_DIR = 'data/raw';
 const OVERRIDES = 'data/building-overrides.json';
@@ -215,9 +216,10 @@ async function main() {
   const cityEnv = { built: footprintTest(buildings), pavement: (p: { x: number; z: number }) => onSidewalk(p) || onSquare(p), roadway: meshCovers(flat.road) };
   const transitBuild = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f, { terrain, area, ...cityEnv });
   osmJson = undefined;
-  // (remembered along the tunnel tracks, so the Stadtbahn alone can be rebuilt later: --transit-only)
-  await mkdir('data/cache', { recursive: true });
-  await writeFile(TRANSIT_ENV, encodeEnv(cityEnv, f.tunnelTracks.map((t) => t.pts)));
+  // (remembered along the tunnel tracks, so the Stadtbahn alone can be rebuilt later: --transit-only), stamped with
+  // the hash of the terrain.bin bytes (terrainBin is final since the fills above); written once terrain.bin is
+  const envBin = encodeEnv(cityEnv, f.tunnelTracks.map((t) => t.pts), contentHash(new Uint8Array(terrainBin)));
+  await mkdir(dirname(TRANSIT_ENV), { recursive: true }); // (the trip cache lives there too)
   const holes = transitBuild?.openings ?? [];
   const holeBox = holes.map((ring) => ({
     minX: Math.min(...ring.map((p) => p.x)), maxX: Math.max(...ring.map((p) => p.x)), minZ: Math.min(...ring.map((p) => p.z)), maxZ: Math.max(...ring.map((p) => p.z)),
@@ -292,6 +294,7 @@ async function main() {
   console.log(`spawn: (${spawn.x.toFixed(1)}, ${spawn.z.toFixed(1)}) on the Domplatte, ${(spawnY - spawnGround).toFixed(2)} m above the terrain`);
   await writeFile(join(outDir, 'collision.bin'), new Uint8Array(encodeCollision(collision)));
   await writeFile(join(outDir, 'terrain.bin'), new Uint8Array(terrainBin));
+  await writeAtomic(TRANSIT_ENV, envBin);
 
   const roundPt = (p: { x: number; z: number }) => ({ x: r2(p.x), z: r2(p.z) });
   await writeFile(join(outDir, 'roadgraph.json'), JSON.stringify({
@@ -399,13 +402,21 @@ async function main() {
   console.log(`world total: ${mb(total)}`); // report only: visual quality wins over download size
 }
 
+/** Writes via `<file>.part` and a rename: an aborted write never leaves a truncated file behind. */
+async function writeAtomic(file: string, data: Uint8Array): Promise<void> {
+  await writeFile(`${file}.part`, data);
+  await rename(`${file}.part`, file);
+}
+
 /** The pinned GTFS feed: its unpacked folder (data/cache/gtfs/<hash>/, see unpackGtfs), hash and sample days. */
 type Timetable = { dir: string; hash: string; days: [number, number, number] };
 
 /** The real timetable for the line paths: the pinned GTFS feed (data/raw/gtfs.zip) on the lock's sample days. */
 async function withTimetable(build: TransitBuild, area: Rect, timetable: Timetable): Promise<void> {
   const lines = [...new Set(build.transit.tracks.map((t) => t.line ?? '').filter(Boolean))];
-  const trips = await loadGtfsTrips(timetable.dir, lines, (x, z) => x > area.minX && x < area.maxX && z > area.minZ && z < area.maxZ, 'data/cache/gtfs-trips.json', timetable.days, timetable.hash);
+  // (the cache is keyed on the area too, which follows the OSM boundary, and on the code that reads the trips)
+  const key = { feed: timetable.hash, area: [area.minX, area.minZ, area.maxX, area.maxZ].join(','), code: await codeHash(CODE_ROOTS) };
+  const trips = await loadGtfsTrips(timetable.dir, lines, (x, z) => x > area.minX && x < area.maxX && z > area.minZ && z < area.maxZ, 'data/cache/gtfs-trips.json', timetable.days, key);
   const { placed, lost } = applyTimetable(build.transit.tracks, trips);
   // a path no trip was put on is a branch that shares its way through the area with another path of its line (12 to
   // Niehl and to Merkenich): that one carries its trips; this one would only run on the makeshift headway
@@ -434,19 +445,27 @@ async function writeTransit(outDir: string, build: TransitBuild, chunkKeys: Set<
 /**
  * `--transit-only`: rebuilds the Stadtbahn alone (tunnels, stations, stairs, tracks and stops) into an existing world,
  * in seconds: from the cached OSM data, the world's terrain.bin and the city raster the last full run left
- * (TRANSIT_ENV). The stairwells are cut out of the ground and the pavement by the full run only: if they moved, it warns.
+ * (TRANSIT_ENV; refused unless it was built for this folder's terrain.bin). The stairwells are cut out of the ground and the pavement by the full run only: if they moved, it warns.
  */
 async function transitOnly(outDir: string, timetable: Timetable): Promise<void> {
   for (const file of [join(outDir, 'manifest.json'), join(outDir, 'terrain.bin'), TRANSIT_ENV]) {
     if (!existsSync(file)) throw new Error(`--transit-only: ${file} is missing; run the full pipeline once`);
   }
+  const bin = await readFile(join(outDir, 'terrain.bin'));
+  // the cached raster must belong to this folder's world (the last full run may have written another folder)
+  let cached: ReturnType<typeof decodeEnv>;
+  try {
+    cached = decodeEnv(await readFile(TRANSIT_ENV));
+  } catch (err) {
+    throw new Error(`--transit-only: ${TRANSIT_ENV}: ${err instanceof Error ? err.message : String(err)}; run the full pipeline into ${outDir} first`);
+  }
+  checkEnvTerrain(cached.terrain, contentHash(bin));
   const osmJson: unknown = JSON.parse(await readFile(join(RAW_DIR, 'osm.json'), 'utf8'));
   const f = parseOsm(osmJson);
-  const bin = await readFile(join(outDir, 'terrain.bin'));
   const terrain = decodeTerrain(bin.buffer.slice(bin.byteOffset, bin.byteOffset + bin.byteLength) as ArrayBuffer);
   const manifest = JSON.parse(await readFile(join(outDir, 'manifest.json'), 'utf8')) as WorldManifest;
   const build = await buildNetwork(parseRoutes(osmJson, JSON.parse(await readFile(join(RAW_DIR, TRANSIT_ROUTES_FILE), 'utf8'))), railWays(osmJson), f,
-    { terrain, area: worldRect(f.boundary), ...decodeEnv(await readFile(TRANSIT_ENV)) });
+    { terrain, area: worldRect(f.boundary), ...cached.env });
   if (!build) throw new Error('--transit-only: the OSM data has no transit line');
   await withTimetable(build, worldRect(f.boundary), timetable);
   const before = JSON.stringify(manifest.transit?.openings ?? []), after = JSON.stringify(build.transit.openings);

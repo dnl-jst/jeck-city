@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,14 +40,16 @@ async function writeFeed(): Promise<string> {
 
 const DAYS: [number, number, number] = [20261201, 20261128, 20261129];
 const everywhere = () => true;
+/** The cache key besides lines and days: the feed's hash, the area kept and the code's hash. */
+const KEY = { feed: 'feedhash', area: 'all', code: 'code1' };
 
 it('loadGtfsTrips gives the same trips for the same days whatever the current date', async () => {
   const feed = await writeFeed();
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(2026, 10, 25));
-  const a = await loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'a.json'), DAYS, 'feedhash');
+  const a = await loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'a.json'), DAYS, KEY);
   vi.setSystemTime(new Date(2027, 5, 1)); // after the feed ended
-  const b = await loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'b.json'), DAYS, 'feedhash');
+  const b = await loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'b.json'), DAYS, KEY);
   expect(b).toEqual(a);
   // t1 runs daily but not on Sunday 20261129 (removed), t2 on the weekday only; t3 is another line
   expect(a.map((t) => [t.headsign, t.days, t.stops.map((s) => s.t)])).toEqual([
@@ -58,20 +61,45 @@ it('loadGtfsTrips gives the same trips for the same days whatever the current da
 it('loadGtfsTrips reuses its cache only for the same feed hash, lines and days', async () => {
   const feed = await writeFeed();
   const cache = join(dir, 'trips.json');
-  const first = await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, 'feedhash');
+  const first = await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY);
   const stamp = (JSON.parse(await readFile(cache, 'utf8')) as { stamp: string }).stamp;
   expect(stamp).toContain('feedhash');
   // a doctored cache with the same key is returned as is …
   await writeFile(cache, JSON.stringify({ stamp, trips: [] }));
-  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, 'feedhash')).toEqual([]);
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY)).toEqual([]);
   // … but another feed or other days are read from the tables again
-  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, 'otherfeed')).toEqual(first);
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, { ...KEY, feed: 'otherfeed' })).toEqual(first);
   await writeFile(cache, JSON.stringify({ stamp: (JSON.parse(await readFile(cache, 'utf8')) as { stamp: string }).stamp, trips: [] }));
-  const otherDays = await loadGtfsTrips(feed, ['13'], everywhere, cache, [20261208, 20261205, 20261206], 'otherfeed');
+  const otherDays = await loadGtfsTrips(feed, ['13'], everywhere, cache, [20261208, 20261205, 20261206], { ...KEY, feed: 'otherfeed' });
   expect(otherDays.map((t) => t.days)).toEqual([0b111, 0b001]);
 });
 
 it('loadGtfsTrips rejects sample days the feed does not cover', async () => {
   const feed = await writeFeed();
-  await expect(loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'c.json'), [20270202, 20261128, 20261129], 'feedhash')).rejects.toThrow(/20270202/);
+  await expect(loadGtfsTrips(feed, ['13'], everywhere, join(dir, 'c.json'), [20270202, 20261128, 20261129], KEY)).rejects.toThrow(/20270202/);
+});
+
+it('loadGtfsTrips reads the tables again for another area or another code hash, and reuses its cache for the same inputs', async () => {
+  const feed = await writeFeed();
+  const cache = join(dir, 'trips.json');
+  const first = await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY);
+  const doctor = async () => writeFile(cache, JSON.stringify({ stamp: (JSON.parse(await readFile(cache, 'utf8')) as { stamp: string }).stamp, trips: [] }));
+  await doctor();
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY)).toEqual([]); // identical inputs: the cache
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, { ...KEY, area: 'moved' })).toEqual(first);
+  await doctor();
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, { ...KEY, area: 'moved', code: 'code2' })).toEqual(first);
+});
+
+it('loadGtfsTrips treats an unparsable or truncated cache as absent and writes it atomically', async () => {
+  const feed = await writeFeed();
+  const cache = join(dir, 'trips.json');
+  const first = await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY);
+  const text = await readFile(cache, 'utf8');
+  await writeFile(cache, text.slice(0, text.length >> 1));
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY)).toEqual(first);
+  expect(await readFile(cache, 'utf8')).toBe(text);
+  await writeFile(cache, '{"stamp": 1}');
+  expect(await loadGtfsTrips(feed, ['13'], everywhere, cache, DAYS, KEY)).toEqual(first);
+  expect(existsSync(`${cache}.part`)).toBe(false);
 });
