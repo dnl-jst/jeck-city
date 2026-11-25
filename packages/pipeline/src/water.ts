@@ -3,6 +3,8 @@ import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 import type { BuildingRecord } from './buildingstore.js';
 import { footprintContains } from './footprint.js';
+import type { TerrainFile } from './terrain/file.js';
+import { PAGE, SparseRaster } from './terrain/sparse.js';
 
 /**
  * The river surface in DGM1 is the water level (bridges and ships removed), a band that is flat to a few decimetres and
@@ -198,11 +200,17 @@ export function waterSurface(t: TerrainGrid, w: Water): Mesh {
  * a nonzero fill of all rings together leaves the holes open), then simplified (Douglas-Peucker, `tolerance` m).
  */
 export function waterOutlines(t: TerrainGrid, w: Water, cell = 4, tolerance = 2): Pt[][] {
+  return outlines(t, (gc, gr) => w.mask[gr * t.cols + gc] === 1, cell, tolerance);
+}
+
+/** waterOutlines for any mask: `isWater(c, r)` tells whether grid point (c, r) is water. */
+function outlines(t: { x0: number; z0: number; cols: number; rows: number }, isWater: (c: number, r: number) => boolean, cell: number,
+  tolerance: number): Pt[][] {
   const cols = Math.ceil(t.cols / cell), rows = Math.ceil(t.rows / cell);
   const wet = (c: number, r: number) => {
     if (c < 0 || r < 0 || c >= cols || r >= rows) return false;
     const gc = Math.min(t.cols - 1, c * cell + (cell >> 1)), gr = Math.min(t.rows - 1, r * cell + (cell >> 1));
-    return w.mask[gr * t.cols + gc] === 1;
+    return isWater(gc, gr);
   };
   // directed boundary edges between raster corners (corner (i, j) at x0 + i·cell − ½, z0 + j·cell − ½)
   const next = new Map<number, number[]>();
@@ -276,6 +284,357 @@ export function waterShare(t: TerrainGrid, w: Water, b: BuildingRecord, step = 2
       inside++;
       const c = Math.round(x - t.x0), r = Math.round(z - t.z0);
       if (c >= 0 && r >= 0 && c < t.cols && r < t.rows && w.mask[r * t.cols + c]) wet++;
+    }
+  }
+  return inside ? wet / inside : 0;
+}
+
+// ---- The same on sparse rasters and a terrain file (no array of grid size) ----
+
+export type SparseWater = {
+  /** Per grid point: 1 = water (fill 0). */
+  mask: SparseRaster<Uint8Array>;
+  /** Water level (local y) per grid point; NaN (the fill) where the point is neither water nor in its dilated surface. */
+  level: SparseRaster<Float32Array>;
+  /** Mean water level over all water points (local y), -Infinity without water. */
+  meanLevel: number;
+  /** Number of water points. */
+  area: number;
+};
+
+/** Neighbour order of the flood and the dilation: +x, −x, +z, −z. */
+const DC = [1, -1, 0, 0] as const;
+const DR = [0, 0, 1, -1] as const;
+
+/** A growing FIFO list of cells (c, r), kept as two Uint32Arrays (no flat index: cols·rows may exceed 2^31). */
+class Cells {
+  c = new Uint32Array(1024);
+  r = new Uint32Array(1024);
+  length = 0;
+  push(c: number, r: number): void {
+    if (this.length === this.c.length) {
+      const nc = new Uint32Array(this.length * 2), nr = new Uint32Array(this.length * 2);
+      nc.set(this.c);
+      nr.set(this.r);
+      this.c = nc;
+      this.r = nr;
+    }
+    this.c[this.length] = c;
+    this.r[this.length++] = r;
+  }
+}
+
+/**
+ * Decoded heights of a terrain file, read page by page (PAGE × PAGE, page-aligned windows) on first use and kept until
+ * this object is dropped. The flood's breadth-first front runs along the whole river at once, so an LRU block cache
+ * of fixed size would be re-read on every round; only pages the flood touches are ever read.
+ */
+class HeightPages {
+  private readonly pageCols: number;
+  private readonly pages: (Float32Array | undefined)[];
+  private readonly widths: number[];
+  private lastKey = -1;
+  private last: Float32Array | null = null;
+  private lastW = 0;
+
+  constructor(private readonly t: TerrainFile) {
+    this.pageCols = Math.ceil(t.cols / PAGE);
+    this.pages = new Array<Float32Array | undefined>(this.pageCols * Math.ceil(t.rows / PAGE));
+    this.widths = new Array<number>(this.pages.length).fill(0);
+  }
+
+  /** Height of cell (c, r); the caller keeps (c, r) inside the grid. */
+  get(c: number, r: number): number {
+    const pc = Math.floor(c / PAGE), pr = Math.floor(r / PAGE);
+    const key = pr * this.pageCols + pc;
+    if (key !== this.lastKey) {
+      let p = this.pages[key];
+      if (p === undefined) {
+        const w = this.t.window(pc * PAGE, pr * PAGE, Math.min(this.t.cols, pc * PAGE + PAGE) - 1, Math.min(this.t.rows, pr * PAGE + PAGE) - 1);
+        p = this.pages[key] = w.heights;
+        this.widths[key] = w.cols;
+      }
+      this.lastKey = key;
+      this.last = p;
+      this.lastW = this.widths[key]!;
+    }
+    return this.last![(r - pr * PAGE) * this.lastW + (c - pc * PAGE)]!;
+  }
+}
+
+/** findWater on a terrain file, into sparse rasters: the same points, levels (bit for bit) and meanLevel. */
+export function findWaterSparse(t: TerrainFile, rivers: Pt[][]): SparseWater {
+  const { cols, rows } = t;
+  const mask = new SparseRaster(cols, rows, (n) => new Uint8Array(n), 0);
+  const level = new SparseRaster(cols, rows, (n) => new Float32Array(n), NaN);
+  const h = new HeightPages(t);
+  const inGrid = (c: number, r: number) => c >= 0 && r >= 0 && c < cols && r < rows;
+  const queue = new Cells();
+  for (const line of rivers) {
+    // 1 m samples along the line are the seeds; every LEVEL_STEP-th one measures the level the next ones take
+    const pts: Pt[] = [];
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1]!, b = line[i]!;
+      const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z)));
+      for (let k = 0; k < steps; k++) pts.push({ x: a.x + ((b.x - a.x) * k) / steps, z: a.z + ((b.z - a.z) * k) / steps });
+    }
+    let lvl = NaN;
+    pts.forEach((p, k) => {
+      const c0 = Math.round(p.x - t.x0), r0 = Math.round(p.z - t.z0);
+      if (k % LEVEL_STEP === 0) {
+        const hs: number[] = [];
+        for (let dz = -LEVEL_RADIUS; dz <= LEVEL_RADIUS; dz++) {
+          for (let dx = -LEVEL_RADIUS; dx <= LEVEL_RADIUS; dx++) {
+            if (dx * dx + dz * dz <= LEVEL_RADIUS * LEVEL_RADIUS && inGrid(c0 + dx, r0 + dz)) hs.push(h.get(c0 + dx, r0 + dz));
+          }
+        }
+        lvl = hs.length >= 50 ? median(hs) : NaN;
+      }
+      if (Number.isNaN(lvl) || !inGrid(c0, r0)) return;
+      if (mask.get(c0, r0) || h.get(c0, r0) > lvl + LEVEL_TOL) return;
+      mask.set(c0, r0, 1);
+      level.set(c0, r0, lvl);
+      queue.push(c0, r0);
+    });
+  }
+  // breadth-first in queue order: every point takes the level of the point it was reached from
+  for (let q = 0; q < queue.length; q++) {
+    const c = queue.c[q]!, r = queue.r[q]!;
+    const lvl = level.get(c, r);
+    for (let k = 0; k < 4; k++) {
+      const cc = c + DC[k]!, rr = r + DR[k]!;
+      if (!inGrid(cc, rr)) continue;
+      if (mask.get(cc, rr) || h.get(cc, rr) > lvl + LEVEL_TOL) continue;
+      mask.set(cc, rr, 1);
+      level.set(cc, rr, lvl);
+      queue.push(cc, rr);
+    }
+  }
+  let sum = 0;
+  for (let q = 0; q < queue.length; q++) sum += level.get(queue.c[q]!, queue.r[q]!);
+  // the surface mesh reaches a little under the banks, at the level of the water it borders on
+  let front = queue;
+  for (let k = 0; k < SURFACE_DILATE; k++) {
+    const next = new Cells();
+    for (let q = 0; q < front.length; q++) {
+      const c = front.c[q]!, r = front.r[q]!;
+      for (let n = 0; n < 4; n++) {
+        const cc = c + DC[n]!, rr = r + DR[n]!;
+        if (!inGrid(cc, rr)) continue;
+        if (!Number.isNaN(level.get(cc, rr))) continue;
+        level.set(cc, rr, level.get(c, r));
+        next.push(cc, rr);
+      }
+    }
+    front = next;
+  }
+  return { mask, level, meanLevel: queue.length ? sum / queue.length : -Infinity, area: queue.length };
+}
+
+/**
+ * carveRiverBed on a terrain file: the river bed as edits (Float32 heights where `edited` is 1) for commitVersion, and
+ * the number of lowered points. The chamfer sweeps visit the water cells in the dense version's order (row-major
+ * forwards, then backwards); non-water cells have distance 0 and are skipped there too, so only pages with water are
+ * visited. The grid's edge is not shore.
+ */
+export function carveRiverBedSparse(t: TerrainFile, w: SparseWater): { edits: SparseRaster<Float32Array>; edited: SparseRaster<Uint8Array>; lowered: number } {
+  const { cols, rows } = t;
+  for (const s of [w.mask, w.level])
+    if (s.cols !== cols || s.rows !== rows) throw new Error(`carveRiverBed: water of ${s.cols} × ${s.rows} on a terrain of ${cols} × ${rows}`);
+  const pageCols = Math.ceil(cols / PAGE), pageRows = Math.ceil(rows / PAGE);
+  // distance pages exactly where the mask has pages; a missing page reads 0 (no water)
+  const dist: DistPages = new Array<Float32Array | undefined>(pageCols * pageRows);
+  for (const [pc, pr, m] of w.mask.pages()) {
+    const p = new Float32Array(PAGE * PAGE);
+    for (let i = 0; i < p.length; i++) if (m[i]) p[i] = Infinity;
+    dist[pr * pageCols + pc] = p;
+  }
+  chamferForward(dist, pageCols, cols, rows);
+  chamferBackward(dist, pageCols, cols, rows);
+  const edits = new SparseRaster(cols, rows, (n) => new Float32Array(n), 0);
+  const edited = new SparseRaster(cols, rows, (n) => new Uint8Array(n), 0);
+  let lowered = 0;
+  for (const [pc, pr, m] of w.mask.pages()) {
+    const p = dist[pr * pageCols + pc]!;
+    const lv = w.level.page(pc, pr)!; // every water point has a level
+    const c0 = pc * PAGE, r0 = pr * PAGE;
+    const win = t.window(c0, r0, Math.min(cols, c0 + PAGE) - 1, Math.min(rows, r0 + PAGE) - 1);
+    let e: Float32Array | undefined, em: Uint8Array | undefined;
+    for (let y = 0; y < win.rows; y++)
+      for (let x = 0; x < win.cols; x++) {
+        const i = y * PAGE + x;
+        if (!m[i]) continue;
+        const depth = Math.min(WATER_DEPTH, Math.max(SHORE_DEPTH, p[i]! * BED_SLOPE));
+        const bed = lv[i]! - depth;
+        if (bed < win.heights[y * win.cols + x]!) {
+          if (!e || !em) {
+            // the first edit in this page allocates it
+            edits.set(c0 + x, r0 + y, bed);
+            edited.set(c0 + x, r0 + y, 1);
+            e = edits.page(pc, pr)!;
+            em = edited.page(pc, pr)!;
+          }
+          e[i] = bed;
+          em[i] = 1;
+          lowered++;
+        }
+      }
+  }
+  return { edits, edited, lowered };
+}
+
+/** Distance pages by page index (pr * pageCols + pc); a missing page reads 0. */
+type DistPages = (Float32Array | undefined)[];
+
+function distAt(dist: DistPages, pageCols: number, c: number, r: number): number {
+  const p = dist[Math.floor(r / PAGE) * pageCols + Math.floor(c / PAGE)];
+  return p === undefined ? 0 : p[(r % PAGE) * PAGE + (c % PAGE)]!;
+}
+
+/** The forward chamfer sweep of carveRiverBed (row-major), over the water cells only. */
+function chamferForward(dist: DistPages, pageCols: number, cols: number, rows: number): void {
+  const D = Math.SQRT2;
+  const at = (c: number, r: number) => distAt(dist, pageCols, c, r);
+  for (let r = 0; r < rows; r++) {
+    const pr = Math.floor(r / PAGE), off = (r % PAGE) * PAGE;
+    for (let pc = 0; pc < pageCols; pc++) {
+      const p = dist[pr * pageCols + pc];
+      if (p === undefined) continue;
+      const cEnd = Math.min(cols, pc * PAGE + PAGE);
+      for (let c = pc * PAGE; c < cEnd; c++) {
+        const i = off + (c - pc * PAGE);
+        if (!p[i]) continue;
+        let v = p[i]!;
+        const x = c - pc * PAGE;
+        if (x > 0 && x < PAGE - 1 && off > 0 && c < cols - 1) {
+          // all neighbours in this page (the dense guards c > 0, r > 0, c < cols − 1 hold)
+          v = Math.min(v, p[i - 1]! + 1);
+          v = Math.min(v, p[i - PAGE]! + 1);
+          v = Math.min(v, p[i - PAGE - 1]! + D);
+          v = Math.min(v, p[i - PAGE + 1]! + D);
+        } else {
+          if (c > 0) v = Math.min(v, at(c - 1, r) + 1);
+          if (r > 0) {
+            v = Math.min(v, at(c, r - 1) + 1);
+            if (c > 0) v = Math.min(v, at(c - 1, r - 1) + D);
+            if (c < cols - 1) v = Math.min(v, at(c + 1, r - 1) + D);
+          }
+        }
+        p[i] = v;
+      }
+    }
+  }
+}
+
+/** The backward chamfer sweep of carveRiverBed (reverse row-major), over the water cells only. */
+function chamferBackward(dist: DistPages, pageCols: number, cols: number, rows: number): void {
+  const D = Math.SQRT2;
+  const at = (c: number, r: number) => distAt(dist, pageCols, c, r);
+  for (let r = rows - 1; r >= 0; r--) {
+    const pr = Math.floor(r / PAGE), off = (r % PAGE) * PAGE;
+    for (let pc = pageCols - 1; pc >= 0; pc--) {
+      const p = dist[pr * pageCols + pc];
+      if (p === undefined) continue;
+      const cEnd = Math.min(cols, pc * PAGE + PAGE);
+      for (let c = cEnd - 1; c >= pc * PAGE; c--) {
+        const i = off + (c - pc * PAGE);
+        if (!p[i]) continue;
+        let v = p[i]!;
+        const x = c - pc * PAGE;
+        if (x > 0 && x < PAGE - 1 && off < (PAGE - 1) * PAGE && c < cols - 1 && r < rows - 1) {
+          // all neighbours in this page (the dense guards c < cols − 1, r < rows − 1, c > 0 hold)
+          v = Math.min(v, p[i + 1]! + 1);
+          v = Math.min(v, p[i + PAGE]! + 1);
+          v = Math.min(v, p[i + PAGE + 1]! + D);
+          v = Math.min(v, p[i + PAGE - 1]! + D);
+        } else {
+          if (c < cols - 1) v = Math.min(v, at(c + 1, r) + 1);
+          if (r < rows - 1) {
+            v = Math.min(v, at(c, r + 1) + 1);
+            if (c < cols - 1) v = Math.min(v, at(c + 1, r + 1) + D);
+            if (c > 0) v = Math.min(v, at(c - 1, r + 1) + D);
+          }
+        }
+        p[i] = v;
+      }
+    }
+  }
+}
+
+/** waterSurface on sparse rasters: the same quads in the same order. Rows of pages without a level are skipped. */
+export function waterSurfaceSparse(grid: { x0: number; z0: number; cols: number; rows: number }, w: SparseWater): Mesh {
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  const quad = (x0: number, x1: number, z0: number, z1: number, y: number) => {
+    const b = pos.length / 3;
+    pos.push(x0, y, z0, x0, y, z1, x1, y, z1, x1, y, z0);
+    uv.push(x0, z0, x0, z1, x1, z1, x1, z0);
+    idx.push(b, b + 1, b + 2, b, b + 2, b + 3); // counter-clockwise seen from above
+  };
+  const run = (r: number, start: number, end: number, sum: number) => {
+    // a run of points at 1 m spacing covers [first − ½, last + ½]; split at chunk edges
+    const z = grid.z0 + r, y = sum / (end - start);
+    let x0 = grid.x0 + start - 0.5;
+    const xEnd = grid.x0 + end - 0.5;
+    while (x0 < xEnd) {
+      const x1 = Math.min(xEnd, Math.floor(x0 / CHUNK_SIZE) * CHUNK_SIZE + CHUNK_SIZE);
+      quad(x0, x1, z - 0.5, z + 0.5, y);
+      x0 = x1;
+    }
+  };
+  const { level } = w;
+  for (let pr = 0; pr < level.pageRows; pr++) {
+    let any = false;
+    for (let pc = 0; pc < level.pageCols && !any; pc++) any = level.page(pc, pr) !== undefined;
+    if (!any) continue;
+    const rEnd = Math.min(grid.rows, pr * PAGE + PAGE);
+    for (let r = pr * PAGE; r < rEnd; r++) {
+      const off = (r % PAGE) * PAGE;
+      let start = -1, sum = 0;
+      for (let pc = 0; pc < level.pageCols; pc++) {
+        const p = level.page(pc, pr);
+        const c0 = pc * PAGE, cEnd = Math.min(grid.cols, c0 + PAGE);
+        if (p === undefined) {
+          if (start >= 0) run(r, start, c0, sum);
+          start = -1;
+          continue;
+        }
+        for (let c = c0; c < cEnd; c++) {
+          const v = p[off + c - c0]!;
+          if (Number.isNaN(v)) {
+            if (start >= 0) run(r, start, c, sum);
+            start = -1;
+          } else {
+            if (start < 0) {
+              start = c;
+              sum = 0;
+            }
+            sum += v;
+          }
+        }
+      }
+      if (start >= 0) run(r, start, grid.cols, sum);
+    }
+  }
+  return { positions: Float32Array.from(pos), indices: Uint32Array.from(idx), uv: Float32Array.from(uv) };
+}
+
+/** waterOutlines on a sparse mask: the same rings in the same order. */
+export function waterOutlinesSparse(grid: { x0: number; z0: number; cols: number; rows: number }, w: SparseWater, cell = 4, tolerance = 2): Pt[][] {
+  return outlines(grid, (gc, gr) => w.mask.get(gc, gr) === 1, cell, tolerance);
+}
+
+/** waterShare on a sparse mask. */
+export function waterShareSparse(grid: { x0: number; z0: number; cols: number; rows: number }, w: SparseWater, b: BuildingRecord, step = 2): number {
+  const fp = b.footprint;
+  let inside = 0, wet = 0;
+  for (let z = fp.minZ + step / 2; z < fp.maxZ; z += step) {
+    for (let x = fp.minX + step / 2; x < fp.maxX; x += step) {
+      if (!footprintContains(b, x, z)) continue;
+      inside++;
+      const c = Math.round(x - grid.x0), r = Math.round(z - grid.z0);
+      if (c >= 0 && r >= 0 && c < grid.cols && r < grid.rows && w.mask.get(c, r)) wet++;
     }
   }
   return inside ? wet / inside : 0;
