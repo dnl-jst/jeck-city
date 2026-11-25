@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -181,6 +182,23 @@ describe('no full-size terrain arrays', () => {
     expect(testUtilSpecifiers("export { rng } from './testgrid.test-util.js';\nexport * from './b.test-util.js';")).toEqual(['./testgrid.test-util.js', './b.test-util.js']);
     expect(testUtilSpecifiers("const m = await import( './c.test-util.js' );")).toEqual(['./c.test-util.js']);
     expect(testUtilSpecifiers("// import { x } from './c.test-util.js'\nimport { y } from './util.js';")).toEqual([]);
+  });
+});
+
+/**
+ * The dense reference copies of the old implementation, pinned by SHA-256: the equality tests compare the new code
+ * against them, so they must not drift along with it.
+ */
+const FROZEN: Record<string, string> = {
+  'dgm.dense.test-util.ts': '5d16a470aaaacdcd8e895ae91c96fb041672db13773e8fa37521bafed23799a1',
+  'water.dense.test-util.ts': '564c389027ca238a13e79cc09fe6770f2f525d7944145760197a40ca1f806330',
+  'terraincut.dense.test-util.ts': '5e643b3fcbf44bda8dfbe5fcc1719e90c0d80cdfef3f308390f45d58b9c84dd6',
+};
+
+describe('the dense reference copies are frozen', () => {
+  it.each(Object.keys(FROZEN))('%s', (file) => {
+    const hash = createHash('sha256').update(readFileSync(join(ROOT, file))).digest('hex');
+    expect(hash, `${file}: this file is the frozen reference of the old implementation — do not edit it together with the code it pins; if the reference itself must change, update the hash deliberately`).toBe(FROZEN[file]);
   });
 });
 

@@ -2,7 +2,7 @@
 // compared against: encodeTerrain(terrainFromMosaic(gaussBlur(mosaic(tiles), σ), area))). Copied verbatim; do not change.
 import { ORIGIN_UTM, type TerrainGrid } from '@nn/shared';
 import type { Rect } from './chunks.js';
-import { gaussKernel, type Mosaic } from './dgm.js';
+import type { Mosaic } from './dgm.js';
 
 /** Joins tiles (any order) into one gap-free mosaic; throws if the union is not fully covered. */
 export function mosaic(tiles: Mosaic[]): Mosaic {
@@ -24,8 +24,11 @@ export function mosaic(tiles: Mosaic[]): Mosaic {
 
 /** Separable Gaussian blur, edges clamped. */
 export function gaussBlur(m: Mosaic, sigma: number): Mosaic {
-  const k = gaussKernel(sigma);
-  const r = (k.length - 1) / 2;
+  const r = Math.max(1, Math.ceil(sigma * 3));
+  const k = new Float64Array(2 * r + 1);
+  let sum = 0;
+  for (let i = -r; i <= r; i++) sum += k[i + r] = Math.exp(-(i * i) / (2 * sigma * sigma));
+  for (let i = 0; i < k.length; i++) k[i]! /= sum;
   const { width: w, height: h } = m;
   const tmp = new Float32Array(w * h);
   const out = new Float32Array(w * h);

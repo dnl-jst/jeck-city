@@ -41,6 +41,12 @@ export type Water = {
   area: number;
 };
 
+/** Throws unless the water's rasters have the grid's size (`what`: the function asking, for the message). */
+function checkSize(what: string, grid: { cols: number; rows: number }, w: Water): void {
+  for (const s of [w.mask, w.level])
+    if (s.cols !== grid.cols || s.rows !== grid.rows) throw new Error(`${what}: water of ${s.cols} × ${s.rows} on a terrain of ${grid.cols} × ${grid.rows}`);
+}
+
 /** Neighbour order of the flood and the dilation: +x, −x, +z, −z. */
 const DC = [1, -1, 0, 0] as const;
 const DR = [0, 0, 1, -1] as const;
@@ -182,8 +188,7 @@ export function findWater(t: TerrainFile, rivers: Pt[][]): Water {
  */
 export function carveRiverBed(t: TerrainFile, w: Water): { edits: SparseRaster<Float32Array>; edited: SparseRaster<Uint8Array>; lowered: number } {
   const { cols, rows } = t;
-  for (const s of [w.mask, w.level])
-    if (s.cols !== cols || s.rows !== rows) throw new Error(`carveRiverBed: water of ${s.cols} × ${s.rows} on a terrain of ${cols} × ${rows}`);
+  checkSize('carveRiverBed', t, w);
   const pageCols = Math.ceil(cols / PAGE), pageRows = Math.ceil(rows / PAGE);
   // distance pages exactly where the mask has pages; a missing page reads 0 (no water)
   const dist: DistPages = new Array<Float32Array | undefined>(pageCols * pageRows);
@@ -310,6 +315,7 @@ function chamferBackward(dist: DistPages, pageCols: number, cols: number, rows: 
  * without a level are skipped.
  */
 export function waterSurface(grid: { x0: number; z0: number; cols: number; rows: number }, w: Water): Mesh {
+  checkSize('waterSurface', grid, w);
   const pos: number[] = [];
   const uv: number[] = [];
   const idx: number[] = [];
@@ -373,6 +379,7 @@ export function waterSurface(grid: { x0: number; z0: number; cols: number; rows:
  * a nonzero fill of all rings together leaves the holes open), then simplified (Douglas-Peucker, `tolerance` m).
  */
 export function waterOutlines(grid: { x0: number; z0: number; cols: number; rows: number }, w: Water, cell = 4, tolerance = 2): Pt[][] {
+  checkSize('waterOutlines', grid, w);
   return outlines(grid, (gc, gr) => w.mask.get(gc, gr) === 1, cell, tolerance);
 }
 
@@ -381,6 +388,7 @@ export function waterOutlines(grid: { x0: number; z0: number; cols: number; rows
  * under its bounding box). LoD2 models the Rhine bridges as solid blocks from the water up to the deck.
  */
 export function waterShare(grid: { x0: number; z0: number; cols: number; rows: number }, w: Water, b: BuildingRecord, step = 2): number {
+  checkSize('waterShare', grid, w);
   const fp = b.footprint;
   let inside = 0, wet = 0;
   for (let z = fp.minZ + step / 2; z < fp.maxZ; z += step) {

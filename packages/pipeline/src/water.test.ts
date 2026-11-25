@@ -81,6 +81,18 @@ test('waterShare: a block across the river is mostly over the water, a house on 
   expect(waterShare(file, w, boxRecord('house', 60, 60, 80, 80, 10))).toBe(0);
 });
 
+test('waterSurface, waterOutlines and waterShare refuse water of another grid size', () => {
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  const wider = { x0: file.x0, z0: file.z0, cols: file.cols + 1, rows: file.rows };
+  const taller = { x0: file.x0, z0: file.z0, cols: file.cols, rows: file.rows + 1 };
+  for (const g of [wider, taller]) {
+    expect(() => waterSurface(g, w)).toThrow(/waterSurface: water of \d+ × \d+ on a terrain of/);
+    expect(() => waterOutlines(g, w)).toThrow(/waterOutlines: water of/);
+    expect(() => waterShare(g, w, boxRecord('bridge', 140, 140, 260, 160, 10))).toThrow(/waterShare: water of/);
+  }
+});
+
 // ---- against the dense versions as they were (water.dense.test-util.ts; same decoded terrain) ----
 
 let dir: string;
