@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
 import { commitVersion, DEFAULT_MAX_WINDOW_CELLS, TerrainFile, writeTerrainFile } from './file.js';
 import { SparseRaster } from './sparse.js';
-import { randomGrid, rng } from './testgrid.js';
+import { randomGrid, rng } from './testgrid.test-util.js';
 
 const bytesOf = (path: string) => new Uint8Array(readFileSync(path));
 const u8 = (b: ArrayBuffer) => new Uint8Array(b);

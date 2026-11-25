@@ -41,7 +41,7 @@ import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
 import { bridgeBodies, concatMeshes, liftOntoDecks, onBridge, triangleSoup } from './bridges.js';
 import { waterOutlines, waterShare, waterSurface, type Water } from './water.js';
-import { railMesh } from './streets.js';
+import { railMesh, type Mesh } from './streets.js';
 import { meshCovers, punchMesh } from './punch.js';
 import type { TransitBuild } from './transit.js';
 import { buildNetwork } from './transitgen.js';
@@ -285,14 +285,18 @@ async function buildWorld(args: PipelineArgs, timetable: Timetable, terrainDir: 
   // (followTerrain asks the terrain point by point along every kerb of the city: T3 opened once more with a larger block
   // cache for it, let go right after)
   const kerbFile = TerrainFile.open(t3.path, { blocks: KERB_TERRAIN_BLOCKS });
-  const kerbTerrain = new TerrainSampler(kerbFile);
-  const curb = punchMesh(followTerrain(cropMesh(flatStreets.curb, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
-  const sidewalk = punchMesh(followTerrain(cropMesh(flatStreets.sidewalk, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
-  for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
-    const d = followDeviation(m, kerbTerrain);
-    console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
+  let curb: Mesh, sidewalk: Mesh;
+  try {
+    const kerbTerrain = new TerrainSampler(kerbFile);
+    curb = punchMesh(followTerrain(cropMesh(flatStreets.curb, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
+    sidewalk = punchMesh(followTerrain(cropMesh(flatStreets.sidewalk, area), kerbTerrain, KERB_EDGE, KERB_TOLERANCE, KERB_MIN_EDGE), holes);
+    for (const [name, m] of [['curb', curb], ['sidewalk', sidewalk]] as const) {
+      const d = followDeviation(m, kerbTerrain);
+      console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
+    }
+  } finally {
+    kerbFile.close();
   }
-  kerbFile.close();
   const deckCollision = [...deckSurfaces.map(triangleSoup), bodies.collision];
   const collision = await buildCollision({ buildings: store.meshes(), curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain: t3 });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);

@@ -3,13 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CHUNK_SIZE, decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
 import { afterEach, beforeEach, describe, expect, it, test } from 'vitest';
-import { centreLine, riverTerrain } from './riverfixture.js';
+import { centreLine, riverTerrain } from './riverfixture.test-util.js';
 import { boxRecord } from './fixture.js';
 import type { BuildingRecord } from './buildingstore.js';
 import type { Pt } from './osm.js';
 import { TerrainFile, writeTerrainFile } from './terrain/file.js';
 import { PAGE, type SparseRaster } from './terrain/sparse.js';
-import { rng } from './terrain/testgrid.js';
+import { rng } from './terrain/testgrid.test-util.js';
 import { carveRiverBed, findWater, LEVEL_TOL, WATER_DEPTH, waterOutlines, waterShare, waterSurface, type Water } from './water.js';
 import * as denseWater from './water.dense.test-util.js';
 

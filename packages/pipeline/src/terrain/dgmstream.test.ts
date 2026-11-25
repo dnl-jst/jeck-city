@@ -8,7 +8,7 @@ import type { Mosaic } from '../dgm.js';
 import { gaussBlur, mosaic, terrainFromMosaic } from '../dgm.dense.test-util.js';
 import { buildT0, planT0 } from './dgmstream.js';
 import type { TerrainFile } from './file.js';
-import { rng } from './testgrid.js';
+import { rng } from './testgrid.test-util.js';
 
 let dir: string;
 const open: TerrainFile[] = [];

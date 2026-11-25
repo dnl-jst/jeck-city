@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, chmodSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { STALE_RUN_MS, withRunDir } from './workdir.js';
 
 let root: string;
@@ -74,4 +74,51 @@ test('at the start, leftover run folders older than a day go; younger ones (a ru
   });
   expect(readdirSync(root)).toEqual([basename(young)]);
   expect(STALE_RUN_MS).toBe(24 * 3600 * 1000);
+});
+
+test('the cleanup goes by name: foreign files and foreign old folders under root survive; matching run folders and the old flat files go', async () => {
+  mkdirSync(root, { recursive: true });
+  const past = (Date.now() - STALE_RUN_MS - 60_000) / 1000;
+  const oldRun = join(root, '123-deadbeef'), foreignDir = join(root, 'photos'), oddRun = join(root, '12a-deadbeef');
+  for (const d of [oldRun, foreignDir, oddRun]) {
+    mkdirSync(d);
+    writeFileSync(join(d, 'x'), 'x');
+    utimesSync(d, past, past);
+  }
+  const flat = ['t0.bin', 't3.bin', '.t1.bin.123.abcd1234.tmp', '.t0.bin.123.abcd1234.spool'];
+  const foreign = ['notes.txt', 't4.bin', 't0.bin.bak', '.hidden'];
+  for (const f of [...flat, ...foreign]) writeFileSync(join(root, f), 'x');
+  await withRunDir(root, async () => {});
+  expect(readdirSync(root).sort()).toEqual([...foreign, 'photos', '12a-deadbeef'].sort());
+  expect(readdirSync(foreignDir)).toEqual(['x']);
+});
+
+test('a symlinked root (or an empty one) is refused before anything is deleted', async () => {
+  const target = join(dirname(root), 'elsewhere');
+  mkdirSync(target);
+  const past = (Date.now() - STALE_RUN_MS - 60_000) / 1000;
+  mkdirSync(join(target, '123-deadbeef'));
+  utimesSync(join(target, '123-deadbeef'), past, past);
+  writeFileSync(join(target, 't0.bin'), 'x');
+  symlinkSync(target, root);
+  const fn = vi.fn(async () => {});
+  await expect(withRunDir(root, fn)).rejects.toThrow(/symbolic link/);
+  expect(fn).not.toHaveBeenCalled();
+  expect(readdirSync(target).sort()).toEqual(['123-deadbeef', 't0.bin']);
+  await expect(withRunDir('', fn)).rejects.toThrow(/empty/);
+});
+
+test('a failing cleanup after a failed run is logged and does not hide the run\'s error', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await expect(withRunDir(root, async () => {
+      chmodSync(root, 0o555); // the run folder can no longer be removed from root
+      throw new Error('boom');
+    })).rejects.toThrow('boom');
+    expect(err).toHaveBeenCalled();
+    expect(String(err.mock.calls[0]![0])).toMatch(/could not remove/);
+  } finally {
+    chmodSync(root, 0o755);
+    err.mockRestore();
+  }
 });

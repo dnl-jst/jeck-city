@@ -1,6 +1,6 @@
 import type { TerrainGrid } from '@nn/shared';
 
-// Test helpers for the terrain tests (not used by the pipeline).
+// Test helpers for the terrain tests (not used by the pipeline; *.test-util.ts, so outside the code hash).
 
 /** Deterministic PRNG (mulberry32). */
 export function rng(seed: number): () => number {

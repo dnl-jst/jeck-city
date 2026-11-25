@@ -11,7 +11,7 @@ import type { Mesh } from '../streets.js';
 import { contentHash, fileContentHash } from '../worldindex.js';
 import { TerrainFile, writeTerrainFile } from './file.js';
 import { TerrainSampler } from './height.js';
-import { randomGrid, rng } from './testgrid.js';
+import { randomGrid, rng } from './testgrid.test-util.js';
 
 // Task 5: every reader of the final terrain works on a window of the file or on point queries; the results must be
 // the same, byte for byte, as on the whole decoded grid.

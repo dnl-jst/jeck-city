@@ -5,7 +5,7 @@ import { decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
 import { afterEach, beforeEach, describe, expect, it, test } from 'vitest';
 import { commitVersion, TerrainFile, writeTerrainFile } from './terrain/file.js';
 import { SparseRaster } from './terrain/sparse.js';
-import { randomGrid, rng } from './terrain/testgrid.js';
+import { randomGrid, rng } from './terrain/testgrid.test-util.js';
 import { CUT_MARGIN, FILL_SLOPE, noEdits, terrainCutEdits, terrainFillEdits, type Edits } from './terraincut.js';
 import { applyTerrainCuts, applyTerrainFills } from './terraincut.dense.test-util.js';
 

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { decodeTerrain, encodeTerrain, heightAt as sharedHeightAt, type TerrainGrid } from '@nn/shared';
 import { TerrainFile, writeTerrainFile } from './file.js';
 import { heightAt, TerrainSampler } from './height.js';
-import { randomGrid, rng } from './testgrid.js';
+import { randomGrid, rng } from './testgrid.test-util.js';
 
 let dir: string;
 const open: TerrainFile[] = [];

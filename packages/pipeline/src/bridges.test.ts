@@ -8,7 +8,7 @@ import { crossSectionFromTags } from './crosssection.js';
 import { densify, type OsmFeatures, type Road } from './osm.js';
 import { buildStreetGeometry, railMesh } from './streets.js';
 import { allSidewalkWidths } from './sidewalkwidth.js';
-import { centreLine, riverTerrain } from './riverfixture.js';
+import { centreLine, riverTerrain } from './riverfixture.test-util.js';
 import { commitVersion, type TerrainFile, writeTerrainFile } from './terrain/file.js';
 import { carveRiverBed, findWater } from './water.js';
 

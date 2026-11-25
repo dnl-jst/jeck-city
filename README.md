@@ -15,8 +15,8 @@ npm run typecheck
 
 `npm run pipeline` prüft zuerst `data/raw` gegen `data/raw.lock.json` und lädt, was fehlt oder nicht passt, aus dem
 öffentlichen Spiegel (ohne Zugangsdaten; beim ersten Mal 328 MB, entpackt 1,9 GB). Overpass, opengeodata.nrw.de und
-download.vrs.de fragt ein normaler Lauf nie. Ein Lauf dauert etwa 6–7 Minuten und braucht höchstens 4 GB Arbeitsspeicher
-(gemessen ≈ 2,1 GB Spitze mit vorhandenem Gebäude-Cache, bis ≈ 2,5 GB, wenn er neu gebaut wird; Node läuft mit
+download.vrs.de fragt ein normaler Lauf nie. Ein Lauf dauert etwa 5,6–6,8 Minuten und braucht höchstens 4 GB
+Arbeitsspeicher (gemessen ≈ 2,1 GB Spitze, mit vorhandenem wie mit neu gebautem Gebäude-Cache; Node läuft mit
 `--max-old-space-size=4096`). Das Gelände liegt nie als ganzes Raster im Speicher: Seine Fassungen T0–T3 sind Dateien
 im Format von `terrain.bin` in einem eigenen Arbeitsordner je Lauf (`data/cache/terrain/<pid>-<zufall>/`, am Ende des
 Laufs gelöscht, auch bei einem Fehler; Reste abgebrochener Läufe räumt der nächste Lauf nach einem Tag weg), gelesen

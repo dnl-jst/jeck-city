@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { abutmentFills, planBridges } from '../bridges.js';
 import { crossSectionFromTags } from '../crosssection.js';
 import { densify, type OsmFeatures, type Road } from '../osm.js';
-import { centreLine, riverTerrain } from '../riverfixture.js';
+import { centreLine, riverTerrain } from '../riverfixture.test-util.js';
 import { applyTerrainCuts, applyTerrainFills } from '../terraincut.dense.test-util.js';
 import type { Water } from '../water.js';
 import * as dense from '../water.dense.test-util.js';
