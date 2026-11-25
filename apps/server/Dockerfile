@@ -1,5 +1,5 @@
 # Nippes Nights: game server and built client in one image, one port.
-#   npm run pipeline                      (once: creates apps/client/public/world, ~350 MB, not in the repository)
+#   npm run pipeline                      (once: creates apps/client/public/world, ~1.7 GB, not in the repository)
 #   docker build -f apps/server/Dockerfile -t nippes-nights .     (context: the repository root)
 #   docker run -p 127.0.0.1:2567:2567 -e MAX_PLAYERS=60 nippes-nights
 #

@@ -39,38 +39,33 @@ jobs:
 
       - run: npm ci
 
-      # Raw open data (OSM, LoD2, DGM1; ~400 MB). The pipeline only downloads what is missing, so a cache hit skips
-      # the download. One cache per month: OSM changes over time, but builds within a month use the same snapshot.
-      # An older month is restored as a fallback; it is only refreshed when this month's download works (Overpass
-      # is often overloaded), see the "Refresh OSM" step.
-      - id: month
-        run: echo "m=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+      # Raw open data (OSM, transit routes, LoD2, DGM1, VRS timetable; 1.9 GB on disk), pinned by content hash in
+      # data/raw.lock.json. The pipeline checks data/raw against the lock and fetches whatever is missing or differs
+      # from the public mirror named in the lock (no credentials; never Overpass or the other origin servers), so a
+      # cache hit skips the download (328 MB from the mirror). One cache per lock: a new lock (`npm run raw:update`,
+      # committed) is a new key. Falling back to the cache of an earlier lock is harmless: the pipeline verifies every
+      # file's hash and refetches only what differs (e.g. just osm.json after an OSM update), the rest is reused.
       - id: raw
         uses: actions/cache/restore@v6
         with:
           path: data/raw
-          key: pipeline-raw-${{ steps.month.outputs.m }}
-          restore-keys: pipeline-raw-
+          key: raw-${{ hashFiles('data/raw.lock.json') }}
+          restore-keys: raw-
 
-      - name: Refresh OSM for a new month (keep the old snapshot if Overpass is down)
-        if: steps.raw.outputs.cache-hit != 'true' && steps.raw.outputs.cache-matched-key != ''
-        run: |
-          mv data/raw/osm.json data/raw/osm.previous.json
-          if ! npx tsx -e "import('./packages/pipeline/src/fetch.ts').then((f) => f.fetchOsm('data/raw'))"; then
-            echo "::warning::Overpass unreachable, building with last month's OSM snapshot"
-            mv data/raw/osm.previous.json data/raw/osm.json
-          fi
-          rm -f data/raw/osm.previous.json
+      # scripts/pipeline-peak.mjs measures with GNU time (`/usr/bin/time -v`); installed only if the runner lacks it
+      - name: GNU time for the memory check
+        run: test -x /usr/bin/time || { sudo apt-get update && sudo apt-get install -y time; }
 
+      # Prints run time and peak RSS; fails when the peak RSS exceeds the pipeline's 4 GB budget.
       - name: Build the world (apps/client/public/world)
-        run: npm run pipeline
+        run: node scripts/pipeline-peak.mjs --max 4096 --
 
       # saved right away, so a later failing step (tests, image) does not throw the downloads away
       - if: steps.raw.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: data/raw
-          key: pipeline-raw-${{ steps.month.outputs.m }}
+          key: raw-${{ hashFiles('data/raw.lock.json') }}
 
       - run: npm run typecheck
       - run: npm test

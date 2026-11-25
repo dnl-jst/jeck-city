@@ -7,11 +7,46 @@ TypeScript, Three.js, Rapier, Colyseus (Server), Vite.
 
 ```
 npm ci
-npm run pipeline     # einmalig: lädt Open Data, erzeugt apps/client/public/world (~1,3 GB, nicht im Repository)
+npm run pipeline     # erzeugt apps/client/public/world (~1,7 GB, nicht im Repository)
 npm run dev          # Spielserver + Vite
 npm test
 npm run typecheck
 ```
+
+`npm run pipeline` prüft zuerst `data/raw` gegen `data/raw.lock.json` und lädt, was fehlt oder nicht passt, aus dem
+öffentlichen Spiegel (ohne Zugangsdaten; beim ersten Mal 328 MB, entpackt 1,9 GB). Overpass, opengeodata.nrw.de und
+download.vrs.de fragt ein normaler Lauf nie. Ein Lauf dauert etwa 5,5–7 Minuten und braucht höchstens 4 GB Arbeitsspeicher
+(gemessen ≈ 2,9 GB Spitze; Node läuft mit `--max-old-space-size=4096`). Gebäude werden in `data/cache/buildings/`
+zwischengespeichert und neu gebaut, sobald sich Rohdaten, Gelände oder der Code der Pipeline ändern.
+
+```
+npm run pipeline -- --out <ordner>                   # Welt woanders hin schreiben
+npm run world:compare -- <ordnerA> <ordnerB>         # zwei Welten Datei für Datei vergleichen (Exit 0 = gleich)
+node scripts/pipeline-peak.mjs [--max <MB>] --       # Pipeline mit Laufzeit und Spitzen-Speicher (Exit 1 über --max)
+```
+
+Die Pipeline ist deterministisch: Dieselben Rohdaten ergeben Byte für Byte dieselbe Welt (denselben Welt-Hash).
+
+### Rohdaten
+
+`data/raw.lock.json` (im Repository) legt alle Rohdateien über den Hash ihres Inhalts fest: `osm.json` und
+`transit-routes.json` (OpenStreetMap über Overpass), 56 LoD2-Kacheln (`lod2/*.gml`) und 56 DGM1-Kacheln
+(`dgm1/*.tif`) von opengeodata.nrw.de, `gtfs.zip` (Fahrplan des VRS), dazu die Adresse des Spiegels (`mirror`) und die
+Fahrplantage (`gtfsDays`). Der Spiegel ist der Bucket `jeck-city` (`https://jeck-city.nbg1.your-objectstorage.com/`);
+die Dateien liegen dort unter `raw/<hh>/<hash>.<ext>` (Brotli-komprimiert, wo kleiner) und werden nie überschrieben.
+Lizenz und Quellen der Daten: `raw/LICENSE.txt` im Spiegel.
+
+Neue Rohdaten holen:
+
+```
+npm run raw:update -- [osm] [tiles] [gtfs]     # ohne Angabe alle drei
+```
+
+Das lädt von den Ursprungsservern, legt im Spiegel ab, was dort noch fehlt, und schreibt `data/raw.lock.json` neu. Dafür
+braucht es die `S3_*`-Zugangsdaten (z. B. in `.env`, siehe „Welt im Objektspeicher“); die öffentliche Adresse des
+Spiegels kommt aus `RAW_MIRROR_URL` oder dem bisherigen Lock. **Ein neuer OSM-Stand ist ein Commit:** die geänderte
+`data/raw.lock.json` committen; erst damit bauen alle (auch die GitHub Action) dieselbe Welt. Der Fahrplan ist Pflicht:
+Fehlt er im Lock, bricht die Pipeline ab und nennt `npm run raw:update -- gtfs`.
 
 ## Mehrspieler betreiben
 
