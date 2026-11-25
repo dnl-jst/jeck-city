@@ -4,7 +4,7 @@ import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
 import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
-import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, meshSource, worldRect, type StreetMeshes, type StreetName } from './chunks.js';
+import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, meshSource, SoupBuilder, worldRect, type StreetMeshes, type StreetName } from './chunks.js';
 import { cropMesh, prepareFlat } from './chunkdrape.js';
 import { drapeMesh } from './drape.js';
 import { boxBuilding } from './fixture.js';
@@ -107,6 +107,60 @@ test('collision includes the walkable sidewalk surface at y = 0.12, welded with 
   expect(tri).toContainEqual([20, Math.fround(0.12), 20]);
   expect(tri.every((p) => p[1] === Math.fround(0.12))).toBe(true);
   expect(col.vertices.length - kerbOnly.vertices.length).toBe(3 * 1); // only (20, 0.12, 20) is new: the shared edge is welded
+});
+
+/** The collision welder as it was, with string keys: what SoupBuilder must reproduce exactly. */
+function stringKeyedSoup(input: { p: ArrayLike<number>; tris: number[] }[]): { vertices: Float32Array; indices: Uint32Array } {
+  const seen = new Map<string, number>();
+  const vertices: number[] = [], indices: number[] = [];
+  const vertex = (x: number, y: number, z: number) => {
+    const key = `${x},${y},${z}`;
+    let i = seen.get(key);
+    if (i === undefined) {
+      i = vertices.length / 3;
+      seen.set(key, i);
+      vertices.push(x, y, z);
+    }
+    return i;
+  };
+  for (const { p, tris } of input) {
+    for (let t = 0; t < tris.length; t += 3) {
+      const [a, b, c] = [tris[t]!, tris[t + 1]!, tris[t + 2]!];
+      const P = (i: number, k: number) => p[i * 3 + k]!;
+      const ux = P(b, 0) - P(a, 0), uy = P(b, 1) - P(a, 1), uz = P(b, 2) - P(a, 2);
+      const vx = P(c, 0) - P(a, 0), vy = P(c, 1) - P(a, 1), vz = P(c, 2) - P(a, 2);
+      if (Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) < 1e-6) continue;
+      const ia = vertex(P(a, 0), P(a, 1), P(a, 2)), ib = vertex(P(b, 0), P(b, 1), P(b, 2)), ic = vertex(P(c, 0), P(c, 1), P(c, 2));
+      if (ia !== ib && ib !== ic && ia !== ic) indices.push(ia, ib, ic);
+    }
+  }
+  return { vertices: Float32Array.from(vertices), indices: Uint32Array.from(indices) };
+}
+
+test('SoupBuilder welds exactly the points the string keys welded, -0 with 0 and NaN with NaN, in the same order', () => {
+  // few distinct values, so most points repeat; doubles that differ only below float32 precision stay apart
+  const values = [0, -0, 1, -1, 0.1, Math.fround(0.1), 2.5, 1e-7, -1e-7, 1000.125, NaN, Infinity, -Infinity, 3, 4, 5, 6, 7, 8, 9];
+  let seed = 12345;
+  const rand = (n: number) => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8) % n;
+  const input: { p: ArrayLike<number>; tris: number[] }[] = [];
+  for (let s = 0; s < 200; s++) {
+    const n = 30 + rand(30);
+    const xs = Array.from({ length: n * 3 }, () => values[rand(values.length)]!);
+    const p = s % 2 ? Float32Array.from(xs) : xs; // float32 input (as in the pipeline) and plain doubles
+    input.push({ p, tris: Array.from({ length: 3 * (20 + rand(40)) }, () => rand(n)) });
+  }
+  const want = stringKeyedSoup(input);
+  const soup = new SoupBuilder();
+  for (const { p, tris } of input) for (let t = 0; t < tris.length; t += 3) soup.tri(p, tris[t]!, tris[t + 1]!, tris[t + 2]!);
+  const got = soup.build();
+  // (the data does exercise the welder, past the first growth of its arrays and hash table)
+  expect(want.vertices.length / 3).toBeGreaterThan(2100);
+  expect(want.indices.length / 3).toBeGreaterThan(5000);
+  expect(got.indices).toEqual(want.indices);
+  // bit for bit, so a -0 kept as -0 (the first point of a welded pair) counts
+  expect(new Uint8Array(got.vertices.buffer)).toEqual(new Uint8Array(want.vertices.buffer));
+  const one = new SoupBuilder();
+  expect([one.vertex(0, -0, 0), one.vertex(-0, 0, -0), one.vertex(NaN, 1, 1), one.vertex(NaN, 1, 1), one.vertex(0.1, 0, 0), one.vertex(Math.fround(0.1), 0, 0)]).toEqual([0, 0, 1, 1, 2, 3]);
 });
 
 test('collision can drop backdrop roofs', async () => {

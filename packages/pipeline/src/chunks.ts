@@ -253,21 +253,85 @@ export async function encodeChunkGlb(c: ChunkGeometry): Promise<Uint8Array> {
   return io.writeBinary(doc);
 }
 
-/** Welds exactly equal positions into one indexed triangle soup. */
-class SoupBuilder {
-  private seen = new Map<string, number>();
-  vertices: number[] = [];
-  indices: number[] = [];
-  vertex(x: number, y: number, z: number): number {
-    const key = `${x},${y},${z}`;
-    let i = this.seen.get(key);
-    if (i === undefined) {
-      i = this.vertices.length / 3;
-      this.seen.set(key, i);
-      this.vertices.push(x, y, z);
+/** One coordinate of two points that weld: `===` (-0 is 0), or both NaN. */
+const same = (a: number, b: number) => a === b || (a !== a && b !== b);
+
+/**
+ * Welds exactly equal positions into one indexed triangle soup, numbered by first use. "Equal" is what the string key
+ * `${x},${y},${z}` this replaces meant (millions of vertices: a Map of strings held ~0.5 GB): per coordinate `===`,
+ * so -0 and 0 are one point, or both NaN. The first point of a welded set keeps its exact values (-0 stays -0).
+ * Coordinates are compared as doubles (float32 output): doubles that round to the same float stay apart, as before.
+ */
+export class SoupBuilder {
+  private xyz = new Float64Array(3 * 1024);
+  private count = 0;
+  /** Open addressing (linear probing), power-of-two size, at most half full: vertex index + 1, 0 = free. */
+  private table = new Int32Array(2048);
+  private idx = new Uint32Array(3 * 1024);
+  private nIdx = 0;
+  private bits = new Float64Array(3);
+  private words = new Int32Array(this.bits.buffer);
+
+  private hash(x: number, y: number, z: number): number {
+    // -0 + 0 is 0 and every NaN one NaN: points that weld hash alike
+    const b = this.bits, w = this.words;
+    b[0] = x !== x ? NaN : x + 0;
+    b[1] = y !== y ? NaN : y + 0;
+    b[2] = z !== z ? NaN : z + 0;
+    let h = 0x811c9dc5;
+    for (let k = 0; k < 6; k++) h = Math.imul(h ^ w[k]!, 0x01000193);
+    h ^= h >>> 15;
+    h = Math.imul(h, 0x2c1b3c6d);
+    return (h ^ (h >>> 12)) >>> 0;
+  }
+
+  private grow(): void {
+    const table = new Int32Array(this.table.length * 2), mask = table.length - 1;
+    const v = this.xyz;
+    for (let i = 0; i < this.count; i++) {
+      let s = this.hash(v[i * 3]!, v[i * 3 + 1]!, v[i * 3 + 2]!) & mask;
+      while (table[s] !== 0) s = (s + 1) & mask;
+      table[s] = i + 1;
     }
+    this.table = table;
+  }
+
+  vertex(x: number, y: number, z: number): number {
+    const mask = this.table.length - 1, v = this.xyz;
+    let s = this.hash(x, y, z) & mask;
+    for (let e = this.table[s]!; e !== 0; s = (s + 1) & mask, e = this.table[s]!) {
+      const i = e - 1;
+      if (same(v[i * 3]!, x) && same(v[i * 3 + 1]!, y) && same(v[i * 3 + 2]!, z)) return i;
+    }
+    const i = this.count++;
+    if (v.length < 3 * this.count) {
+      this.xyz = new Float64Array(v.length * 2);
+      this.xyz.set(v);
+    }
+    this.xyz[i * 3] = x;
+    this.xyz[i * 3 + 1] = y;
+    this.xyz[i * 3 + 2] = z;
+    this.table[s] = i + 1;
+    if (2 * this.count > this.table.length) this.grow();
     return i;
   }
+
+  private push(a: number, b: number, c: number): void {
+    if (this.idx.length < this.nIdx + 3) {
+      const idx = new Uint32Array(this.idx.length * 2);
+      idx.set(this.idx);
+      this.idx = idx;
+    }
+    this.idx[this.nIdx++] = a;
+    this.idx[this.nIdx++] = b;
+    this.idx[this.nIdx++] = c;
+  }
+
+  /** The welded vertices (float32) and the triangles' indices. */
+  build(): { vertices: Float32Array; indices: Uint32Array } {
+    return { vertices: Float32Array.from(this.xyz.subarray(0, 3 * this.count)), indices: this.idx.slice(0, this.nIdx) };
+  }
+
   /** Adds triangle (a, b, c) of positions p; zero-area triangles (also after welding) are dropped. */
   tri(p: ArrayLike<number>, a: number, b: number, c: number): void {
     const P = (i: number, k: number) => p[i * 3 + k]!;
@@ -278,7 +342,7 @@ class SoupBuilder {
     const ia = this.vertex(P(a, 0), P(a, 1), P(a, 2));
     const ib = this.vertex(P(b, 0), P(b, 1), P(b, 2));
     const ic = this.vertex(P(c, 0), P(c, 1), P(c, 2));
-    if (ia !== ib && ib !== ic && ia !== ic) this.indices.push(ia, ib, ic);
+    if (ia !== ib && ib !== ic && ia !== ic) this.push(ia, ib, ic);
   }
 }
 
@@ -315,8 +379,7 @@ export async function buildCollision(o: { buildings: Iterable<BuildingMesh> | As
     s.tri(ground, 0, 2, 3);
   }
   return {
-    vertices: Float32Array.from(s.vertices),
-    indices: Uint32Array.from(s.indices),
+    ...s.build(),
     boundary: Float32Array.from(o.boundary.flatMap((p) => [p.x, p.z])),
   };
 }
