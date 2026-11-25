@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { boxBuilding, loadFixture, crossOf } from './fixture.js';
+import { boxRecord, loadFixture, crossOf } from './fixture.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { parkedCarSpots } from './parking.js';
 import { wgs84ToLocal } from '@nn/shared';
@@ -101,7 +101,7 @@ describe('parking stays where cars can stand', () => {
   });
 
   test('candidates inside a building footprint are dropped', () => {
-    const house = boxBuilding('h', -20, -5, 20, 5, 12); // covers the road between x = −20 and 20
+    const house = boxRecord('h', -20, -5, 20, 5, 12); // covers the road between x = −20 and 20
     const all = parkedCarSpots(feat, 7, []);
     expect(all.some((p) => Math.abs(p.pos.x) < 20)).toBe(true);
     const s = parkedCarSpots(feat, 7, [house]);

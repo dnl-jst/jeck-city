@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { ESCOOTER_TYPE, FLEET_COLORS, placeScooters } from './escooters.js';
-import { boxBuilding, crossOf } from './fixture.js';
+import { boxRecord, crossOf } from './fixture.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { edgeAt } from './roadprofile.js';
 
@@ -13,7 +13,7 @@ const road = (over: Partial<Road> = {}): Road => ({
 });
 const KERB = edgeAt(road(), 1, 'kerb', 0);
 /** Sidewalks 4 m wide on both sides. */
-const blocks = () => [boxBuilding('S', -20, KERB + 4, L + 20, KERB + 25, 17), boxBuilding('N', -20, -KERB - 25, L + 20, -KERB - 4, 17)];
+const blocks = () => [boxRecord('S', -20, KERB + 4, L + 20, KERB + 25, 17), boxRecord('N', -20, -KERB - 25, L + 20, -KERB - 4, 17)];
 const none = { lamps: [], trees: [], hoops: [], keepClear: [] };
 const SEED = 11;
 
@@ -34,7 +34,7 @@ test('scooters stand on the sidewalks, in groups, in fleet colours, a few lying'
 });
 
 test('none on narrow sidewalks (1.5 m)', () => {
-  const narrow = [boxBuilding('S', -20, KERB + 1.5, L + 20, KERB + 25, 17), boxBuilding('N', -20, -KERB - 25, L + 20, -KERB - 1.5, 17)];
+  const narrow = [boxRecord('S', -20, KERB + 1.5, L + 20, KERB + 25, 17), boxRecord('N', -20, -KERB - 25, L + 20, -KERB - 1.5, 17)];
   expect(placeScooters({ ...empty, roads: [road()] }, narrow, SEED, none)).toEqual([]);
 });
 

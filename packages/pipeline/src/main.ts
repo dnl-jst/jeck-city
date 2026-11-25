@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, type WorldManifest } from '@nn/shared';
-import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
+import { BuildingStore, type BuildingRecord } from './buildingstore.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
 import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
@@ -13,7 +13,6 @@ import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
 import { writeWorldIndex } from './worldindex.js';
-import { parseCityGml } from './citygml.js';
 import { DGM_TILES, LOD2_TILES, TRANSIT_ROUTES_FILE } from './fetch.js';
 import { GTFS_ZIP, readRawLock, requireTimetable } from './raw/lock.js';
 import { unpackGtfs } from './raw/gtfs-zip.js';
@@ -24,7 +23,7 @@ import { parseOsm } from './osm.js';
 import { placeScooters } from './escooters.js';
 import { parkedCarSpots } from './parking.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot } from './bikeracks.js';
-import { assignShops, classifyBuildings, parkedCars } from './placements.js';
+import { assignShops, parkedCars } from './placements.js';
 import { buildRoadGraph } from './roadgraph.js';
 import { placeSpawn, SPAWN_AT, SPAWN_LOOK_AT, topSurface } from './spawn.js';
 import { assignShopLabels, isNeusserAddress } from './shops.js';
@@ -54,6 +53,8 @@ const DEFAULT_OUT_DIR = 'apps/client/public/world';
 /** What the full run remembers for `--transit-only` (the city above the tunnels, see transitenv.ts). */
 const TRANSIT_ENV = 'data/cache/transit-env.bin';
 const TRANSIT_COLLISION = 'transit-collision.bin';
+/** The full building meshes, one file per LoD2 tile (see BuildingStore). */
+const BUILDING_CACHE = 'data/cache/buildings';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
 const SCOOTER_SEED = 2025611;
@@ -122,21 +123,10 @@ async function main() {
   for (const h of terrain.heights) { hMin = Math.min(hMin, h); hMax = Math.max(hMax, h); }
   console.log(`terrain: ${terrain.cols}×${terrain.rows}, datum ${datum} m, ${(hMin + datum).toFixed(1)}–${(hMax + datum).toFixed(1)} m NHN, σ ${TERRAIN_SIGMA} m`);
 
-  // one tile at a time: a parsed tile holds ~700 MB, the XML string is dropped right after parsing
-  const seen = new Set<string>();
-  let buildings: BuildingMesh[] = [];
-  for (const tile of LOD2_TILES) {
-    const meshes: BuildingMesh[] = [];
-    for (const b of parseCityGml(await readFile(join(RAW_DIR, 'lod2', tile), 'utf8'))) {
-      if (seen.has(b.id)) continue; // buildings on tile borders appear in both tiles
-      seen.add(b.id);
-      const m = buildBuildingMesh(b, { datum, terrain });
-      if (m) meshes.push(m);
-    }
-    const kept = classifyBuildings(meshes, f.boundary);
-    buildings = buildings.concat(kept);
-    console.log(`${tile}: ${meshes.length} meshes, ${kept.length} kept`);
-  }
+  // one tile at a time (a parsed tile holds ~700 MB): only light records stay in memory, the full meshes go to the
+  // cache and come back per chunk and for the collision. They stand on this first terrain, before cuts and fills.
+  let store = await BuildingStore.build({ tiles: LOD2_TILES, rawDir: join(RAW_DIR, 'lod2'), cacheDir: BUILDING_CACHE, datum, terrain, boundary: f.boundary, log: console.log });
+  let buildings = store.records;
   const backdrop = buildings.filter((b) => b.flags & 2).length;
   console.log(`buildings: ${buildings.length} (${backdrop} backdrop)`);
 
@@ -148,7 +138,7 @@ async function main() {
   // (several LOD2 buildings may share one model, a structure split into parts: it is shipped once)
   const byPath = new Map<string, string[]>();
   for (const [id, path] of Object.entries(overrides)) byPath.set(path, [...(byPath.get(path) ?? []), id]);
-  const prepared = new Map<string, { m: PreparedModel; parts: BuildingMesh[]; lift: number }>();
+  const prepared = new Map<string, { m: PreparedModel; parts: BuildingRecord[]; lift: number }>();
   for (const [path, ids] of byPath) {
     const parts = ids.map((id) => buildings.find((x) => x.id === id) ?? fail(`override ${id}: no such building in the play area`));
     // the model is authored with y = 0 at the LoD2 base; on a slope the lowest base of its buildings
@@ -178,7 +168,8 @@ async function main() {
   console.log(`terrain fills: ${filled} grid points raised behind ${bridges.ends.length} abutments`);
   // LoD2 models the Rhine bridges as solid blocks from the water up to the deck: the bridges are built from OSM instead
   const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(terrain, water, b) > 0.5));
-  buildings = buildings.filter((b) => !wetBuildings.has(b));
+  store = store.without((b) => wetBuildings.has(b));
+  buildings = store.records;
   active = active.filter((b) => !wetBuildings.has(b));
   console.log(`buildings over the water dropped: ${wetBuildings.size}`);
   console.log(`water: ${water.mask.reduce((n, v) => n + v, 0)} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
@@ -239,7 +230,7 @@ async function main() {
   const chunks: WorldManifest['chunks'] = [];
   // one chunk at a time: build → punch → encode → write, then let it go
   const drapedTriangles: Partial<Record<StreetName, number>> = {};
-  for (const c of chunkGeometries(buildings, streets, overrides, area, terrain, decks, flatSources, drapedTriangles)) {
+  for await (const c of chunkGeometries(store, streets, overrides, area, terrain, decks, flatSources, drapedTriangles)) {
     const file = `chunk_${c.key}.glb`;
     // (triangles belong to the chunk of their centroid and may reach a little beyond its square)
     const x0 = c.ix * CHUNK_SIZE - 10, z0 = c.iz * CHUNK_SIZE - 10, x1 = x0 + CHUNK_SIZE + 20, z1 = z0 + CHUNK_SIZE + 20;
@@ -251,6 +242,8 @@ async function main() {
     await writeFile(join(outDir, file), glb);
     chunks.push({ key: c.key, x: c.ix * CHUNK_SIZE, z: c.iz * CHUNK_SIZE, file, bytes: glb.byteLength });
   }
+  console.log(`buildings: ${store.tileLoads} tile loads for the chunks`);
+  store.release();
   for (const name of DRAPED) console.log(`drape ${name}: ${flatStreets[name].indices.length / 3} → ${drapedTriangles[name] ?? 0} triangles (${decks[name].indices.length / 3} on bridges)`);
 
   const models: WorldManifest['models'] = [];
@@ -286,7 +279,7 @@ async function main() {
     console.log(`collision ${name}: ${m.indices.length / 3} triangles (≤ ${KERB_EDGE} m edges, ${KERB_TOLERANCE * 100} cm tolerance), deviation from the drape max ${(d.max * 100).toFixed(1)} cm at (${d.at.x.toFixed(1)}, ${d.at.z.toFixed(1)}), p99 ${(d.p99 * 100).toFixed(2)} cm`);
   }
   const deckCollision = [...deckSurfaces.map(triangleSoup), bodies.collision];
-  const collision = buildCollision({ buildings, curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain });
+  const collision = await buildCollision({ buildings: store.meshes(), curb, sidewalk, boundary: f.boundary, overrides, extra: [...modelCollision, ...deckCollision], terrain });
   console.log(`collision: ${collision.vertices.length / 3} vertices, ${collision.indices.length / 3} triangles`);
   // the spawn stands on the walkable surface there: pavement if any, else the terrain
   const spawnGround = heightAt(terrain, spawn.x, spawn.z);
@@ -466,7 +459,7 @@ async function transitOnly(outDir: string, timetable: Timetable): Promise<void> 
  * `--list-shops`: every shop in the play area on Neusser Straße (OSM address, or placed in a building with an
  * NRW Neusser Str. address), as JSON lines { realName, type, address } — input for data/shop-names.json.
  */
-function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest['shops'], buildings: BuildingMesh[]): void {
+function listNeusserShops(f: ReturnType<typeof parseOsm>, placed: WorldManifest['shops'], buildings: readonly BuildingRecord[]): void {
   const neusserBuilding = new Set(buildings.filter((b) => b.flags & 1).map((b) => b.id));
   let n = 0;
   for (const s of f.shops) {

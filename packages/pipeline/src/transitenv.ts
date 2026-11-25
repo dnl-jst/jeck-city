@@ -1,5 +1,5 @@
-import type { BuildingMesh } from './buildings.js';
-import { footprintContains, footprintOf } from './footprint.js';
+import type { BuildingRecord } from './buildingstore.js';
+import { footprintContains } from './footprint.js';
 import type { Pt } from './osm.js';
 
 /**
@@ -22,10 +22,10 @@ const MAGIC = 'NNE1';
 const BUILT = 1, PAVEMENT = 2, ROADWAY = 4;
 
 /** "Inside a building" with a grid over the footprints' boxes (the plain test walks every building). */
-export function footprintTest(buildings: BuildingMesh[], cell = 16): (p: Pt) => boolean {
-  const grid = new Map<string, BuildingMesh[]>();
+export function footprintTest(buildings: readonly BuildingRecord[], cell = 16): (p: Pt) => boolean {
+  const grid = new Map<string, BuildingRecord[]>();
   for (const b of buildings) {
-    const fp = footprintOf(b);
+    const fp = b.footprint;
     if (!Number.isFinite(fp.minX)) continue;
     for (let gx = Math.floor(fp.minX / cell); gx <= Math.floor(fp.maxX / cell); gx++) {
       for (let gz = Math.floor(fp.minZ / cell); gz <= Math.floor(fp.maxZ / cell); gz++) {

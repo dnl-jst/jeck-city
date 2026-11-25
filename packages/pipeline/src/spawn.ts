@@ -1,5 +1,5 @@
 import { wgs84ToLocal } from '@nn/shared';
-import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { Pt } from './osm.js';
 import { pointInPolygon } from './polyline.js';
@@ -13,7 +13,7 @@ export const SPAWN_LOOK_AT = wgs84ToLocal(50.94131, 6.95707);
  * The spawn at `at`, looking at `lookAt`. heading = atan2(dx, dz), i.e. forward = (sin h, cos h). y is left to the
  * caller (the walkable surface there, see topSurface). Throws if the spot lies inside a building or outside the play area.
  */
-export function placeSpawn(at: Pt, lookAt: Pt, boundary: Pt[], buildings: BuildingMesh[]): { x: number; z: number; heading: number } {
+export function placeSpawn(at: Pt, lookAt: Pt, boundary: Pt[], buildings: readonly BuildingRecord[]): { x: number; z: number; heading: number } {
   if (insideAnyFootprint(at, buildings)) throw new Error(`placeSpawn: (${at.x.toFixed(1)}, ${at.z.toFixed(1)}) lies inside a building`);
   if (boundary.length && !pointInPolygon(at, boundary)) throw new Error(`placeSpawn: (${at.x.toFixed(1)}, ${at.z.toFixed(1)}) lies outside the play area`);
   return { x: at.x, z: at.z, heading: Math.atan2(lookAt.x - at.x, lookAt.z - at.z) };

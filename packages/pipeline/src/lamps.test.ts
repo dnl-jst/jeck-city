@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { boxBuilding, crossOf } from './fixture.js';
+import { boxRecord, crossOf } from './fixture.js';
 import { generatedLamps, LAMP_SPACING } from './lamps.js';
 import type { OsmFeatures, Road } from './osm.js';
 
@@ -31,7 +31,7 @@ test('skips candidates near OSM lamps, inside footprints, on tram tracks and nea
     roads: [road({ points: [{ x: 0, z: 0 }, { x: 126, z: 0 }, { x: 300, z: 0 }] }), { ...road(), id: 2, points: [{ x: 126, z: -50 }, { x: 126, z: 50 }] }], // crossing: shared node at x = 126
     lamps: [{ x: 40, z: 10 }], // within 20 m of the x = 42 candidate only
     tramTracks: [[{ x: 98, z: -20 }, { x: 98, z: 20 }]],
-  }, [boxBuilding('B', 65, 2, 75, 10, 10)]).map((l) => Math.round(l.x * 100) / 100);
+  }, [boxRecord('B', 65, 2, 75, 10, 10)]).map((l) => Math.round(l.x * 100) / 100);
   expect(xs.slice(0, 2)).toEqual([14, 154]);
   expect(xs).not.toContain(126);
 });

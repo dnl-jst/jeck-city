@@ -1,8 +1,8 @@
 import { CHUNK_SIZE, type TerrainGrid } from '@nn/shared';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
-import type { BuildingMesh } from './buildings.js';
-import { footprintContains, footprintOf } from './footprint.js';
+import type { BuildingRecord } from './buildingstore.js';
+import { footprintContains } from './footprint.js';
 
 /**
  * The river surface in DGM1 is the water level (bridges and ships removed), a band that is flat to a few decimetres and
@@ -267,8 +267,8 @@ function dp(pts: Pt[], tol: number): Pt[] {
  * Share of a building's footprint over the water (footprint sampled every `step` m; 0 for a building without water
  * under its bounding box). LoD2 models the Rhine bridges as solid blocks from the water up to the deck.
  */
-export function waterShare(t: TerrainGrid, w: Water, b: BuildingMesh, step = 2): number {
-  const fp = footprintOf(b);
+export function waterShare(t: TerrainGrid, w: Water, b: BuildingRecord, step = 2): number {
+  const fp = b.footprint;
   let inside = 0, wet = 0;
   for (let z = fp.minZ + step / 2; z < fp.maxZ; z += step) {
     for (let x = fp.minX + step / 2; x < fp.maxX; x += step) {

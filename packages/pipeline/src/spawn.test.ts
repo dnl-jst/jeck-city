@@ -2,7 +2,7 @@ import { expect, test } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { decodeCollision, decodeTerrain, heightAt } from '@nn/shared';
-import { boxBuilding } from './fixture.js';
+import { boxRecord } from './fixture.js';
 import { footprintContains, footprintDistance } from './footprint.js';
 import { placeSpawn, SPAWN_AT, topSurface } from './spawn.js';
 
@@ -17,7 +17,7 @@ test('spawn looks at its target; heading = atan2(dx, dz)', () => {
 });
 
 test('spawn throws inside a building or outside the play area', () => {
-  expect(() => placeSpawn({ x: 0, z: 0 }, { x: 1, z: 0 }, square, [boxBuilding('B', -5, -5, 5, 5, 10)])).toThrow('inside a building');
+  expect(() => placeSpawn({ x: 0, z: 0 }, { x: 1, z: 0 }, square, [boxRecord('B', -5, -5, 5, 5, 10)])).toThrow('inside a building');
   expect(() => placeSpawn({ x: 150, z: 0 }, { x: 160, z: 0 }, square, [])).toThrow('outside the play area');
 });
 
@@ -31,7 +31,7 @@ test('topSurface: highest triangle within reach above the ground, roofs ignored'
 });
 
 test('footprint test uses the projected roof', () => {
-  const b = boxBuilding('b', 0, 0, 10, 5, 6);
+  const b = boxRecord('b', 0, 0, 10, 5, 6);
   expect(footprintContains(b, 5, 2.5)).toBe(true);
   expect(footprintContains(b, 11, 2.5)).toBe(false);
   expect(footprintContains(b, 5, -0.1)).toBe(false);

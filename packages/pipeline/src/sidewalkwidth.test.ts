@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { crossSectionFromTags } from './crosssection.js';
-import { boxBuilding } from './fixture.js';
+import { boxRecord } from './fixture.js';
 import type { Road } from './osm.js';
 import { allSidewalkWidths, SIDEWALK_STEP, sidewalkWidths, widthAt } from './sidewalkwidth.js';
 
@@ -15,7 +15,7 @@ test('samples: every vertex, plus points between where the width does not run li
   const plain = sidewalkWidths(road([0, 5, 30]), []);
   expect(plain.s).toEqual([0, 5, 30]); // constant widths: only the vertices
   expect(plain.left).toHaveLength(3);
-  const b = [boxBuilding('A', -10, 7, 20, 30, 12), boxBuilding('B', 20, 5, 70, 30, 12)];
+  const b = [boxRecord('A', -10, 7, 20, 30, 12), boxRecord('B', 20, 5, 70, 30, 12)];
   const w = sidewalkWidths(road([0, 60]), b);
   expect(w.s[0]).toBe(0);
   expect(w.s[w.s.length - 1]).toBe(60);
@@ -25,61 +25,58 @@ test('samples: every vertex, plus points between where the width does not run li
 });
 
 test('facade 4 m behind the kerb → 4.0; no building within 10 m → 2.5', () => {
-  const w = sidewalkWidths(road([0, 20, 40]), [boxBuilding('S', -10, 7, 50, 20, 12)]);
+  const w = sidewalkWidths(road([0, 20, 40]), [boxRecord('S', -10, 7, 50, 20, 12)]);
   all(w.right, 4);
   all(w.left, 2.5);
 });
 
 test('a facade more than 10 m behind the kerb → 2.5', () => {
-  all(sidewalkWidths(road([0, 20, 40]), [boxBuilding('far', -10, 14, 50, 30, 12)]).right, 2.5); // 11 m behind the kerb
+  all(sidewalkWidths(road([0, 20, 40]), [boxRecord('far', -10, 14, 50, 30, 12)]).right, 2.5); // 11 m behind the kerb
 });
 
 test('a facade 9 m behind the kerb is capped at 8 m', () => {
-  all(sidewalkWidths(road([0, 20, 40]), [boxBuilding('S', -10, 12, 50, 30, 12)]).right, 8);
+  all(sidewalkWidths(road([0, 20, 40]), [boxRecord('S', -10, 12, 50, 30, 12)]).right, 8);
 });
 
 test('a courtyard gap keeps the neighbours\' building line instead of running to the back', () => {
   const b = [
-    boxBuilding('W', -30, -20, -3, -7, 12), boxBuilding('E', 13, -20, 40, -7, 12), // facades 4 m behind the north kerb
-    boxBuilding('back', -30, -45, 40, -33, 12), // courtyard back, 30 m behind the kerb
+    boxRecord('W', -30, -20, -3, -7, 12), boxRecord('E', 13, -20, 40, -7, 12), // facades 4 m behind the north kerb
+    boxRecord('back', -30, -45, 40, -33, 12), // courtyard back, 30 m behind the kerb
   ];
   all(sidewalkWidths(road([0, 5, 10]), b).left, 4);
 });
 
 test('facade right at the kerb is clamped to 1.5 m', () => {
-  all(sidewalkWidths(road([0, 20, 40]), [boxBuilding('S', -10, 3.5, 50, 20, 12)]).right, 1.5);
+  all(sidewalkWidths(road([0, 20, 40]), [boxRecord('S', -10, 3.5, 50, 20, 12)]).right, 1.5);
 });
 
 test('a single recessed vertex is smoothed away', () => {
-  const b = [boxBuilding('a', -10, 7, 18, 30, 12), boxBuilding('b', 22, 7, 50, 30, 12), boxBuilding('c', 18, 23, 22, 30, 12)];
+  const b = [boxRecord('a', -10, 7, 18, 30, 12), boxRecord('b', 22, 7, 50, 30, 12), boxRecord('c', 18, 23, 22, 30, 12)];
   all(sidewalkWidths(road([0, 10, 20, 30, 40]), b).right, 4);
 });
 
 test('a side-street gap at the end of the way does not flare the sidewalk', () => {
   // facade 4 m behind the south kerb from x = 5 on; at x = 0 a straight ray runs past the building corner
-  all(sidewalkWidths(road([0, 20, 40]), [boxBuilding('S', 5, 7, 50, 30, 12)]).right, 4);
+  all(sidewalkWidths(road([0, 20, 40]), [boxRecord('S', 5, 7, 50, 30, 12)]).right, 4);
 });
 
 test('side-street gaps at junction vertices do not flare the sidewalk', () => {
-  const b = [boxBuilding('a', -10, 7, 8, 30, 12), boxBuilding('b', 12, 7, 18, 30, 12), boxBuilding('c', 22, 7, 50, 30, 12)];
+  const b = [boxRecord('a', -10, 7, 8, 30, 12), boxRecord('b', 12, 7, 18, 30, 12), boxRecord('c', 22, 7, 50, 30, 12)];
   all(sidewalkWidths(road([0, 10, 20, 30, 40]), b).right, 4);
 });
 
 test('a way with only two vertices follows a building that covers only its middle', () => {
-  all(sidewalkWidths(road([0, 40]), [boxBuilding('S', 10, 7, 30, 30, 12)]).right, 4);
+  all(sidewalkWidths(road([0, 40]), [boxRecord('S', 10, 7, 30, 30, 12)]).right, 4);
 });
 
 // one 60 m segment along a stepped facade (south side, kerb at z = 3): 4 m, then 2 m (a building standing forward),
 // a 3 m passage to a rear building 7 m behind the kerb, then 5 m
 const stepped = [
-  boxBuilding('A', -10, 7, 20, 30, 12), boxBuilding('B', 20, 5, 40, 30, 12),
-  boxBuilding('rear', 38, 10, 45, 30, 12), boxBuilding('C', 43, 8, 70, 30, 12),
+  boxRecord('A', -10, 7, 20, 30, 12), boxRecord('B', 20, 5, 40, 30, 12),
+  boxRecord('rear', 38, 10, 45, 30, 12), boxRecord('C', 43, 8, 70, 30, 12),
 ];
 const facadeZ = (x: number): number => {
-  const zs = stepped.map((b) => {
-    const xs = [...b.positions].filter((_, i) => i % 3 === 0), zz = [...b.positions].filter((_, i) => i % 3 === 2);
-    return x >= Math.min(...xs) && x <= Math.max(...xs) ? Math.min(...zz) : Infinity;
-  });
+  const zs = stepped.map(({ footprint: fp }) => (x >= fp.minX && x <= fp.maxX ? fp.minZ : Infinity));
   return Math.min(...zs);
 };
 
@@ -106,7 +103,7 @@ test('a 3 m passage does not pull the sidewalk to the rear building behind it', 
 test('allSidewalkWidths: every drivable way once, from the one building set it is given', () => {
   const r = road([0, 20, 40]);
   const path: Road = { ...road([0, 10]), id: 2, kind: 'footway' };
-  const m = allSidewalkWidths([r, path], [boxBuilding('S', -10, 7, 50, 20, 12)]);
+  const m = allSidewalkWidths([r, path], [boxRecord('S', -10, 7, 50, 20, 12)]);
   expect([...m.keys()]).toEqual([r]);
   all(m.get(r)!.right, 4);
 });

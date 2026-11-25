@@ -1,4 +1,4 @@
-import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { placeRand } from './placerand.js';
@@ -31,7 +31,7 @@ const WALL_SHIFT_STEP = 0.25;
 const MAX_WALL_SHIFT = 2.5;
 
 /** The hoop position (shifted towards the road if needed) whose hoop and bikes are outside every footprint, or null. */
-function clearOfBuildings(h: Pt, toRoad: Pt, buildings: BuildingMesh[]): Pt | null {
+function clearOfBuildings(h: Pt, toRoad: Pt, buildings: readonly BuildingRecord[]): Pt | null {
   for (let shift = 0; shift <= MAX_WALL_SHIFT + 1e-9; shift += WALL_SHIFT_STEP) {
     const p = { x: h.x + toRoad.x * shift, z: h.z + toRoad.z * shift };
     const ends = [p, { x: p.x + toRoad.x * BIKE_REACH, z: p.z + toRoad.z * BIKE_REACH }, { x: p.x - toRoad.x * BIKE_REACH, z: p.z - toRoad.z * BIKE_REACH }];
@@ -85,7 +85,7 @@ function nearestRoad(roads: Road[], p: Pt): { road: Road; n: ReturnType<typeof n
  * along the nearest drivable road (an area: along its main axis), bikes facing the road. In a parking strip the row
  * stays; in a driving lane it moves onto the sidewalk. Hoops in buildings, near tram tracks or outside the play area go.
  */
-export function layoutRacks(f: OsmFeatures, buildings: BuildingMesh[]): RackRow[] {
+export function layoutRacks(f: OsmFeatures, buildings: readonly BuildingRecord[]): RackRow[] {
   const rows: RackRow[] = [];
   const ring = [...f.boundary, f.boundary[0]!];
   for (const p of f.bikeParking) {
@@ -147,7 +147,7 @@ export function layoutRacks(f: OsmFeatures, buildings: BuildingMesh[]): RackRow[
  * hoop; ~50 % of the slots are taken, types per spec (dutch 45 %, mtb 20 %, road 15 %, Long John 10 %, trike 10 %).
  * `buildings`: cargo bikes whose spot lies in one are left out.
  */
-export function fillRacks(rows: RackRow[], seed: number, buildings: BuildingMesh[] = []): PlacedBike[] {
+export function fillRacks(rows: RackRow[], seed: number, buildings: readonly BuildingRecord[] = []): PlacedBike[] {
   const out: PlacedBike[] = [];
   // every draw is keyed by the hoop's position (placeRand), so racks keep their bikes when other racks change
   const color = (at: Pt, salt: number) => COLORS[Math.floor(placeRand(seed, at, salt) * COLORS.length)]!;
@@ -195,7 +195,7 @@ const SPAWN_BIKE_BEHIND = [2.2, 1.8, 2.6];
  * The Long John at the spawn: parallel to the spawn heading, ~2.2 m behind the player. Throws if no spot clears
  * buildings and the play-area edge.
  */
-export function spawnBikeSpot(f: OsmFeatures, spawn: Pt & { heading: number }, buildings: BuildingMesh[]): { x: number; z: number; heading: number } {
+export function spawnBikeSpot(f: OsmFeatures, spawn: Pt & { heading: number }, buildings: readonly BuildingRecord[]): { x: number; z: number; heading: number } {
   const fx = Math.sin(spawn.heading), fz = Math.cos(spawn.heading);
   for (const d of SPAWN_BIKE_BEHIND) {
     const p = { x: spawn.x - fx * d, z: spawn.z - fz * d };

@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { buildCollision } from './chunks.js';
 import { crossSectionFromTags } from './crosssection.js';
-import { boxBuilding, loadFixture } from './fixture.js';
+import { boxRecord, loadFixture } from './fixture.js';
 import { buildMarkings } from './markings.js';
 import type { OsmFeatures, Road } from './osm.js';
 import { parkedCarSpots } from './parking.js';
@@ -74,8 +74,8 @@ test('right kerb: the diagonal strip opens over a ramp in the wider way', () => 
   }
 });
 
-test('collision: no kerb cross face at the split', () => {
-  const col = buildCollision({ buildings: [], curb: g.curb, sidewalk: g.sidewalk, boundary: f.boundary });
+test('collision: no kerb cross face at the split', async () => {
+  const col = await buildCollision({ buildings: [], curb: g.curb, sidewalk: g.sidewalk, boundary: f.boundary });
   const v = col.vertices, idx = col.indices;
   for (let t = 0; t < idx.length; t += 3) {
     const [a, b, c] = [idx[t]! * 3, idx[t + 1]! * 3, idx[t + 2]! * 3];
@@ -97,8 +97,8 @@ test('no parked car in a ramp', () => {
   for (const s of spots) expect(Math.abs(s.pos.x)).toBeGreaterThan(6 + 2.1);
 });
 
-test('collision: kerb and sidewalk run on continuously across the split (no step, no hole)', () => {
-  const col = buildCollision({ buildings: [], curb: g.curb, sidewalk: g.sidewalk, boundary: f.boundary });
+test('collision: kerb and sidewalk run on continuously across the split (no step, no hole)', async () => {
+  const col = await buildCollision({ buildings: [], curb: g.curb, sidewalk: g.sidewalk, boundary: f.boundary });
   const v = col.vertices, idx = col.indices;
   /** Expected kerb distance per side at x (ramps: left in A over [-6, 0], right in B over [0, 6]). */
   const kerb = (side: number, x: number) => side < 0
@@ -136,7 +136,7 @@ test('collision: kerb and sidewalk run on continuously across the split (no step
 });
 
 test('sidewalk outer edge stays on the facade through a ramp (width filled as distance to the outer edge)', () => {
-  const walls = [boxBuilding('N', -200, -40, 200, -12, 10), boxBuilding('S', -200, 12, 200, 40, 10)]; // widths 2.65..7.15 m, inside the 1.5..8 m clamp
+  const walls = [boxRecord('N', -200, -40, 200, -12, 10), boxRecord('S', -200, 12, 200, 40, 10)]; // widths 2.65..7.15 m, inside the 1.5..8 m clamp
   for (const r of roads) {
     const w = sidewalkWidths(r, walls);
     for (const side of [-1, 1]) (side > 0 ? w.right : w.left).forEach((wi, i) => expect(edgeAt(r, side, 'kerb', w.s[i]!) + wi).toBeCloseTo(12, 2));

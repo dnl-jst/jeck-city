@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { boxBuilding, loadFixture } from './fixture.js';
+import { recordOf } from './buildingstore.js';
+import { boxBuilding, boxRecord, loadFixture } from './fixture.js';
 import { buildMapData } from './map.js';
 
 describe('buildMapData', () => {
@@ -19,7 +20,7 @@ describe('buildMapData', () => {
   });
 
   it('building footprint = roof triangles in xz', () => {
-    const m = buildMapData(loadFixture(), [boxBuilding('b', 0, 0, 10, 20, 8)]);
+    const m = buildMapData(loadFixture(), [boxRecord('b', 0, 0, 10, 20, 8)]);
     const t = m.buildings[0]!;
     expect(t.length % 6).toBe(0);
     let area = 0;
@@ -38,7 +39,7 @@ describe('buildMapData', () => {
   it('wall-only triangles are dropped', () => {
     const b = boxBuilding('b', 0, 0, 10, 20, 8);
     b.kind.fill(0);
-    expect(buildMapData(loadFixture(), [b]).buildings.length).toBe(0);
+    expect(buildMapData(loadFixture(), [recordOf(b, 0)]).buildings.length).toBe(0);
   });
 
   it('bounds enclose boundary and all roads', () => {

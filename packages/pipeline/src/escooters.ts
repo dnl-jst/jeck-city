@@ -1,5 +1,5 @@
 import { BIKE_TYPES } from '@nn/shared';
-import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { footprintContains } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { placeRand } from './placerand.js';
@@ -67,7 +67,7 @@ const pickSize = (u: number): number => {
  * on a carriageway (a lying one with its bar too; otherwise it stays upright).
  */
 export function placeScooters(
-  f: OsmFeatures, buildings: BuildingMesh[], seed: number, obstacles: SidewalkObstacles,
+  f: OsmFeatures, buildings: readonly BuildingRecord[], seed: number, obstacles: SidewalkObstacles,
   widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, buildings),
 ): PlacedScooter[] {
   const net = f.roads.filter((r) => (DRIVABLE.has(r.kind) || r.kind === 'service') && dedupe(r.points).length >= 2).map((r) => {
