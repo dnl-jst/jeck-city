@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, chmodSync, utimesSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { STALE_RUN_MS, withRunDir } from './workdir.js';
+import { pidAlive, STALE_RUN_MS, unlinkRunFile, withRunDir } from './workdir.js';
 
 let root: string;
 beforeEach(() => {
@@ -57,40 +58,150 @@ test('the folder is removed when the run fails too', async () => {
   expect(existsSync(seen)).toBe(false);
 });
 
-test('at the start, leftover run folders older than a day go; younger ones (a run may be live) stay; files of the old flat layout go', async () => {
+const alive = () => true;
+const dead = () => false;
+
+test('at the start, run folders of a live pid go once older than a day; younger ones (a run may be live) stay', async () => {
   mkdirSync(root, { recursive: true });
   const old = join(root, '123-deadbeef'), young = join(root, '456-cafebabe');
   for (const d of [old, young]) {
     mkdirSync(d);
     writeFileSync(join(d, 't3.bin'), 'x');
   }
-  writeFileSync(join(root, 't0.bin'), 'flat'); // what runs before per-run folders left
   const past = (Date.now() - STALE_RUN_MS - 60_000) / 1000;
   utimesSync(old, past, past);
   const recent = (Date.now() - STALE_RUN_MS + 3_600_000) / 1000;
   utimesSync(young, recent, recent);
   await withRunDir(root, async (dir) => {
     expect(readdirSync(root).sort()).toEqual([basename(young), basename(dir)].sort());
-  });
+  }, { isAlive: alive });
   expect(readdirSync(root)).toEqual([basename(young)]);
   expect(STALE_RUN_MS).toBe(24 * 3600 * 1000);
 });
 
-test('the cleanup goes by name: foreign files and foreign old folders under root survive; matching run folders and the old flat files go', async () => {
+test('at the start, a fresh run folder whose pid is dead goes at once; one of a live pid stays', async () => {
+  mkdirSync(root, { recursive: true });
+  const gone = join(root, '123-deadbeef'), live = join(root, '456-cafebabe');
+  for (const d of [gone, live]) {
+    mkdirSync(d);
+    writeFileSync(join(d, 't3.bin'), 'x');
+  }
+  const asked: number[] = [];
+  await withRunDir(root, async () => {}, { isAlive: (pid) => (asked.push(pid), pid === 456) });
+  expect(readdirSync(root)).toEqual([basename(live)]);
+  expect(asked.sort()).toEqual([123, 456]);
+});
+
+test('the cleanup goes by name: foreign files and folders of any name survive, also when no pid is alive', async () => {
   mkdirSync(root, { recursive: true });
   const past = (Date.now() - STALE_RUN_MS - 60_000) / 1000;
-  const oldRun = join(root, '123-deadbeef'), foreignDir = join(root, 'photos'), oddRun = join(root, '12a-deadbeef');
-  for (const d of [oldRun, foreignDir, oddRun]) {
+  const oldRun = join(root, '123-deadbeef'), foreignDir = join(root, 'photos'), oddRun = join(root, '12a-deadbeef'), longHex = join(root, '123-deadbeef0');
+  for (const d of [oldRun, foreignDir, oddRun, longHex]) {
     mkdirSync(d);
     writeFileSync(join(d, 'x'), 'x');
     utimesSync(d, past, past);
   }
-  const flat = ['t0.bin', 't3.bin', '.t1.bin.123.abcd1234.tmp', '.t0.bin.123.abcd1234.spool'];
-  const foreign = ['notes.txt', 't4.bin', 't0.bin.bak', '.hidden'];
-  for (const f of [...flat, ...foreign]) writeFileSync(join(root, f), 'x');
-  await withRunDir(root, async () => {});
-  expect(readdirSync(root).sort()).toEqual([...foreign, 'photos', '12a-deadbeef'].sort());
+  const foreign = ['t0.bin', 't3.bin', '.t1.bin.123.abcd1234.tmp', '.t0.bin.123.abcd1234.spool', 'notes.txt', 't4.bin', 't0.bin.bak', '.hidden', '789-abcdef12'];
+  for (const f of foreign) writeFileSync(join(root, f), 'x'); // ('789-abcdef12': a file named like a run folder)
+  await withRunDir(root, async () => {}, { isAlive: dead });
+  expect(readdirSync(root).sort()).toEqual([...foreign, 'photos', '12a-deadbeef', '123-deadbeef0'].sort());
   expect(readdirSync(foreignDir)).toEqual(['x']);
+});
+
+test('a symbolic link named like a run folder is never followed nor removed', async () => {
+  mkdirSync(root, { recursive: true });
+  const target = join(dirname(root), 'kept');
+  mkdirSync(target);
+  writeFileSync(join(target, 'x'), 'x');
+  symlinkSync(target, join(root, '123-deadbeef'));
+  await withRunDir(root, async () => {}, { isAlive: dead });
+  expect(readdirSync(root)).toEqual(['123-deadbeef']);
+  expect(readdirSync(target)).toEqual(['x']);
+});
+
+test('pidAlive: only ESRCH means dead; EPERM, the own pid and pids ≤ 1 count as alive (the last two never signalled)', () => {
+  const kill = vi.spyOn(process, 'kill');
+  try {
+    const fail = (code: string) => () => {
+      throw Object.assign(new Error(code), { code });
+    };
+    kill.mockImplementation(fail('ESRCH'));
+    expect(pidAlive(4242)).toBe(false);
+    kill.mockImplementation(fail('EPERM'));
+    expect(pidAlive(4242)).toBe(true);
+    kill.mockImplementation(() => true);
+    expect(pidAlive(4242)).toBe(true);
+    expect(kill).toHaveBeenCalledWith(4242, 0);
+    kill.mockClear();
+    kill.mockImplementation(fail('ESRCH'));
+    for (const pid of [process.pid, 1, 0, -1, Number.MAX_SAFE_INTEGER + 2]) expect(pidAlive(pid)).toBe(true);
+    expect(kill).not.toHaveBeenCalled();
+  } finally {
+    kill.mockRestore();
+  }
+});
+
+/** A stand-in for `process` that records the signal raised again (no real signal is sent). */
+function fakeProcess() {
+  const ee = new EventEmitter();
+  const raised: [number, string][] = [];
+  const proc = {
+    pid: 777,
+    on: (s: string, l: (s: NodeJS.Signals) => void) => ee.on(s, l),
+    off: (s: string, l: (s: NodeJS.Signals) => void) => ee.off(s, l),
+    kill: (pid: number, s: string) => {
+      raised.push([pid, s]);
+      return true;
+    },
+  };
+  return { ee, raised, proc };
+}
+
+test.each(['SIGINT', 'SIGTERM'] as const)('on %s while the run goes on, its folder is removed at once and the signal raised again with the handlers gone', async (signal) => {
+  const { ee, raised, proc } = fakeProcess();
+  let seen = '';
+  await withRunDir(root, async (dir) => {
+    seen = dir;
+    writeFileSync(join(dir, 't3.bin'), 'x');
+    expect(ee.listenerCount('SIGINT')).toBe(1);
+    expect(ee.listenerCount('SIGTERM')).toBe(1);
+    ee.emit(signal, signal);
+    expect(existsSync(dir)).toBe(false); // (synchronously, before the signal is raised again)
+    expect(raised).toEqual([[777, signal]]);
+    expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
+  }, { proc });
+  expect(existsSync(seen)).toBe(false);
+  expect(readdirSync(root)).toEqual([]);
+});
+
+test('the signal handlers are removed when the run settles, also when it fails', async () => {
+  const { ee, raised, proc } = fakeProcess();
+  await withRunDir(root, async () => 1, { proc });
+  expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
+  await expect(withRunDir(root, async () => {
+    throw new Error('boom');
+  }, { proc })).rejects.toThrow('boom');
+  expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
+  expect(raised).toEqual([]);
+});
+
+test('unlinkRunFile removes a file directly inside a run folder and refuses anything else', async () => {
+  await withRunDir(root, async (dir) => {
+    const f = join(dir, 't0.bin');
+    writeFileSync(f, 'x');
+    const outside = join(root, 'notes.txt');
+    writeFileSync(outside, 'x');
+    mkdirSync(join(dir, 'sub'));
+    writeFileSync(join(dir, 'sub', 'y'), 'x');
+    expect(() => unlinkRunFile(dir, outside)).toThrow(/not a file of/);
+    expect(() => unlinkRunFile(dir, join(dir, '..', 'notes.txt'))).toThrow(/not a file of/);
+    expect(() => unlinkRunFile(dir, join(dir, 'sub', 'y'))).toThrow(/not a file of/);
+    expect(() => unlinkRunFile(root, outside)).toThrow(/not a run folder/);
+    expect(() => unlinkRunFile(dir, join(dir, 'sub'))).toThrow(); // (a folder: unlink refuses it)
+    unlinkRunFile(dir, f);
+    expect(readdirSync(dir)).toEqual(['sub']);
+    expect(readdirSync(root).sort()).toEqual([basename(dir), 'notes.txt'].sort());
+  });
 });
 
 test('a symlinked root (or an empty one) is refused before anything is deleted', async () => {
@@ -102,13 +213,14 @@ test('a symlinked root (or an empty one) is refused before anything is deleted',
   writeFileSync(join(target, 't0.bin'), 'x');
   symlinkSync(target, root);
   const fn = vi.fn(async () => {});
-  await expect(withRunDir(root, fn)).rejects.toThrow(/symbolic link/);
+  await expect(withRunDir(root, fn, { isAlive: dead })).rejects.toThrow(/symbolic link/);
   expect(fn).not.toHaveBeenCalled();
   expect(readdirSync(target).sort()).toEqual(['123-deadbeef', 't0.bin']);
   await expect(withRunDir('', fn)).rejects.toThrow(/empty/);
 });
 
-test('a failing cleanup after a failed run is logged and does not hide the run\'s error', async () => {
+// (skipped as root: root removes the folder despite the read-only parent)
+test.skipIf(process.getuid?.() === 0)('a failing cleanup after a failed run is logged and does not hide the run\'s error', async () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   try {
     await expect(withRunDir(root, async () => {
