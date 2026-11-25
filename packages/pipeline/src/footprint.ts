@@ -5,7 +5,10 @@ export type Footprint = { minX: number; minZ: number; maxX: number; maxZ: number
 /** Anything that carries its footprint (a BuildingRecord). */
 type Footprinted = { footprint: Footprint };
 
-/** Roof triangles projected onto x/z (LoD2 roofs cover the footprint, flat x,z triples) plus their bbox. */
+/**
+ * Roof triangles projected onto x/z (LoD2 roofs cover the footprint, flat x,z triples) plus their bbox. A triangle's
+ * kind is read from its first vertex: buildBuildingMesh gives all three the same kind (map.ts relies on that too).
+ */
 export function footprintOf(b: BuildingMesh): Footprint {
   const fp: Footprint = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity, tris: [] };
   const p = b.positions;

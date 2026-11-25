@@ -1,8 +1,9 @@
 import { chunkKey, type TerrainGrid } from '@nn/shared';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { endianness } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { footprintOf, type Footprint } from './footprint.js';
@@ -24,10 +25,14 @@ export function recordOf(m: BuildingMesh, tile: number): BuildingRecord {
 }
 
 /** Bump when the cache file layout changes. */
-const FORMAT = 1;
+const FORMAT = 2;
 const MAGIC = 0x4342_4e4e; // 'NNBC' little-endian
-/** What the meshes are built by: a change in any of these files (or the locked dependencies) rebuilds the cache. */
-const SOURCES = ['./buildings.ts', './citygml.ts', './triangulate.ts', './placements.ts', './buildingstore.ts', '../../shared/src/geo.ts', '../../shared/src/assets/terrain.ts', '../../../package-lock.json'];
+/**
+ * The code the meshes are built by: every non-test .ts file of the pipeline and of @nn/shared (a hand-kept list
+ * misses helpers such as polyline.ts). Any edit there rebuilds the cache once: the safe direction.
+ */
+const CODE_ROOTS = [fileURLToPath(new URL('.', import.meta.url)), fileURLToPath(new URL('../../shared/src/', import.meta.url))];
+const PACKAGE_LOCK = new URL('../../../package-lock.json', import.meta.url);
 
 const sha = (...parts: (string | Uint8Array)[]) => {
   const h = createHash('sha256');
@@ -36,11 +41,24 @@ const sha = (...parts: (string | Uint8Array)[]) => {
 };
 const f64bytes = (v: number[]) => new Uint8Array(Float64Array.from(v).buffer);
 
+/** Hash over the non-test .ts files under `roots` (not *.test.ts, *.test-util.ts): root index, relative path and content, sorted by path. */
+export async function codeHash(roots: string[]): Promise<string> {
+  const parts: (string | Uint8Array)[] = [];
+  for (const [i, root] of roots.entries()) {
+    const files = (await readdir(root, { recursive: true, withFileTypes: true }))
+      .filter((e) => e.isFile() && e.name.endsWith('.ts') && !/\.test(-util)?\.ts$/.test(e.name))
+      .map((e) => relative(root, join(e.parentPath, e.name)).split(sep).join('/'))
+      .filter((path) => !path.split('/').includes('node_modules'))
+      .sort();
+    for (const path of files) parts.push(`${i}:${path}`, await readFile(join(root, path)));
+  }
+  return sha(...parts);
+}
+
 /** The key of everything a tile's meshes depend on besides the tile itself (and the tiles before it). */
 async function baseKey(terrain: TerrainGrid, datum: number, boundary: Pt[]): Promise<string> {
-  const sources = await Promise.all(SOURCES.map((s) => readFile(new URL(s, import.meta.url))));
   const t = terrain.heights;
-  return sha(`format ${FORMAT} ${endianness()}`, ...sources,
+  return sha(`format ${FORMAT} ${endianness()} node ${process.version}`, await codeHash(CODE_ROOTS), await readFile(PACKAGE_LOCK),
     f64bytes([terrain.x0, terrain.z0, terrain.cols, terrain.rows, terrain.datum, datum]), new Uint8Array(t.buffer, t.byteOffset, t.byteLength),
     f64bytes(boundary.flatMap((p) => [p.x, p.z])));
 }
@@ -57,44 +75,56 @@ type TileFile = {
 
 const pad = (n: number, to: number) => Math.ceil(n / to) * to;
 
-/** One tile's cache file: a JSON header (key, counts, ids) and the typed arrays bit for bit. */
+/**
+ * One tile's cache file: a JSON header (key, counts, ids, the hash of the body), padded to 8 bytes, then the body:
+ * centroids and bases (f64), seeds and flags (u32), then per mesh its typed arrays bit for bit (8-byte aligned).
+ */
 export function encodeTileFile(f: TileFile): Uint8Array {
-  const header = Buffer.from(JSON.stringify({ key: f.key, parsed: f.parsed, seen: f.seen, ids: f.meshes.map((m) => m.id), vertices: f.meshes.map((m) => m.kind.length) }), 'utf8');
   const n = f.meshes.length;
-  const scalars = pad(12 + header.byteLength, 8);
-  let size = scalars + n * 3 * 8 + pad(n * 2 * 4, 8);
+  let size = n * 3 * 8 + pad(n * 2 * 4, 8);
   for (const m of f.meshes) size += pad(m.kind.length * 8 * 4 + m.kind.length, 8);
-  const out = new Uint8Array(size), view = new DataView(out.buffer);
-  view.setUint32(0, MAGIC, true);
-  view.setUint32(4, FORMAT, true);
-  view.setUint32(8, header.byteLength, true);
-  out.set(header, 12);
-  const f64 = new Float64Array(out.buffer, scalars, n * 3), u32 = new Uint32Array(out.buffer, scalars + n * 24, n * 2);
+  const body = new Uint8Array(size);
+  const f64 = new Float64Array(body.buffer, 0, n * 3), u32 = new Uint32Array(body.buffer, n * 24, n * 2);
   f.meshes.forEach((m, i) => {
     f64.set([m.centroid.x, m.centroid.z, m.base], i * 3);
     u32.set([m.buildingSeed, m.flags], i * 2);
   });
-  let at = scalars + n * 24 + pad(n * 8, 8);
+  let at = n * 24 + pad(n * 8, 8);
   for (const m of f.meshes) {
     for (const a of [m.positions, m.normals, m.facadeUv, m.kind]) {
-      out.set(new Uint8Array(a.buffer, a.byteOffset, a.byteLength), at);
+      body.set(new Uint8Array(a.buffer, a.byteOffset, a.byteLength), at);
       at += a.byteLength;
     }
     at = pad(at, 8);
   }
+  const header = Buffer.from(JSON.stringify({ key: f.key, body: sha(body), parsed: f.parsed, seen: f.seen, ids: f.meshes.map((m) => m.id), vertices: f.meshes.map((m) => m.kind.length) }), 'utf8');
+  const start = pad(12 + header.byteLength, 8);
+  const out = new Uint8Array(start + body.byteLength), view = new DataView(out.buffer);
+  view.setUint32(0, MAGIC, true);
+  view.setUint32(4, FORMAT, true);
+  view.setUint32(8, header.byteLength, true);
+  out.set(header, 12);
+  out.set(body, start);
   return out;
 }
 
-/** Reads a tile's cache file; the meshes' arrays are views into `data` (copied first if it is not 8-byte aligned). */
+/**
+ * Reads a tile's cache file, checking format, length and the body hash (throws if any is off); the meshes'
+ * arrays are views into `data` (copied first if it is not 8-byte aligned).
+ */
 export function decodeTileFile(data: Uint8Array): TileFile {
   if (data.byteOffset % 8) data = data.slice();
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   if (data.byteLength < 12 || view.getUint32(0, true) !== MAGIC || view.getUint32(4, true) !== FORMAT) throw new Error('not a building cache file of this format');
   const len = view.getUint32(8, true);
-  const h = JSON.parse(Buffer.from(data.buffer, data.byteOffset + 12, len).toString('utf8')) as { key: string; parsed: number; seen: string[]; ids: string[]; vertices: number[] };
-  const n = h.ids.length, base = data.byteOffset, scalars = pad(12 + len, 8);
-  const f64 = new Float64Array(data.buffer, base + scalars, n * 3), u32 = new Uint32Array(data.buffer, base + scalars + n * 24, n * 2);
-  let at = scalars + n * 24 + pad(n * 8, 8);
+  const h = JSON.parse(Buffer.from(data.buffer, data.byteOffset + 12, len).toString('utf8')) as { key: string; body: string; parsed: number; seen: string[]; ids: string[]; vertices: number[] };
+  const n = h.ids.length, start = pad(12 + len, 8), base = data.byteOffset + start;
+  let at = n * 24 + pad(n * 8, 8);
+  for (const v of h.vertices) at = pad(at + v * 33, 8);
+  if (start + at !== data.byteLength) throw new Error('building cache file has the wrong length');
+  if (sha(data.subarray(start)) !== h.body) throw new Error('building cache file body does not match its hash');
+  const f64 = new Float64Array(data.buffer, base, n * 3), u32 = new Uint32Array(data.buffer, base + n * 24, n * 2);
+  at = n * 24 + pad(n * 8, 8);
   const meshes = h.ids.map((id, i): BuildingMesh => {
     const v = h.vertices[i]!;
     const positions = new Float32Array(data.buffer, base + at, v * 3);
@@ -104,7 +134,6 @@ export function decodeTileFile(data: Uint8Array): TileFile {
     at = pad(at + v * 33, 8);
     return { id, centroid: { x: f64[i * 3]!, z: f64[i * 3 + 1]! }, positions, normals, facadeUv, kind, base: f64[i * 3 + 2]!, buildingSeed: u32[i * 2]!, flags: u32[i * 2 + 1]! };
   });
-  if (at !== data.byteLength) throw new Error('building cache file has the wrong length');
   return { key: h.key, parsed: h.parsed, seen: h.seen, meshes };
 }
 
@@ -121,11 +150,14 @@ class TileCache {
 
   /** The tile's meshes from its cache file, checked against the key the store was built with. */
   async read(tile: number): Promise<BuildingMesh[]> {
-    let f: TileFile | undefined;
+    const changed = `building cache ${this.files[tile]} changed since the store was built (another run?)`;
+    let f: TileFile;
     try {
       f = decodeTileFile(await readFile(this.files[tile]!));
-    } catch { /* missing or broken: reported below */ }
-    if (!f || f.key !== this.keys[tile]) throw new Error(`building cache ${this.files[tile]} changed since the store was built (another run?)`);
+    } catch (cause) {
+      throw new Error(changed, { cause });
+    }
+    if (f.key !== this.keys[tile]) throw new Error(changed, { cause: new Error(`key ${f.key}, expected ${this.keys[tile]}`) });
     return f.meshes;
   }
 
@@ -198,8 +230,10 @@ export class BuildingStore {
           if (m) meshes.push(m);
         }
         f = { key, parsed: meshes.length, seen: fresh, meshes: classifyBuildings(meshes, o.boundary) };
-        await writeFile(`${file}.part`, encodeTileFile(f));
-        await rename(`${file}.part`, file);
+        // (a name of its own: two runs may write the same tile at once; the rename is atomic)
+        const part = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.part`;
+        await writeFile(part, encodeTileFile(f));
+        await rename(part, file);
       }
       for (const id of f.seen) seen.add(id);
       f.meshes.forEach((m, slot) => {

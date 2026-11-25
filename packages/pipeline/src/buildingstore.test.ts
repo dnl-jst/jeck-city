@@ -1,9 +1,9 @@
 import type { TerrainGrid } from '@nn/shared';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test } from 'vitest';
-import { BuildingStore, decodeTileFile } from './buildingstore.js';
+import { BuildingStore, codeHash, decodeTileFile } from './buildingstore.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { footprintOf } from './footprint.js';
@@ -138,4 +138,62 @@ test('inChunk lists the records whose centroid lies in the chunk, in global orde
   expect(rest.records.map((r) => r.id)).toEqual(['FIXTURE_GABLE', 'FIXTURE_GABLE2']);
   expect(rest.inChunk('-1_3')).toEqual([0, 1]);
   expect((await rest.mesh(1)).id).toBe('FIXTURE_GABLE2');
+});
+
+test('a junk or truncated cache file is rebuilt, not used', async () => {
+  await build();
+  writeFileSync(join(cache, 'b.gml.bin'), 'junk');
+  const c = readFileSync(join(cache, 'c.gml.bin'));
+  writeFileSync(join(cache, 'c.gml.bin'), c.subarray(0, c.byteLength - 100));
+  const logs: string[] = [];
+  const store = await build({ log: (s) => logs.push(s) });
+  expect(logs.map((l) => l.includes('(cached)'))).toEqual([true, false, false]);
+  sameMesh(await store.mesh(1), direct(1, 'FIXTURE_U'));
+  sameMesh(await store.mesh(2), direct(2, 'FIXTURE_GABLE2'));
+});
+
+test('a cache file whose body no longer matches its header hash is refused by mesh() and rebuilt by build()', async () => {
+  const store = await build();
+  const file = join(cache, 'a.gml.bin');
+  const data = readFileSync(file);
+  data[data.byteLength - 20]! ^= 0xff; // a byte inside the meshes, the length stays
+  writeFileSync(file, data);
+  await expect(store.mesh(0)).rejects.toThrow(/changed/);
+  await expect(store.mesh(0)).rejects.toHaveProperty('cause');
+  const logs: string[] = [];
+  const again = await build({ log: (s) => logs.push(s) });
+  expect(logs[0]).not.toContain('(cached)');
+  sameMesh(await again.mesh(0), direct(0, 'FIXTURE_GABLE'));
+});
+
+test('codeHash covers every non-test .ts file of the roots, by path and content, in any order on disk', async () => {
+  const tree = (order: string[]) => {
+    const root = mkdtempSync(join(tmpdir(), 'nn-src-'));
+    mkdirSync(join(root, 'sub'));
+    const files: Record<string, string> = { 'a.ts': 'a', 'sub/b.ts': 'b', 'a.test.ts': 't', 'sub/c.test-util.ts': 'u', 'notes.md': 'n' };
+    for (const f of order) writeFileSync(join(root, f), files[f]!);
+    return root;
+  };
+  const names = ['a.ts', 'sub/b.ts', 'a.test.ts', 'sub/c.test-util.ts', 'notes.md'];
+  const one = tree(names), two = tree([...names].reverse()), other = mkdtempSync(join(tmpdir(), 'nn-src-'));
+  writeFileSync(join(other, 'x.ts'), 'x');
+  try {
+    const h = await codeHash([one, other]);
+    expect(await codeHash([two, other])).toBe(h); // order of creation on disk does not matter
+    writeFileSync(join(one, 'a.test.ts'), 'changed');
+    writeFileSync(join(one, 'sub/c.test-util.ts'), 'changed');
+    writeFileSync(join(one, 'notes.md'), 'changed');
+    expect(await codeHash([one, other])).toBe(h); // tests, test utils and non-.ts files do not count
+    writeFileSync(join(one, 'sub/b.ts'), 'b2');
+    expect(await codeHash([one, other])).not.toBe(h); // content
+    writeFileSync(join(one, 'sub/b.ts'), 'b');
+    expect(await codeHash([one, other])).toBe(h);
+    renameSync(join(one, 'sub/b.ts'), join(one, 'sub/b2.ts'));
+    expect(await codeHash([one, other])).not.toBe(h); // a rename counts
+    renameSync(join(one, 'sub/b2.ts'), join(one, 'sub/b.ts'));
+    writeFileSync(join(other, 'x.ts'), 'y');
+    expect(await codeHash([one, other])).not.toBe(h); // every root counts
+  } finally {
+    for (const d of [one, two, other]) rmSync(d, { recursive: true, force: true });
+  }
 });
