@@ -299,6 +299,11 @@ Gelände in Durchgängen pro Kachel mit Rand, nachladende Quelle für die global
 Fenstern, absolute Rundung. Erst damit hängt der Speicherbedarf der ganzen Pipeline nicht mehr von der Fläche ab. Bis
 dahin schneiden die Stufen 2 und 3 das Gelände der `sim`-Kacheln aus dem Raster im Speicher.
 
+*Beim Planen geändert (25.11.2026):* Stufe 4 wird auf Daniels Wunsch direkt nach Stufe 1 gebaut. Die Rundung bleibt
+dabei wie heute relativ zum tiefsten Punkt der jeweiligen Geländefassung (als ausdrückliche globale Vorberechnung),
+damit der Bytevergleich mit der Referenzwelt erhalten bleibt; die absolute Rundung kommt mit dem Kachelformat in
+Stufe 2. Plan: `docs/superpowers/plans/2026-11-25-tiled-world-stage-4-terrain.md`.
+
 ## Prüfungen und Budgets
 
 - **Parität (Stufe 1):** Bytevergleich alt gegen neu, als Befehl im Repository, solange die alte Pipeline existiert.
