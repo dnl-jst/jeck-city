@@ -10,15 +10,13 @@ import type { Pt } from './osm.js';
 import { TerrainFile, writeTerrainFile } from './terrain/file.js';
 import { PAGE, type SparseRaster } from './terrain/sparse.js';
 import { rng } from './terrain/testgrid.js';
-import {
-  carveRiverBed, carveRiverBedSparse, findWater, findWaterSparse, LEVEL_TOL, WATER_DEPTH, waterOutlines, waterOutlinesSparse,
-  waterShare, waterShareSparse, waterSurface, waterSurfaceSparse, type SparseWater, type Water,
-} from './water.js';
+import { carveRiverBed, findWater, LEVEL_TOL, WATER_DEPTH, waterOutlines, waterShare, waterSurface, type Water } from './water.js';
+import * as denseWater from './water.dense.test-util.js';
 
 test('findWater floods the river from its centre line and stops at the banks', () => {
-  const t = riverTerrain();
-  const w = findWater(t, [centreLine]);
-  const at = (x: number, z: number) => w.mask[z * t.cols + x];
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  const at = (x: number, z: number) => w.mask.get(x, z);
   expect(at(200, 150)).toBe(1);
   expect(at(150, 10)).toBe(1);
   expect(at(250, 290)).toBe(1);
@@ -26,26 +24,25 @@ test('findWater floods the river from its centre line and stops at the banks', (
   expect(at(20, 150)).toBe(0); // the low meadow is not connected
   expect(Math.abs(w.meanLevel)).toBeLessThan(LEVEL_TOL);
   // the surface reaches a few metres under the banks
-  expect(Number.isNaN(w.level[150 * t.cols + 148]!)).toBe(false);
-  expect(Number.isNaN(w.level[150 * t.cols + 140]!)).toBe(true);
+  expect(Number.isNaN(w.level.get(148, 150))).toBe(false);
+  expect(Number.isNaN(w.level.get(140, 150))).toBe(true);
 });
 
 test('carveRiverBed lowers only the water, deepest in the middle', () => {
-  const t = riverTerrain();
-  const before = Float32Array.from(t.heights);
-  const w = findWater(t, [centreLine]);
-  expect(carveRiverBed(t, w)).toBeGreaterThan(0);
-  const i = (x: number, z: number) => z * t.cols + x;
-  expect(t.heights[i(200, 150)]).toBeCloseTo(w.level[i(200, 150)]! - WATER_DEPTH, 5);
-  expect(t.heights[i(151, 150)]!).toBeLessThan(w.level[i(151, 150)]!);
-  expect(t.heights[i(151, 150)]!).toBeGreaterThan(t.heights[i(200, 150)]!);
-  expect(t.heights[i(140, 150)]).toBe(before[i(140, 150)]);
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  const { edits, edited, lowered } = carveRiverBed(file, w);
+  expect(lowered).toBeGreaterThan(0);
+  expect(edits.get(200, 150)).toBeCloseTo(w.level.get(200, 150) - WATER_DEPTH, 5);
+  expect(edits.get(151, 150)).toBeLessThan(w.level.get(151, 150));
+  expect(edits.get(151, 150)).toBeGreaterThan(edits.get(200, 150));
+  expect(edited.get(140, 150)).toBe(0);
 });
 
 test('waterSurface covers the water with quads cut at chunk edges', () => {
-  const t = riverTerrain();
-  const w = findWater(t, [centreLine]);
-  const m = waterSurface(t, w);
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  const m = waterSurface(file, w);
   expect(m.indices.length % 6).toBe(0);
   let area = 0;
   for (let q = 0; q < m.positions.length / 12; q++) {
@@ -59,34 +56,32 @@ test('waterSurface covers the water with quads cut at chunk edges', () => {
     const [a, b, c] = [p(0), p(1), p(2)] as [number[], number[], number[]];
     expect((b[1]! - a[1]!) * (c[0]! - a[0]!) - (b[0]! - a[0]!) * (c[1]! - a[1]!)).toBeGreaterThan(0);
   }
-  const water = w.mask.reduce((n, v) => n + v, 0);
-  expect(area).toBeGreaterThan(water);
-  expect(area).toBeLessThan(water * 1.1);
+  expect(area).toBeGreaterThan(w.area);
+  expect(area).toBeLessThan(w.area * 1.1);
 });
 
 test('waterOutlines traces the water as rings whose signed areas add up to the water area', () => {
-  const t = riverTerrain();
-  const w = findWater(t, [centreLine]);
-  const rings = waterOutlines(t, w);
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  const rings = waterOutlines(file, w);
   expect(rings.length).toBeGreaterThan(0);
   let area = 0;
   for (const r of rings) for (let i = 0; i < r.length; i++) {
     const a = r[i]!, b = r[(i + 1) % r.length]!;
     area += (a.x * b.z - b.x * a.z) / 2;
   }
-  const water = w.mask.reduce((n, v) => n + v, 0);
-  expect(Math.abs(Math.abs(area) - water) / water).toBeLessThan(0.05);
+  expect(Math.abs(Math.abs(area) - w.area) / w.area).toBeLessThan(0.05);
   for (const r of rings) for (const p of r) expect(p.x).toBeGreaterThan(140);
 });
 
 test('waterShare: a block across the river is mostly over the water, a house on the bank not at all', () => {
-  const t = riverTerrain();
-  const w = findWater(t, [centreLine]);
-  expect(waterShare(t, w, boxRecord('bridge', 140, 140, 260, 160, 10))).toBeGreaterThan(0.8);
-  expect(waterShare(t, w, boxRecord('house', 60, 60, 80, 80, 10))).toBe(0);
+  const { file } = fileOf(riverTerrain());
+  const w = findWater(file, [centreLine]);
+  expect(waterShare(file, w, boxRecord('bridge', 140, 140, 260, 160, 10))).toBeGreaterThan(0.8);
+  expect(waterShare(file, w, boxRecord('house', 60, 60, 80, 80, 10))).toBe(0);
 });
 
-// ---- the sparse versions against the dense ones (same decoded terrain) ----
+// ---- against the dense versions as they were (water.dense.test-util.ts; same decoded terrain) ----
 
 let dir: string;
 const opened: TerrainFile[] = [];
@@ -130,8 +125,8 @@ function bitDiff(a: Float32Array | Uint8Array, b: Float32Array | Uint8Array): nu
 /** Finds water both ways and checks mask, level (bit for bit) and meanLevel; returns both. */
 function sameWater(t: TerrainGrid, rivers: Pt[][]) {
   const { file, dense: grid } = fileOf(t);
-  const d = findWater(grid, rivers);
-  const s = findWaterSparse(file, rivers);
+  const d = denseWater.findWater(grid, rivers);
+  const s = findWater(file, rivers);
   expect(bitDiff(dense(s.mask, u8, 0), d.mask)).toBe(0);
   expect(bitDiff(dense(s.level, f32, NaN), d.level)).toBe(0);
   expect(Object.is(s.meanLevel, d.meanLevel)).toBe(true);
@@ -140,10 +135,10 @@ function sameWater(t: TerrainGrid, rivers: Pt[][]) {
 }
 
 /** carveRiverBed both ways: the sparse edits applied to the decoded heights give the dense result bit for bit. */
-function sameBed(file: TerrainFile, grid: TerrainGrid, d: Water, s: SparseWater) {
+function sameBed(file: TerrainFile, grid: TerrainGrid, d: denseWater.Water, s: Water) {
   const after = Float32Array.from(grid.heights);
-  const n = carveRiverBed(grid, d);
-  const e = carveRiverBedSparse(file, s);
+  const n = denseWater.carveRiverBed(grid, d);
+  const e = carveRiverBed(file, s);
   expect(e.lowered).toBe(n);
   const m = dense(e.edited, u8, 0), v = dense(e.edits, f32, 0), mask = dense(s.mask, u8, 0);
   let edited = 0, outside = 0;
@@ -159,16 +154,16 @@ function sameBed(file: TerrainFile, grid: TerrainGrid, d: Water, s: SparseWater)
   return { n, e };
 }
 
-function sameRest(dense: TerrainGrid, d: Water, s: SparseWater, buildings: BuildingRecord[]) {
-  const ms = waterSurfaceSparse(dense, s), md = waterSurface(dense, d);
+function sameRest(dense: TerrainGrid, d: denseWater.Water, s: Water, buildings: BuildingRecord[]) {
+  const ms = waterSurface(dense, s), md = denseWater.waterSurface(dense, d);
   expect(ms.positions).toEqual(md.positions);
   expect(ms.indices).toEqual(md.indices);
   expect(ms.uv).toEqual(md.uv);
-  expect(waterOutlinesSparse(dense, s)).toEqual(waterOutlines(dense, d));
-  expect(waterOutlinesSparse(dense, s, 3, 1)).toEqual(waterOutlines(dense, d, 3, 1));
+  expect(waterOutlines(dense, s)).toEqual(denseWater.waterOutlines(dense, d));
+  expect(waterOutlines(dense, s, 3, 1)).toEqual(denseWater.waterOutlines(dense, d, 3, 1));
   for (const b of buildings) {
-    expect(waterShareSparse(dense, s, b)).toBe(waterShare(dense, d, b));
-    expect(waterShareSparse(dense, s, b, 1)).toBe(waterShare(dense, d, b, 1));
+    expect(waterShare(dense, s, b)).toBe(denseWater.waterShare(dense, d, b));
+    expect(waterShare(dense, s, b, 1)).toBe(denseWater.waterShare(dense, d, b, 1));
   }
 }
 
@@ -260,8 +255,8 @@ describe('the water on sparse rasters equals the dense version', () => {
       expect(e.lowered).toBe(0);
       expect([...e.edits.pages()]).toEqual([]);
       expect([...e.edited.pages()]).toEqual([]);
-      expect(waterSurfaceSparse(dense, s).positions.length).toBe(0);
-      expect(waterOutlinesSparse(dense, s)).toEqual([]);
+      expect(waterSurface(dense, s).positions.length).toBe(0);
+      expect(waterOutlines(dense, s)).toEqual([]);
     }
   });
 

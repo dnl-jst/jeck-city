@@ -1,17 +1,18 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, encodeTerrain, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
+import { BIKE_TYPES, CAR_TYPES, CHUNK_SIZE, chunkKey, decodeTerrain, encodeCollision, heightAt, openingTest, ORIGIN_UTM, type TerrainGrid, WORLD_INDEX_FILE, type WorldManifest, worldHash } from '@nn/shared';
 import { BuildingStore, type BuildingRecord } from './buildingstore.js';
 import { parsePipelineArgs, UsageError } from './args.js';
 import { CODE_ROOTS, codeHash } from './codehash.js';
 import { buildCollision, chunkGeometries, encodeChunkGlb, STREET_MESHES, worldRect, type Overrides, type Rect, type StreetMeshes, type StreetName } from './chunks.js';
-import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, TERRAIN_SIGMA } from './dgm.js';
+import { readDgmTile, TERRAIN_SIGMA } from './dgm.js';
+import { buildT0 } from './terrain/dgmstream.js';
+import { terrainVersions, type TerrainVersions } from './terrain/versions.js';
 import { cropMesh, prepareFlat, type FlatSource } from './chunkdrape.js';
 import { followDeviation, followTerrain } from './follow.js';
 import { insideAnyFootprint } from './footprint.js';
 import { prepareModel, prepareProp, type PreparedModel } from './models.js';
-import { applyTerrainCuts, applyTerrainFills } from './terraincut.js';
 import { shipCharacterModels } from './characters.js';
 import { shipCarModels, withHeli } from './ship-cars.js';
 import { beginWorldWrite, contentHash, writeWorldIndex } from './worldindex.js';
@@ -35,8 +36,8 @@ import { allSidewalkWidths } from './sidewalkwidth.js';
 import { buildStreetGeometry } from './streets.js';
 import { streetTrees } from './streettrees.js';
 import { trackBed } from './trackbed.js';
-import { abutmentFills, bridgeBodies, concatMeshes, liftOntoDecks, onBridge, planBridges, triangleSoup } from './bridges.js';
-import { carveRiverBed, findWater, waterOutlines, waterShare, waterSurface, type Water } from './water.js';
+import { bridgeBodies, concatMeshes, liftOntoDecks, onBridge, triangleSoup } from './bridges.js';
+import { waterOutlines, waterShare, waterSurface, type Water } from './water.js';
 import { railMesh } from './streets.js';
 import { meshCovers, punchMesh } from './punch.js';
 import type { TransitBuild } from './transit.js';
@@ -57,6 +58,8 @@ const TRANSIT_ENV = 'data/cache/transit-env.bin';
 const TRANSIT_COLLISION = 'transit-collision.bin';
 /** The full building meshes, one file per LoD2 tile (see BuildingStore). */
 const BUILDING_CACHE = 'data/cache/buildings';
+/** The work folder of the terrain versions T0–T3 (see terrain/versions.ts): emptied at the start of every run. */
+const TERRAIN_DIR = 'data/cache/terrain';
 const PARKING_SEED = 2613766;
 const BIKE_SEED = 5032024;
 const SCOOTER_SEED = 2025611;
@@ -105,23 +108,25 @@ async function main() {
   if (f.boundary.length < 3) throw new Error('OSM boundary missing');
   console.log(`osm: ${f.roads.length} roads, ${f.shops.length} shops, ${f.trees.length} trees, ${f.lamps.length} lamps`);
 
-  // terrain first: buildings are placed relative to its datum. From here on only the decoded grid is used, so the
-  // pipeline sees exactly the (quantized) heights the client reads from terrain.bin.
+  // terrain first: buildings are placed relative to its datum. Every terrain version is a file in terrain.bin's layout
+  // (quantized), so the pipeline sees exactly the heights the client reads from terrain.bin. T0: the blurred DGM,
+  // computed band by band from the tiles (never a whole mosaic or grid in memory).
   const area = worldRect(f.boundary);
-  // (the tiles, the mosaic and its blurred copy are temporaries: nothing holds them once the grid is sampled)
-  let terrainBin = encodeTerrain(terrainFromMosaic(gaussBlur(mosaic(await Promise.all(DGM_TILES.map(async (t) => {
-    const buf = await readFile(join(RAW_DIR, 'dgm1', t));
-    return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-  }))), TERRAIN_SIGMA), area));
-  const terrain = decodeTerrain(terrainBin);
-  const { datum } = terrain;
-  let hMin = Infinity, hMax = -Infinity;
-  for (const h of terrain.heights) { hMin = Math.min(hMin, h); hMax = Math.max(hMax, h); }
-  console.log(`terrain: ${terrain.cols}×${terrain.rows}, datum ${datum} m, ${(hMin + datum).toFixed(1)}–${(hMax + datum).toFixed(1)} m NHN, σ ${TERRAIN_SIGMA} m`);
+  await rm(TERRAIN_DIR, { recursive: true, force: true }); // (never a version left by an earlier run)
+  await mkdir(TERRAIN_DIR, { recursive: true });
+  const t0 = await buildT0({
+    tiles: DGM_TILES, area, sigma: TERRAIN_SIGMA, path: join(TERRAIN_DIR, 't0.bin'),
+    read: async (t) => {
+      const buf = await readFile(join(RAW_DIR, 'dgm1', t));
+      return readDgmTile(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    },
+  });
+  const { datum } = t0;
+  console.log(`terrain: ${t0.cols}×${t0.rows}, datum ${datum} m, ${(t0.min() + datum).toFixed(1)}–${(t0.max() + datum).toFixed(1)} m NHN, σ ${TERRAIN_SIGMA} m`);
 
   // one tile at a time (a parsed tile holds ~700 MB): only light records stay in memory, the full meshes go to the
   // cache and come back per chunk and for the collision. They stand on this first terrain, before cuts and fills.
-  let store = await BuildingStore.build({ tiles: LOD2_TILES, rawDir: join(RAW_DIR, 'lod2'), cacheDir: BUILDING_CACHE, datum, terrain, boundary: f.boundary, log: console.log });
+  let store = await BuildingStore.build({ tiles: LOD2_TILES, rawDir: join(RAW_DIR, 'lod2'), cacheDir: BUILDING_CACHE, datum, terrain: t0, boundary: f.boundary, log: console.log });
   let buildings = store.records;
   const backdrop = buildings.filter((b) => b.flags & 2).length;
   console.log(`buildings: ${buildings.length} (${backdrop} backdrop)`);
@@ -141,34 +146,24 @@ async function main() {
     const lift = Math.min(...parts.map((p) => p.base));
     prepared.set(path, { m: await prepareModel(await readFile(path), lift), parts, lift });
   }
-  const cuts = [...prepared.values()].filter((p) => p.m.cut.length);
-  if (cuts.length) {
-    let n = 0;
-    for (const { m } of cuts) n += applyTerrainCuts(terrain, m.cut);
-    // the client reads the quantized heights from terrain.bin: re-encode and use exactly those from here on
-    terrainBin = encodeTerrain(terrain);
-    terrain.heights.set(decodeTerrain(terrainBin).heights);
-    console.log(`terrain cuts: ${n} grid points lowered under ${cuts.length} model(s)`);
-  }
-
-  // the Rhine: water found on the DGM water surface, the bed carved below it; then the bridges over it
-  let water: Water | undefined = findWater(terrain, f.rivers);
-  const carved = carveRiverBed(terrain, water);
-  terrainBin = encodeTerrain(terrain);
-  terrain.heights.set(decodeTerrain(terrainBin).heights);
-  const bridges = planBridges(f, terrain, water);
-  // the ground behind the abutments ramps up to the deck (DGM1 dips at quay edges and underpasses)
-  const filled = applyTerrainFills(terrain, abutmentFills(bridges), water.mask);
-  terrainBin = encodeTerrain(terrain);
-  terrain.heights.set(decodeTerrain(terrainBin).heights);
-  console.log(`terrain fills: ${filled} grid points raised behind ${bridges.ends.length} abutments`);
+  // T1: the terrain lowered under the models' cut surfaces; the Rhine on T1 and its bed (T2), the bridges over it
+  // planned on T2 and the ramps behind their abutments (T3: the world's terrain)
+  // (not kept whole: the water is let go below)
+  let versions: TerrainVersions | undefined = terrainVersions({ t0, cuts: [...prepared.values()].filter((p) => p.m.cut.length).map((p) => p.m.cut), features: f, dir: TERRAIN_DIR, log: console.log });
+  const { t1, t2, t3, bridges, carved } = versions;
+  let water: Water | undefined = versions.water;
+  versions = undefined;
   // LoD2 models the Rhine bridges as solid blocks from the water up to the deck: the bridges are built from OSM instead
-  const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(terrain, water!, b) > 0.5));
+  const wetBuildings = new Set(buildings.filter((b) => !(b.id in overrides) && waterShare(t3, water!, b) > 0.5));
   store = store.without((b) => wetBuildings.has(b));
   buildings = store.records;
   active = active.filter((b) => !wetBuildings.has(b));
   console.log(`buildings over the water dropped: ${wetBuildings.size}`);
-  console.log(`water: ${water.mask.reduce((n, v) => n + v, 0)} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
+  console.log(`water: ${water.area} m², level ${(water.meanLevel + datum).toFixed(2)} m NHN, bed carved at ${carved} grid points; bridges: ${bridges.structures.length} structures, ${bridges.roads.size} ways, ${bridges.tracks.size} tram tracks, ${bridges.rails.length} railways`);
+  // (transition: the later steps still read T3 as one decoded grid; terrain.bin is the T3 file's bytes)
+  const terrainBin = ownBuffer(await readFile(t3.path));
+  for (const t of new Set([t0, t1, t2, t3])) t.close();
+  const terrain = decodeTerrain(terrainBin);
 
   const placedShops = assignShops(f.shops, f.boundary, active);
   if (args.listShops) return listNeusserShops(f, placedShops, active);
@@ -506,6 +501,11 @@ function borderMin(t: TerrainGrid): number {
   for (let c = 0; c < t.cols; c++) min = Math.min(min, h(c, 0), h(c, t.rows - 1));
   for (let r = 0; r < t.rows; r++) min = Math.min(min, h(0, r), h(t.cols - 1, r));
   return min;
+}
+
+/** The bytes as an ArrayBuffer of their own (a Buffer may be a view into a larger one). */
+function ownBuffer(b: Uint8Array): ArrayBuffer {
+  return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength && b.buffer instanceof ArrayBuffer ? b.buffer : (b.slice().buffer as ArrayBuffer);
 }
 
 function fail(msg: string): never {
