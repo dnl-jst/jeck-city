@@ -63,7 +63,7 @@ const TRANSIT_COLLISION = 'transit-collision.bin';
 const BUILDING_CACHE = 'data/cache/buildings';
 /**
  * The work folders of the terrain versions T0–T3 (see terrain/versions.ts): every run writes into a folder of its own
- * below this one, removed at its end and on SIGINT/SIGTERM (see withRunDir).
+ * below this one, removed at its end; after an abort the next run removes it (see withRunDir).
  */
 const TERRAIN_DIR = 'data/cache/terrain';
 const PARKING_SEED = 2613766;

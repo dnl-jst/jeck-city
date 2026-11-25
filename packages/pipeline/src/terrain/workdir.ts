@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { rmSync, unlinkSync } from 'node:fs';
+import { unlinkSync } from 'node:fs';
 import { lstat, mkdir, readdir, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -29,29 +29,17 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/** The part of `process` withRunDir uses for its signal handlers (injectable for tests). */
-export type SignalProcess = {
-  readonly pid: number;
-  on(signal: NodeJS.Signals, listener: (signal: NodeJS.Signals) => void): unknown;
-  off(signal: NodeJS.Signals, listener: (signal: NodeJS.Signals) => void): unknown;
-  kill(pid: number, signal: NodeJS.Signals): unknown;
-};
-
-/** The signals on which a run removes its folder before it ends. */
-const SIGNALS = ['SIGINT', 'SIGTERM'] as const;
-
 /**
  * Runs fn in a work folder of its own, `<root>/<pid>-<random>/` (two runs at once, e.g. `--out a` and `--out b`,
- * never share one), removed when fn ends, also when it throws, and on SIGINT/SIGTERM while fn runs (the folder is
- * removed synchronously, then the signal is raised again with the handlers gone, so the process ends as it would
- * have). First removes what earlier runs left behind under `root`, by name only: folders named `<pid>-<8 hex>` whose
- * pid is no longer alive (`isAlive`), and those untouched for STALE_RUN_MS whatever their pid. Anything else stays.
+ * never share one), removed when fn ends, also when it throws. A run ended by a signal or killed leaves its folder
+ * (no signal handler: Ctrl-C ends the process at once); the next run removes it. First removes what earlier runs left
+ * behind under `root`, by name only: folders named `<pid>-<8 hex>` whose pid is no longer alive (`isAlive`), and those
+ * untouched for STALE_RUN_MS whatever their pid. Anything else stays.
  * A root that is a symbolic link (or empty) is refused before anything is deleted.
  */
 export async function withRunDir<T>(root: string, fn: (dir: string) => Promise<T>,
-  o: { isAlive?: (pid: number) => boolean; proc?: SignalProcess } = {}): Promise<T> {
+  o: { isAlive?: (pid: number) => boolean } = {}): Promise<T> {
   const isAlive = o.isAlive ?? pidAlive;
-  const proc: SignalProcess = o.proc ?? process;
   if (!root) throw new Error('terrain work folder: the root is empty');
   try {
     if ((await lstat(root)).isSymbolicLink()) throw new Error(`terrain work folder: ${root} is a symbolic link; refusing to clean up or write there`);
@@ -73,23 +61,9 @@ export async function withRunDir<T>(root: string, fn: (dir: string) => Promise<T
   }
   const dir = join(root, `${process.pid}-${randomBytes(4).toString('hex')}`);
   await mkdir(dir);
-  const onSignal = (signal: NodeJS.Signals) => {
-    detach();
-    try {
-      rmSync(dir, { recursive: true, force: true });
-    } catch (err) {
-      console.error(`terrain work folder: could not remove ${dir} on ${signal}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    proc.kill(proc.pid, signal); // (no handler of ours left: the process ends the way the signal ends it)
-  };
-  const detach = () => {
-    for (const s of SIGNALS) proc.off(s, onSignal);
-  };
-  for (const s of SIGNALS) proc.on(s, onSignal);
   try {
     return await fn(dir);
   } finally {
-    detach();
     try {
       await rm(dir, { recursive: true, force: true });
     } catch (err) {

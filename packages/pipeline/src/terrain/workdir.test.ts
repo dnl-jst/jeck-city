@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, chmodSync, utimesSync, writeFileSync } from 'node:fs';
-import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -139,50 +138,6 @@ test('pidAlive: only ESRCH means dead; EPERM, the own pid and pids ≤ 1 count a
   } finally {
     kill.mockRestore();
   }
-});
-
-/** A stand-in for `process` that records the signal raised again (no real signal is sent). */
-function fakeProcess() {
-  const ee = new EventEmitter();
-  const raised: [number, string][] = [];
-  const proc = {
-    pid: 777,
-    on: (s: string, l: (s: NodeJS.Signals) => void) => ee.on(s, l),
-    off: (s: string, l: (s: NodeJS.Signals) => void) => ee.off(s, l),
-    kill: (pid: number, s: string) => {
-      raised.push([pid, s]);
-      return true;
-    },
-  };
-  return { ee, raised, proc };
-}
-
-test.each(['SIGINT', 'SIGTERM'] as const)('on %s while the run goes on, its folder is removed at once and the signal raised again with the handlers gone', async (signal) => {
-  const { ee, raised, proc } = fakeProcess();
-  let seen = '';
-  await withRunDir(root, async (dir) => {
-    seen = dir;
-    writeFileSync(join(dir, 't3.bin'), 'x');
-    expect(ee.listenerCount('SIGINT')).toBe(1);
-    expect(ee.listenerCount('SIGTERM')).toBe(1);
-    ee.emit(signal, signal);
-    expect(existsSync(dir)).toBe(false); // (synchronously, before the signal is raised again)
-    expect(raised).toEqual([[777, signal]]);
-    expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
-  }, { proc });
-  expect(existsSync(seen)).toBe(false);
-  expect(readdirSync(root)).toEqual([]);
-});
-
-test('the signal handlers are removed when the run settles, also when it fails', async () => {
-  const { ee, raised, proc } = fakeProcess();
-  await withRunDir(root, async () => 1, { proc });
-  expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
-  await expect(withRunDir(root, async () => {
-    throw new Error('boom');
-  }, { proc })).rejects.toThrow('boom');
-  expect(ee.listenerCount('SIGINT') + ee.listenerCount('SIGTERM')).toBe(0);
-  expect(raised).toEqual([]);
 });
 
 test('unlinkRunFile removes a file directly inside a run folder and refuses anything else', async () => {

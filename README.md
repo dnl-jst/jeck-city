@@ -19,10 +19,9 @@ download.vrs.de fragt ein normaler Lauf nie. Ein Lauf dauert etwa 5,6–6,8 Minu
 Arbeitsspeicher (gemessen ≈ 2,1 GB Spitze, mit vorhandenem wie mit neu gebautem Gebäude-Cache; Node läuft mit
 `--max-old-space-size=4096`). Das Gelände liegt nie als ganzes Raster im Speicher: Seine Fassungen T0–T3 sind Dateien
 im Format von `terrain.bin` in einem eigenen Arbeitsordner je Lauf (`data/cache/terrain/<pid>-<zufall>/`, am Ende des
-Laufs gelöscht, auch bei einem Fehler und bei Strg-C/SIGTERM; Reste abgestürzter Läufe räumt der nächste Lauf weg,
-sobald ihr Prozess nicht mehr lebt, spätestens nach einem Tag), gelesen über kleine Fenster und Punktabfragen. Der
-Arbeitsordner belegt während eines Laufs bis zu ≈ 0,3 GB auf der Platte (die vier Geländefassungen zu je ≈ 75 MB
-beim heutigen Spielgebiet, danach nur noch T3; wächst linear mit der Fläche). Gebäude werden in `data/cache/buildings/`
+Laufs gelöscht, auch bei einem Fehler; nach einem Abbruch räumt der nächste Lauf den Ordner weg), gelesen über kleine
+Fenster und Punktabfragen. Der Arbeitsordner belegt während eines Laufs bis zu ≈ 0,3 GB auf der Platte (die vier
+Geländefassungen zu je ≈ 75 MB beim heutigen Spielgebiet, danach nur noch T3; wächst linear mit der Fläche). Gebäude werden in `data/cache/buildings/`
 zwischengespeichert und neu gebaut, sobald sich Rohdaten, Gelände oder der Code der Pipeline ändern; ebenso die
 Fahrten aus dem Fahrplan (`data/cache/gtfs-trips.json`, auch abhängig vom Spielgebiet). Ist der Spiegel nicht
 erreichbar, versucht es die Pipeline dreimal und bricht dann mit „mirror unreachable … try again later“ ab: später
