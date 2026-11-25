@@ -91,3 +91,47 @@ it('a 404 from the mirror rejects with the same hint', async () => {
   await expect(run).rejects.toThrow(/npm run raw:update/);
   expect(await listFiles(dir)).toEqual([]);
 });
+
+/** A fetch whose first answers come from `script` (a status, or 'down' for a network error); afterwards it serves `body`. */
+function flakyFetch(script: (number | 'down')[], body: string) {
+  let n = 0;
+  const fn = vi.fn(async () => {
+    const step = script[n++];
+    if (step === 'down') throw new TypeError('fetch failed');
+    if (step !== undefined) return new Response('upstream trouble', { status: step });
+    return new Response(body);
+  });
+  return { fetchFn: fn as unknown as typeof fetch, calls: () => n };
+}
+
+it('an unreachable mirror (network error or 5xx) is tried 3 times, then rejects with "try again later", never steering to raw:update', async () => {
+  for (const script of [['down', 'down', 'down'], [503, 500, 502], ['down', 503, 'down']] as (number | 'down')[][]) {
+    const lock: RawLock = { version: 1, mirror: MIRROR, files: { 'osm.json': entry('osm') } };
+    const { fetchFn, calls } = flakyFetch(script, 'osm');
+    const pauses: number[] = [];
+    const run = ensureRawFiles(lock, dir, { fetchFn, log, sleep: async (ms) => { pauses.push(ms); } });
+    await expect(run).rejects.toThrow(/osm\.json/);
+    await expect(run).rejects.toThrow(/mirror unreachable \(.*\) — try again later; do NOT run raw:update/);
+    await expect(run).rejects.not.toThrow(/Run `npm run raw:update`/);
+    expect(calls()).toBe(3);
+    expect(pauses).toHaveLength(2);
+    expect(await listFiles(dir)).toEqual([]);
+  }
+});
+
+it('a mirror that recovers within the 3 attempts gives the file', async () => {
+  const lock: RawLock = { version: 1, mirror: MIRROR, files: { 'osm.json': entry('osm') } };
+  const { fetchFn, calls } = flakyFetch(['down', 503], 'osm');
+  await ensureRawFiles(lock, dir, { fetchFn, log, sleep: async () => {} });
+  expect(calls()).toBe(3);
+  expect(await readFile(join(dir, 'osm.json'), 'utf8')).toBe('osm');
+});
+
+it('a 404 is not retried and keeps the raw:update hint', async () => {
+  const lock: RawLock = { version: 1, mirror: MIRROR, files: { 'osm.json': entry('osm') } };
+  const { fetchFn, calls } = flakyFetch([404], 'osm');
+  const run = ensureRawFiles(lock, dir, { fetchFn, log, sleep: async () => {} });
+  await expect(run).rejects.toThrow(/HTTP 404.*Run `npm run raw:update`/);
+  await expect(run).rejects.not.toThrow(/unreachable/);
+  expect(calls()).toBe(1);
+});

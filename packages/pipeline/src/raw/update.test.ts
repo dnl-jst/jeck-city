@@ -73,7 +73,7 @@ it('updateRaw uploads only files the mirror lacks and writes them under rawKey w
   const osmKey = rawKey('osm.json', contentHash(body('osm.json')));
   await store.put(osmKey, body('osm.json'), { contentType: 'application/json', cacheControl: CACHE_CONTROL });
   const { fetchFn } = origins();
-  const lock = await updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: MIRROR, fetchFn, now: NOW, log });
+  const { lock } = await updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: MIRROR, fetchFn, now: NOW, log });
 
   const uploaded = store.puts.slice(1);
   expect(uploaded).not.toContain(osmKey);
@@ -101,7 +101,7 @@ it('updateRaw uploads only files the mirror lacks and writes them under rawKey w
 
 it('updateRaw writes a lock that parseRawLock accepts, sorted by path, and a second run changes nothing', async () => {
   const store = memoryStore();
-  const lock = await updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: MIRROR, fetchFn: origins().fetchFn, now: NOW, log });
+  const { lock } = await updateRaw({ dir: raw, lockFile, what: [...ALL], store, mirror: MIRROR, fetchFn: origins().fetchFn, now: NOW, log });
   const text = await readFile(lockFile, 'utf8');
   expect(parseRawLock(JSON.parse(text))).toEqual(lock);
   expect(lock.mirror).toBe(MIRROR);
@@ -125,7 +125,7 @@ it('updateRaw without a store keeps the lock mirror and uploads nothing', async 
   const OLD = 'https://old.example.org/';
   await writeFile(lockFile, JSON.stringify({ version: 1, mirror: OLD, files: {} }));
   const { fetchFn, calls } = origins();
-  const lock = await updateRaw({ dir: raw, lockFile, what: [...ALL], store: null, mirror: 'https://new.example.org/', fetchFn, now: NOW, log });
+  const { lock } = await updateRaw({ dir: raw, lockFile, what: [...ALL], store: null, mirror: 'https://new.example.org/', fetchFn, now: NOW, log });
   expect(lock.mirror).toBe(OLD);
   expect(parseRawLock(JSON.parse(await readFile(lockFile, 'utf8')))).toEqual(lock);
   expect(calls.filter((u) => u.includes('example.org'))).toEqual([]);
@@ -159,7 +159,7 @@ it("with what ['gtfs'] only the timetable is fetched, but every local raw file t
   const old = await seedWithoutTimetable();
   const store = memoryStore();
   const { fetchFn, calls } = origins();
-  const lock = await updateRaw({ dir: raw, lockFile, what: ['gtfs'], store, mirror: MIRROR, fetchFn, now: NOW, log });
+  const { lock } = await updateRaw({ dir: raw, lockFile, what: ['gtfs'], store, mirror: MIRROR, fetchFn, now: NOW, log });
   expect(calls).toEqual([GTFS_URL]);
   expect(lock.files).toEqual({ ...old.files, 'gtfs.zip': { hash: contentHash(ZIP), bytes: ZIP.byteLength } });
   expect(lock.gtfsDays).toEqual(DAYS);
@@ -193,4 +193,18 @@ it('updateRaw rejects a mirror URL without trailing slash before any download or
   expect(calls).toEqual([]);
   expect(store.puts).toEqual([]);
   expect(existsSync(lockFile)).toBe(false);
+});
+
+it('updateRaw without a store returns how many files of the new lock its mirror lacks: changed, new, or all without an old lock', async () => {
+  const MIRROR_OLD = 'https://old.example.org/';
+  const first = await updateRaw({ dir: raw, lockFile, what: [...ALL], store: null, mirror: MIRROR_OLD, fetchFn: origins().fetchFn, now: NOW, log });
+  expect(first.notInMirror).toBe(Object.keys(first.lock.files).length); // no lock before: nothing is known to be there
+  await writeFile(lockFile, JSON.stringify({ ...first.lock, mirror: MIRROR_OLD }));
+  const same = await updateRaw({ dir: raw, lockFile, what: [...ALL], store: null, mirror: null, fetchFn: origins().fetchFn, now: NOW, log });
+  expect(same.notInMirror).toBe(0);
+  const osm = await updateRaw({ dir: raw, lockFile, what: ['osm'], store: null, mirror: null, fetchFn: origins({ version: 2 }).fetchFn, now: NOW, log });
+  expect(osm.notInMirror).toBe(1); // osm.json changed; the routes, tiles and timetable are as the old lock pins them
+  // with a store every file is uploaded (and checked) before the lock is written
+  const stored = await updateRaw({ dir: raw, lockFile, what: [...ALL], store: memoryStore(), mirror: MIRROR, fetchFn: origins().fetchFn, now: NOW, log });
+  expect(stored.notInMirror).toBe(0);
 });

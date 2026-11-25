@@ -137,6 +137,9 @@ async function writeLock(file: string, lock: RawLock): Promise<void> {
  * `store`, every file of the new lock the mirror lacks is uploaded – also files that were already here and are not
  * refreshed (the first fill of the mirror) – and the lock names `mirror`; without one nothing is uploaded and the lock
  * keeps its old mirror. When the timetable is fetched, its sample days are taken from `now` (gtfsSampleDays).
+ * Returns the lock and `notInMirror`: how many of its files its mirror may lack (0 with a store; without one the
+ * mirror cannot be listed, so every file the old lock did not pin with the same hash counts, all of them without an
+ * old lock or mirror) — a lock with such files must not be committed: pipeline runs elsewhere could not fetch them.
  *
  * Nothing in `dir` and the lock changes until every download (and upload) succeeded: downloads go to `dir/.update`
  * first and are renamed into place right before the lock is written.
@@ -150,7 +153,7 @@ export async function updateRaw(o: {
   fetchFn?: typeof fetch;
   now?: Date;
   log?: (line: string) => void;
-}): Promise<RawLock> {
+}): Promise<{ lock: RawLock; notInMirror: number }> {
   const { dir, lockFile, store, fetchFn = fetch, now = new Date(), log = console.log } = o;
   const refresh = new Set(o.what);
   if (o.mirror !== null && !MIRROR_RE.test(o.mirror)) {
@@ -200,13 +203,14 @@ export async function updateRaw(o: {
       log(`gtfs: sample days ${gtfsDays.join(', ')} (Tuesday, Saturday, Sunday)`);
     }
 
-    let mirror = old.mirror;
+    let mirror = old.mirror, notInMirror = 0;
     if (store) {
       await fillMirror(store, files, where, await licenceText(GTFS_ZIP in files ? where(GTFS_ZIP) : null), log);
       mirror = o.mirror;
       if (!mirror) log('raw: no mirror URL (RAW_MIRROR_URL): the lock names no mirror');
     } else {
       log(`raw: no S3_* credentials: nothing uploaded; the lock keeps its mirror (${old.mirror ?? 'none'}), which may lack the new files until \`${RAW_UPDATE_HINT}\` runs with them`);
+      notInMirror = Object.keys(files).filter((p) => !mirror || old.files[p]?.hash !== files[p]!.hash).length;
     }
     const lock = parseRawLock({ version: 1, mirror, files, ...(gtfsDays ? { gtfsDays } : {}) });
 
@@ -216,7 +220,7 @@ export async function updateRaw(o: {
     }
     await writeLock(lockFile, lock);
     log(`raw: ${lockFile}: ${Object.keys(files).length} files${refresh.size ? ` (${[...refresh].join(', ')} fetched anew)` : ''}`);
-    return lock;
+    return { lock, notInMirror };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
