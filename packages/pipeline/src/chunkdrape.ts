@@ -16,7 +16,11 @@ import type { Mesh } from './streets.js';
 /** A flat street mesh prepared for chunk-wise draping: its cropped source triangles, bucketed by the chunks their xz bbox touches. */
 export type FlatSource = { mesh: Mesh; trianglesByChunk: Map<string, Uint32Array>; markOrder?: number[] };
 
-/** Slack on the bounding boxes: a draped vertex may round a little beyond its source triangle. */
+/**
+ * Slack on the bounding boxes. Zero would already suffice: float32 snapping keeps every piece inside its source
+ * triangle's bbox. The slack only widens the candidate set (a triangle that cannot put a piece into a chunk yields no
+ * piece there), so no slack value can change the output.
+ */
 const BOX_SLACK = 0.01;
 
 const inRect = (r: Rect, x: number, z: number) => x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ;

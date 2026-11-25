@@ -206,8 +206,9 @@ function drapeFlat(tri: CV[], area2: number, t: TerrainGrid, out: DrapeOut, wind
   const maxX = Math.max(a.x, b.x, c.x);
   let c0 = Math.floor(minX - t.x0);
   let c1 = Math.max(c0, Math.ceil(maxX - t.x0) - 1);
-  // a window keeps the cells around it (one cell of margin against rounding); each cell's pieces lie within the cell
-  // and do not depend on other cells, so the kept pieces and their order are the same
+  // a window keeps the cells around it, with one whole cell (≥ 1 m) of margin beyond the chunk edge against double
+  // rounding of ~1e-12; each cell's pieces lie within the cell and do not depend on other cells, so the kept pieces
+  // and their order are the same
   if (window) {
     c0 = Math.max(c0, Math.floor(window.minX - t.x0) - 1);
     c1 = Math.min(c1, Math.floor(window.maxX - t.x0) + 1);

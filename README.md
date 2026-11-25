@@ -17,10 +17,15 @@ npm run typecheck
 öffentlichen Spiegel (ohne Zugangsdaten; beim ersten Mal 328 MB, entpackt 1,9 GB). Overpass, opengeodata.nrw.de und
 download.vrs.de fragt ein normaler Lauf nie. Ein Lauf dauert etwa 5,5–7 Minuten und braucht höchstens 4 GB Arbeitsspeicher
 (gemessen ≈ 2,9 GB Spitze; Node läuft mit `--max-old-space-size=4096`). Gebäude werden in `data/cache/buildings/`
-zwischengespeichert und neu gebaut, sobald sich Rohdaten, Gelände oder der Code der Pipeline ändern.
+zwischengespeichert und neu gebaut, sobald sich Rohdaten, Gelände oder der Code der Pipeline ändern; ebenso die
+Fahrten aus dem Fahrplan (`data/cache/gtfs-trips.json`, auch abhängig vom Spielgebiet). Ist der Spiegel nicht
+erreichbar, versucht es die Pipeline dreimal und bricht dann mit „mirror unreachable … try again later“ ab: später
+erneut starten, **nicht** `npm run raw:update`. Die letzte Zeile eines Laufs nennt den Welt-Hash (`world hash …`).
+Während eines Laufs hat der Zielordner keine `index.json`; ein abgebrochener Lauf hinterlässt keine.
 
 ```
-npm run pipeline -- --out <ordner>                   # Welt woanders hin schreiben
+npm run pipeline -- --out <ordner>                   # Welt woanders hin schreiben (unbekannte Argumente: Exit 2)
+npm run transit -- [--out <ordner>]                  # nur die Stadtbahn neu, in eine Welt, die der letzte volle Lauf schrieb
 npm run world:compare -- <ordnerA> <ordnerB>         # zwei Welten Datei für Datei vergleichen (Exit 0 = gleich)
 node scripts/pipeline-peak.mjs [--max <MB>] --       # Pipeline mit Laufzeit und Spitzen-Speicher (Exit 1 über --max)
 ```
@@ -44,7 +49,8 @@ npm run raw:update -- [osm] [tiles] [gtfs]     # ohne Angabe alle drei
 
 Das lädt von den Ursprungsservern, legt im Spiegel ab, was dort noch fehlt, und schreibt `data/raw.lock.json` neu. Dafür
 braucht es die `S3_*`-Zugangsdaten (z. B. in `.env`, siehe „Welt im Objektspeicher“); die öffentliche Adresse des
-Spiegels kommt aus `RAW_MIRROR_URL` oder dem bisherigen Lock. **Ein neuer OSM-Stand ist ein Commit:** die geänderte
+Spiegels kommt aus `RAW_MIRROR_URL` oder dem bisherigen Lock. Ohne Zugangsdaten wird nichts hochgeladen; dann nennt
+die letzte Zeile, wie viele Dateien des neuen Locks im Spiegel fehlen – so ein Lock nicht committen. **Ein neuer OSM-Stand ist ein Commit:** die geänderte
 `data/raw.lock.json` committen; erst damit bauen alle (auch die GitHub Action) dieselbe Welt. Der Fahrplan ist Pflicht:
 Fehlt er im Lock, bricht die Pipeline ab und nennt `npm run raw:update -- gtfs`.
 
@@ -198,8 +204,9 @@ Voraussetzungen auf dem Server: Docker mit Compose-Plugin, ein DNS-Eintrag (A/AA
    curl https://spiel.example.org/healthz
    ```
 
-Aktualisieren auf ein neues Image (gebaut von der GitHub Action `.github/workflows/docker-image.yml` bei jedem Push
-auf `main`):
+Aktualisieren auf ein neues Image (gebaut von der GitHub Action `.github/workflows/docker-image.yml` für jeden Tag
+`v*` – Image-Tags `1.2.3` und `1.2` – und bei manuellem Start unter Actions → Docker image → Run workflow; ein
+manueller Lauf auf `main` setzt `latest`, nicht jeder Push auf `main`):
 
 ```
 docker compose pull game && docker compose up -d game

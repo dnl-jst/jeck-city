@@ -145,14 +145,17 @@ export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, toleranc
     const dev = (a: number, b: number, c: number) => triangleDeviation(t, pos[a * 3]!, pos[a * 3 + 2]!, hv(a), pos[b * 3]!, pos[b * 3 + 2]!, hv(b), pos[c * 3]!, pos[c * 3 + 2]!, hv(c)).dev;
     // the edges of triangle (a, b, c): k = 0: a → b, 1: b → c, 2: c → a
     const ends = (tri: ArrayLike<number>, o: number, k: number): [number, number] => [tri[o + k]!, tri[o + ((k + 1) % 3)]!];
-    /** Of the edges k (in k order) of the triangle at o that pass `use`, the first longest; -1 if none passes. */
+    /**
+     * Of the edges k (in k order) of the triangle at o that pass `use`, the first longest; -1 only if none passes. Like
+     * the reduce it replaces, it starts from the first edge that passes, so a NaN length can never give -1.
+     */
     const longestEdge = (tri: ArrayLike<number>, o: number, use: (key: number) => boolean): number => {
-      let best = -1, bestL = -Infinity;
+      let best = -1, bestL = 0;
       for (let k = 0; k < 3; k++) {
         const [p, q] = ends(tri, o, k);
         if (!use(ek(p, q))) continue;
         const l = len2(p, q);
-        if (l > bestL) { best = k; bestL = l; }
+        if (best < 0 || l > bestL) { best = k; bestL = l; }
       }
       return best;
     };

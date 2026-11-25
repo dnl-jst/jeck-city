@@ -60,8 +60,10 @@ jobs:
       - name: Build the world (apps/client/public/world)
         run: node scripts/pipeline-peak.mjs --max 4096 --
 
-      # saved right away, so a later failing step (tests, image) does not throw the downloads away
-      - if: steps.raw.outputs.cache-hit != 'true'
+      # saved right away, so a later failing step (tests, image) does not throw the downloads away; also when the
+      # build itself failed (every file in data/raw is checked against the lock before use), so the next run does not
+      # download the 328 MB again. (`!` would start a YAML tag: hence the expression syntax.)
+      - if: ${{ !cancelled() && steps.raw.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
         with:
           path: data/raw

@@ -2,6 +2,7 @@ import { NodeIO } from '@gltf-transform/core';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { expect, test, vi } from 'vitest';
 import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, meshSource, SoupBuilder, worldRect, type StreetMeshes, type StreetName } from './chunks.js';
@@ -269,13 +270,37 @@ test('markings keep their per-vertex _MARK through chunk split and GLB', async (
   expect(Array.from(prim.getAttribute('_MARK')!.getArray()!)).toEqual([1, 0, 1]);
 });
 
-test('chunkGeometries yields exactly what buildChunks returned before: same keys in the same order, identical typed arrays', async () => {
+/**
+ * A content hash of a whole chunk: every field, keys sorted, each typed array by its type, length and bytes. Frozen
+ * values of it pin the output as it was before the chunk-by-chunk build (not against buildChunks, which wraps it).
+ */
+function chunkDigest(chunk: unknown): string {
+  const h = createHash('sha256');
+  const walk = (v: unknown): void => {
+    if (ArrayBuffer.isView(v)) {
+      h.update(`${v.constructor.name}[${(v as unknown as ArrayLike<number>).length}]`).update(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    } else if (Array.isArray(v)) {
+      h.update('[');
+      v.forEach(walk);
+      h.update(']');
+    } else if (v && typeof v === 'object') {
+      for (const k of Object.keys(v).sort()) { h.update(`{${k}:`); walk((v as Record<string, unknown>)[k]); h.update('}'); }
+    } else h.update(`${typeof v}:${String(v)};`);
+  };
+  walk(chunk);
+  return h.digest('hex').slice(0, 16);
+}
+
+test('chunkGeometries yields the chunks as frozen before the chunk-by-chunk build: same keys in the same order, identical typed arrays', async () => {
   const area = { minX: 0, minZ: 0, maxX: 400, maxZ: 400 };
   const extra = { road: twoTris(0.5), tram: twoTris(0.6) }; // bridge-deck pieces: appended to road, alone in tram
   const yielded = await collect(chunkGeometries(meshSource(buildings()), streets(), { B: 'models/b.glb' }, area, terrain(), extra));
   // union of building chunks (-1_0 lies outside the area), street chunks and ground squares, by (iz, ix)
   expect(yielded.map((c) => c.key)).toEqual(['-1_0', '0_0', '1_0', '0_1', '1_1']);
-  expect(yielded).toEqual(await buildChunks(buildings(), streets(), { B: 'models/b.glb' }, area, terrain(), extra));
+  // (the digests of main's buildChunks for this fixture, before chunkGeometries existed)
+  expect(Object.fromEntries(yielded.map((c) => [c.key, chunkDigest(c)]))).toEqual({
+    '-1_0': '3a49a4203b8dfc79', '0_0': '32965cebc9126320', '1_0': 'ff517f1540f7bd74', '0_1': '35db6c3a791e8c63', '1_1': '19ab07fcf3470b37',
+  });
   const c = yielded.find((k) => k.key === '1_0')!;
   expect(c.ground).toEqual(ground.groundMesh(terrain(), 1, 0));
   expect(Array.from(c.streets.road!.positions)).toEqual([210, 0.01, 10, 210, 0.01, 20, 220, 0.01, 10, 210, 0.5, 10, 210, 0.5, 20, 220, 0.5, 10].map(Math.fround));
