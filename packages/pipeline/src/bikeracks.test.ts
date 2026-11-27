@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { crossSectionFromTags } from './crosssection.js';
-import { boxBuilding, loadFixture } from './fixture.js';
+import { boxRecord, loadFixture } from './fixture.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { dropCarsAtRacks, fillRacks, layoutRacks, spawnBikeSpot, type RackRow } from './bikeracks.js';
 import { onCarriageway, sideOffsets } from './roadprofile.js';
@@ -53,7 +53,7 @@ describe('layoutRacks', () => {
   test('drops racks in buildings, on tracks and outside the play area', () => {
     const r = mk(1, 'residential', ROAD);
     const kerb = sideOffsets(r.cross).right.kerb;
-    const house = boxBuilding('B1', -20, kerb + 4, 20, kerb + 20, 10);
+    const house = boxRecord('B1', -20, kerb + 4, 20, kerb + 20, 10);
     expect(hoops(layoutRacks(world([r], [stands(0, kerb + 8)]), [house]))).toHaveLength(0);
     const track: Pt[] = [{ x: -100, z: 30 }, { x: 100, z: 30 }];
     expect(hoops(layoutRacks(world([r], [stands(0, 30)], { tramTracks: [track] }), []))).toHaveLength(0);
@@ -64,7 +64,7 @@ describe('layoutRacks', () => {
     const r = mk(1, 'residential', ROAD);
     const kerb = sideOffsets(r.cross).right.kerb;
     const wall = kerb + 4;
-    const house = boxBuilding('B1', -30, wall, 30, wall + 15, 10);
+    const house = boxRecord('B1', -30, wall, 30, wall + 15, 10);
     for (const kind of ['stands', 'wall'] as const) {
       const rows = layoutRacks(world([r], [{ pos: { x: 0, z: wall - 0.3 }, kind, capacity: 6 }]), [house]);
       expect(hoops(rows).length, kind).toBe(3);
@@ -154,7 +154,7 @@ describe('spawnBikeSpot', () => {
     expect(b.z).toBeCloseTo(0, 5);
     expect(b.heading).toBe(spawn.heading);
     // a house right behind at 2.2 m: the next distance that clears it
-    const c = spawnBikeSpot(world([], []), spawn, [boxBuilding('B', -2.4, -1, -2.0, 1, 5)]);
+    const c = spawnBikeSpot(world([], []), spawn, [boxRecord('B', -2.4, -1, -2.0, 1, 5)]);
     expect(c.x).toBeCloseTo(-1.8, 5);
   });
 });

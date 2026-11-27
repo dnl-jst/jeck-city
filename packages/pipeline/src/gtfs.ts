@@ -1,15 +1,17 @@
 import { createReadStream, existsSync } from 'node:fs';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { TRAIN_LENGTH, wgs84ToLocal, type Transit } from '@nn/shared';
 
 /**
- * The real timetable: VRS's open GTFS feed (data/raw/gtfs, see fetchGtfs) for the Stadtbahn lines, read into the trips
- * of three sample days (a weekday, a Saturday, a Sunday) and matched to the line paths of the network.
+ * The real timetable: VRS's open GTFS feed (the pinned raw file gtfs.zip, fetched from here by `npm run raw:update`;
+ * unpacked by raw/gtfs-zip.ts) for the Stadtbahn lines, read into the trips of three sample days (a weekday, a
+ * Saturday, a Sunday: the lock's gtfsDays) and matched to the line paths of the network.
  */
 export const GTFS_URL = 'https://download.vrs.de/gtfs/google_transit_goR.zip';
-const FILES = ['routes.txt', 'trips.txt', 'calendar.txt', 'calendar_dates.txt', 'stops.txt', 'stop_times.txt'];
+/** The tables loadGtfsTrips reads (all of them are unpacked from the feed, nothing else). */
+export const GTFS_TABLES = ['routes.txt', 'trips.txt', 'calendar.txt', 'calendar_dates.txt', 'stops.txt', 'stop_times.txt'];
 
 /** A trip of a line on the sample days it runs on (bit 0 weekday, 1 Saturday, 2 Sunday), with its stops: position and time (s after the service day's midnight). */
 export type GtfsTrip = { line: string; days: number; headsign: string; stops: { x: number; z: number; t: number }[] };
@@ -45,19 +47,46 @@ async function table(file: string, row: (get: (col: string) => string) => void):
 }
 
 const ymd = (d: Date) => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+/** Day of the week (0 Sunday … 6 Saturday) of a yyyymmdd date. */
+const weekdayOf = (date: number) => new Date(Math.floor(date / 10000), Math.floor(date / 100) % 100 - 1, date % 100).getDay();
+/** The feed's validity: from the earliest start to the latest end of its services. */
+function validity(calendar: { start: number; end: number }[]): { lo: number; hi: number } {
+  let lo = Infinity, hi = -Infinity;
+  for (const c of calendar) { lo = Math.min(lo, c.start); hi = Math.max(hi, c.end); }
+  return { lo, hi };
+}
+
+/** The validity (start_date, end_date) of every service in calendar.txt's text. */
+export function gtfsCalendar(csv: string): { start: number; end: number }[] {
+  const [head = '', ...rows] = csv.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const cols = new Map(csvFields(head).map((c, i) => [c.trim(), i]));
+  const start = cols.get('start_date'), end = cols.get('end_date');
+  if (start === undefined || end === undefined) throw new Error('gtfs: calendar.txt has no start_date or end_date column');
+  return rows.filter(Boolean).map((line) => { const f = csvFields(line); return { start: Number(f[start]), end: Number(f[end]) }; });
+}
+
+/** The first Tuesday, Saturday and Sunday on or after `from` that the feed covers, as yyyymmdd. Throws if it covers none. */
+export function gtfsSampleDays(calendar: { start: number; end: number }[], from: Date): [number, number, number] {
+  const { lo, hi } = validity(calendar);
+  const [a, b, c] = [2, 6, 0].map((weekday) => {
+    const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+    for (let k = 0; k < 400; k++, d.setDate(d.getDate() + 1)) if (d.getDay() === weekday && ymd(d) >= lo && ymd(d) <= hi) return ymd(d);
+    throw new Error(`gtfs: the feed (valid ${lo}–${hi}) covers no day of the week ${weekday} from today on: download a current one`);
+  }) as [number, number, number];
+  return [a, b, c];
+}
 
 /**
- * The trips of `lines` (KVB Stadtbahn: route ids de:vrs:<line>:104) on three sample days: the first Tuesday, Saturday
- * and Sunday from `from` on that the feed covers. Stops outside `keep` are left out. Cached in `cache` until the feed
- * changes (stop_times.txt has 400 MB).
+ * The trips of `lines` (KVB Stadtbahn: route ids de:vrs:<line>:104) on the three sample `days` (yyyymmdd; bit i of a
+ * trip's `days` is days[i]), read from the unpacked feed in `dir`. Stops outside `keep` are left out. Cached in `cache`
+ * (stop_times.txt has 400 MB) under everything the trips depend on: the lines, the days and `key` — the feed's hash,
+ * the area `keep` stands for (as a string) and the hash of the code (codeHash). An unreadable cache counts as absent.
  */
-export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: number, z: number) => boolean, cache: string, from = new Date()): Promise<GtfsTrip[]> {
-  for (const f of FILES) if (!existsSync(join(dir, f))) throw new Error(`gtfs: ${join(dir, f)} is missing`);
-  const stamp = `${(await stat(join(dir, 'stop_times.txt'))).mtimeMs}|${lines.join(',')}`;
-  if (existsSync(cache)) {
-    const c = JSON.parse(await readFile(cache, 'utf8')) as { stamp: string; trips: GtfsTrip[] };
-    if (c.stamp === stamp) return c.trips;
-  }
+export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: number, z: number) => boolean, cache: string, days: [number, number, number], key: { feed: string; area: string; code: string }): Promise<GtfsTrip[]> {
+  for (const f of GTFS_TABLES) if (!existsSync(join(dir, f))) throw new Error(`gtfs: ${join(dir, f)} is missing`);
+  const stamp = `${key.feed}|${key.area}|${key.code}|${lines.join(',')}|${days.join(',')}`;
+  const cached = await readTripCache(cache);
+  if (cached?.stamp === stamp) return cached.trips;
   const routes = new Map(lines.map((l) => [`de:vrs:${l}:104`, l]));
   // service → weekday flags and validity; removals per service
   const cal = new Map<string, { flags: number[]; start: number; end: number }>();
@@ -68,14 +97,11 @@ export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: numb
   });
   const removed = new Set<string>();
   await table(join(dir, 'calendar_dates.txt'), (g) => { if (g('exception_type') === '2') removed.add(`${g('service_id')}|${g('date')}`); });
-  // the sample days: the first Tuesday, Saturday, Sunday from `from` on inside the feed's validity
-  let lo = Infinity, hi = -Infinity;
-  for (const c of cal.values()) { lo = Math.min(lo, c.start); hi = Math.max(hi, c.end); }
-  const sample = [2, 6, 0].map((weekday) => {
-    const d = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-    for (let k = 0; k < 400; k++, d.setDate(d.getDate() + 1)) if (d.getDay() === weekday && ymd(d) >= lo && ymd(d) <= hi) return { weekday, date: ymd(d) };
-    throw new Error(`gtfs: the feed (valid ${lo}–${hi}) covers no day of the week ${weekday} from today on: download a current one`);
-  });
+  // the sample days (pinned in the lock, see gtfsSampleDays) must lie inside the feed's validity
+  const { lo, hi } = validity([...cal.values()]);
+  const outside = days.filter((d) => d < lo || d > hi);
+  if (outside.length) throw new Error(`gtfs: the sample days ${outside.join(', ')} lie outside the feed's validity ${lo}–${hi}`);
+  const sample = days.map((date) => ({ weekday: weekdayOf(date), date }));
   const runsOn = (service: string): number => {
     const c = cal.get(service);
     if (!c) return 0;
@@ -109,8 +135,22 @@ export async function loadGtfsTrips(dir: string, lines: string[], keep: (x: numb
     const idx = order.map((_, i) => i).sort((a, b) => order[a]! - order[b]!);
     out.push({ ...trip, stops: idx.map((i) => trip.stops[i]!) });
   }
-  await writeFile(cache, JSON.stringify({ stamp, trips: out }));
+  // (via a .part file: an aborted write never leaves a truncated cache behind)
+  await writeFile(`${cache}.part`, JSON.stringify({ stamp, trips: out }));
+  await rename(`${cache}.part`, cache);
   return out;
+}
+
+/** The trip cache, or null when it is missing or not a readable cache (truncated, hand-edited): then it is rebuilt. */
+async function readTripCache(cache: string): Promise<{ stamp: string; trips: GtfsTrip[] } | null> {
+  let c: unknown;
+  try {
+    c = JSON.parse(await readFile(cache, 'utf8'));
+  } catch {
+    return null;
+  }
+  const ok = typeof c === 'object' && c !== null && typeof (c as { stamp?: unknown }).stamp === 'string' && Array.isArray((c as { trips?: unknown }).trips);
+  return ok ? (c as { stamp: string; trips: GtfsTrip[] }) : null;
 }
 
 /** A stop of a trip belongs to a path's stop within this distance (m; GTFS gives the platform's middle, OSM the stop position on the track). */

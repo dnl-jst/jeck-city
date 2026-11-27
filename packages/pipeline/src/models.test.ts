@@ -45,11 +45,11 @@ test('prepareModel without *_col nodes collides with the rendered meshes', async
   expect(m.collision.length).toBe(9);
 });
 
-test('buildCollision adds extra triangle soups', () => {
+test('buildCollision adds extra triangle soups', async () => {
   const empty = { positions: new Float32Array(), indices: new Uint32Array(), uv: new Float32Array() };
   const boundary = [{ x: 0, z: 0 }, { x: 10, z: 0 }, { x: 10, z: 10 }];
-  const base = buildCollision({ buildings: [], curb: empty, sidewalk: empty, boundary });
-  const more = buildCollision({ buildings: [], curb: empty, sidewalk: empty, boundary, extra: [new Float32Array([0, 0, 0, 1, 5, 0, 0, 5, 1])] });
+  const base = await buildCollision({ buildings: [], curb: empty, sidewalk: empty, boundary });
+  const more = await buildCollision({ buildings: [], curb: empty, sidewalk: empty, boundary, extra: [new Float32Array([0, 0, 0, 1, 5, 0, 0, 5, 1])] });
   expect(more.indices.length - base.indices.length).toBe(3);
 });
 

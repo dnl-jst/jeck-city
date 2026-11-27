@@ -1,10 +1,11 @@
 import { Document, NodeIO, type TypedArray } from '@gltf-transform/core';
 import { concatMeshes } from './bridges.js';
+import { drapeChunk, type FlatSource } from './chunkdrape.js';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { BuildingMesh } from './buildings.js';
-import { groundMesh, type GroundMesh } from './ground.js';
+import { groundMesh, groundSpan, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
 
@@ -31,6 +32,26 @@ export type BuildingBatch = {
   ranges: { id: string; firstVertex: number; vertexCount: number }[];
 };
 export type ChunkGeometry = { key: string; ix: number; iz: number; buildings?: BuildingBatch; streets: Partial<Record<StreetName, Mesh>>; ground?: GroundMesh };
+
+/** Where the chunks get their buildings (a BuildingStore): light records for the keys, full meshes per chunk. */
+export type BuildingSource = {
+  readonly records: readonly { id: string; centroid: Pt }[];
+  /** Indices of the records whose centroid lies in chunk `key`, in record order. */
+  inChunk(key: string): readonly number[];
+  mesh(i: number): Promise<BuildingMesh>;
+};
+
+/** A BuildingSource over meshes already in memory. */
+export function meshSource(meshes: BuildingMesh[]): BuildingSource {
+  const byChunk = new Map<string, number[]>();
+  meshes.forEach((m, i) => {
+    const key = chunkKey(m.centroid.x, m.centroid.z);
+    const list = byChunk.get(key);
+    if (list) list.push(i);
+    else byChunk.set(key, [i]);
+  });
+  return { records: meshes, inChunk: (key) => byChunk.get(key) ?? [], mesh: async (i) => meshes[i]! };
+}
 
 class BatchBuilder {
   pos: number[] = []; nor: number[] = []; uv: number[] = []; kind: number[] = []; seed: number[] = []; flags: number[] = [];
@@ -84,7 +105,7 @@ export function worldRect(boundary: Pt[]): Rect {
 const inRect = (r: Rect | undefined, x: number, z: number) => !r || (x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ);
 
 /** Copies the triangles of `m` whose centroid lies in each chunk (and in `area`) into per-chunk meshes (vertices remapped). */
-function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
+export function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
   const parts = new Map<string, { remap: Map<number, number>; pos: number[]; uv: number[]; mark: number[]; idx: number[] }>();
   const p = m.positions;
   for (let t = 0; t < m.indices.length; t += 3) {
@@ -120,47 +141,77 @@ function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
  * Street triangles outside `area` are dropped (OSM ways reach far beyond the play area).
  * With `terrain`, every chunk square that intersects `area` (the whole grid without `area`) and overlaps the
  * grid gets its `ground` mesh, also when it holds no buildings or streets.
+ * Yields the chunks one at a time, sorted by (iz, ix): the set of keys is fixed up front, a chunk's building batch
+ * (its full meshes loaded from `buildings` just then) and ground mesh are built when it is yielded, and nothing of a
+ * yielded chunk is kept.
+ * `draped`: flat street meshes draped onto `terrain` chunk by chunk (drapeChunk; needs `terrain` and `area`) in place
+ * of the same name in `streets`; the draped triangles per name are added up in `drapedTriangles`. A chunk that only
+ * such a mesh might reach (its triangles' bounding boxes) is left out when no draped triangle falls into it.
  */
-export function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): ChunkGeometry[] {
-  const chunks = new Map<string, ChunkGeometry>();
-  const chunk = (key: string): ChunkGeometry => {
-    let c = chunks.get(key);
-    if (!c) {
-      const [ix, iz] = key.split('_').map(Number) as [number, number];
-      chunks.set(key, (c = { key, ix, iz, streets: {} }));
-    }
-    return c;
-  };
-  const batches = new Map<string, BatchBuilder>();
-  for (const b of buildings) {
+export async function* chunkGeometries(buildings: BuildingSource, streets: Partial<StreetMeshes>, overrides: Overrides = {}, area?: Rect,
+  terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}, draped: Partial<Record<StreetName, FlatSource>> = {},
+  drapedTriangles: Partial<Record<StreetName, number>> = {}): AsyncGenerator<ChunkGeometry> {
+  const sources = STREET_MESHES.map((name) => draped[name]);
+  if (sources.some(Boolean) && (!terrain || !area)) throw new Error('chunkGeometries: draping needs terrain and area');
+  const keys = new Set<string>();
+  for (const b of buildings.records) {
     if (b.id in overrides) continue; // TODO: insert the replacement GLB from overrides[b.id] into this chunk
-    const key = chunkKey(b.centroid.x, b.centroid.z);
-    chunk(key);
-    let batch = batches.get(key);
-    if (!batch) batches.set(key, (batch = new BatchBuilder()));
-    batch.add(b);
+    keys.add(chunkKey(b.centroid.x, b.centroid.z));
   }
-  for (const [key, batch] of batches) chunk(key).buildings = batch.build();
-  for (const name of STREET_MESHES) for (const [key, m] of splitMesh(streets[name], area)) chunk(key).streets[name] = m;
+  const parts = (meshes: Partial<StreetMeshes>) => STREET_MESHES.map((name) => {
+    const m = meshes[name];
+    const split = m ? splitMesh(m, area) : new Map<string, Mesh>();
+    for (const key of split.keys()) keys.add(key);
+    return split;
+  });
+  const own = parts(streets);
   // further triangles per mesh name (the bridge decks), appended chunk by chunk: no copy of the big draped meshes
-  for (const name of STREET_MESHES) {
-    const more = extra[name];
-    if (!more) continue;
-    for (const [key, m] of splitMesh(more, area)) {
-      const c = chunk(key), have = c.streets[name];
-      c.streets[name] = have ? concatMeshes([have, m]) : m;
-    }
-  }
+  const more = parts(extra);
+  const grounded = new Set<string>();
   if (terrain) {
     const r = area ?? { minX: terrain.x0, minZ: terrain.z0, maxX: terrain.x0 + terrain.cols - 1, maxZ: terrain.z0 + terrain.rows - 1 };
     for (let iz = Math.floor(r.minZ / CHUNK_SIZE); iz < Math.ceil(r.maxZ / CHUNK_SIZE); iz++) {
       for (let ix = Math.floor(r.minX / CHUNK_SIZE); ix < Math.ceil(r.maxX / CHUNK_SIZE); ix++) {
-        const g = groundMesh(terrain, ix, iz);
-        if (g) chunk(`${ix}_${iz}`).ground = g;
+        if (!groundSpan(terrain, ix, iz)) continue;
+        keys.add(`${ix}_${iz}`);
+        grounded.add(`${ix}_${iz}`);
       }
     }
   }
-  return [...chunks.values()].sort((a, b) => a.iz - b.iz || a.ix - b.ix);
+  // the chunks known to exist; draped meshes only add candidates
+  const certain = new Set(keys);
+  for (const src of sources) if (src) for (const key of src.trianglesByChunk.keys()) keys.add(key);
+  const order = [...keys].map((key) => {
+    const [ix, iz] = key.split('_').map(Number) as [number, number];
+    return { key, ix, iz };
+  }).sort((a, b) => a.iz - b.iz || a.ix - b.ix);
+  for (const { key, ix, iz } of order) {
+    const c: ChunkGeometry = { key, ix, iz, streets: {} };
+    const list = buildings.inChunk(key).filter((i) => !(buildings.records[i]!.id in overrides));
+    if (list.length) {
+      const batch = new BatchBuilder();
+      for (const i of list) batch.add(await buildings.mesh(i));
+      c.buildings = batch.build();
+    }
+    STREET_MESHES.forEach((name, i) => {
+      const src = sources[i];
+      const have = src ? drapeChunk(src, terrain!, ix, iz, area!) : own[i]!.get(key), deck = more[i]!.get(key);
+      if (src && have) drapedTriangles[name] = (drapedTriangles[name] ?? 0) + have.indices.length / 3;
+      own[i]!.delete(key);
+      more[i]!.delete(key);
+      if (have || deck) c.streets[name] = have && deck ? concatMeshes([have, deck]) : (have ?? deck)!;
+    });
+    if (!certain.has(key) && Object.keys(c.streets).length === 0) continue;
+    if (terrain && grounded.has(key)) c.ground = groundMesh(terrain, ix, iz)!;
+    yield c;
+  }
+}
+
+/** All chunks at once, from meshes in memory (see chunkGeometries). */
+export async function buildChunks(buildings: BuildingMesh[], streets: StreetMeshes, overrides: Overrides = {}, area?: Rect, terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}): Promise<ChunkGeometry[]> {
+  const out: ChunkGeometry[] = [];
+  for await (const c of chunkGeometries(meshSource(buildings), streets, overrides, area, terrain, extra)) out.push(c);
+  return out;
 }
 
 let encoderReady: Promise<void> | undefined;
@@ -202,21 +253,85 @@ export async function encodeChunkGlb(c: ChunkGeometry): Promise<Uint8Array> {
   return io.writeBinary(doc);
 }
 
-/** Welds exactly equal positions into one indexed triangle soup. */
-class SoupBuilder {
-  private seen = new Map<string, number>();
-  vertices: number[] = [];
-  indices: number[] = [];
-  vertex(x: number, y: number, z: number): number {
-    const key = `${x},${y},${z}`;
-    let i = this.seen.get(key);
-    if (i === undefined) {
-      i = this.vertices.length / 3;
-      this.seen.set(key, i);
-      this.vertices.push(x, y, z);
+/** One coordinate of two points that weld: `===` (-0 is 0), or both NaN. */
+const same = (a: number, b: number) => a === b || (a !== a && b !== b);
+
+/**
+ * Welds exactly equal positions into one indexed triangle soup, numbered by first use. "Equal" is what the string key
+ * `${x},${y},${z}` this replaces meant (millions of vertices: a Map of strings held ~0.5 GB): per coordinate `===`,
+ * so -0 and 0 are one point, or both NaN. The first point of a welded set keeps its exact values (-0 stays -0).
+ * Coordinates are compared as doubles (float32 output): doubles that round to the same float stay apart, as before.
+ */
+export class SoupBuilder {
+  private xyz = new Float64Array(3 * 1024);
+  private count = 0;
+  /** Open addressing (linear probing), power-of-two size, at most half full: vertex index + 1, 0 = free. */
+  private table = new Int32Array(2048);
+  private idx = new Uint32Array(3 * 1024);
+  private nIdx = 0;
+  private bits = new Float64Array(3);
+  private words = new Int32Array(this.bits.buffer);
+
+  private hash(x: number, y: number, z: number): number {
+    // -0 + 0 is 0 and every NaN one NaN: points that weld hash alike
+    const b = this.bits, w = this.words;
+    b[0] = x !== x ? NaN : x + 0;
+    b[1] = y !== y ? NaN : y + 0;
+    b[2] = z !== z ? NaN : z + 0;
+    let h = 0x811c9dc5;
+    for (let k = 0; k < 6; k++) h = Math.imul(h ^ w[k]!, 0x01000193);
+    h ^= h >>> 15;
+    h = Math.imul(h, 0x2c1b3c6d);
+    return (h ^ (h >>> 12)) >>> 0;
+  }
+
+  private grow(): void {
+    const table = new Int32Array(this.table.length * 2), mask = table.length - 1;
+    const v = this.xyz;
+    for (let i = 0; i < this.count; i++) {
+      let s = this.hash(v[i * 3]!, v[i * 3 + 1]!, v[i * 3 + 2]!) & mask;
+      while (table[s] !== 0) s = (s + 1) & mask;
+      table[s] = i + 1;
     }
+    this.table = table;
+  }
+
+  vertex(x: number, y: number, z: number): number {
+    const mask = this.table.length - 1, v = this.xyz;
+    let s = this.hash(x, y, z) & mask;
+    for (let e = this.table[s]!; e !== 0; s = (s + 1) & mask, e = this.table[s]!) {
+      const i = e - 1;
+      if (same(v[i * 3]!, x) && same(v[i * 3 + 1]!, y) && same(v[i * 3 + 2]!, z)) return i;
+    }
+    const i = this.count++;
+    if (v.length < 3 * this.count) {
+      this.xyz = new Float64Array(v.length * 2);
+      this.xyz.set(v);
+    }
+    this.xyz[i * 3] = x;
+    this.xyz[i * 3 + 1] = y;
+    this.xyz[i * 3 + 2] = z;
+    this.table[s] = i + 1;
+    if (2 * this.count > this.table.length) this.grow();
     return i;
   }
+
+  private push(a: number, b: number, c: number): void {
+    if (this.idx.length < this.nIdx + 3) {
+      const idx = new Uint32Array(this.idx.length * 2);
+      idx.set(this.idx);
+      this.idx = idx;
+    }
+    this.idx[this.nIdx++] = a;
+    this.idx[this.nIdx++] = b;
+    this.idx[this.nIdx++] = c;
+  }
+
+  /** The welded vertices (float32) and the triangles' indices. */
+  build(): { vertices: Float32Array; indices: Uint32Array } {
+    return { vertices: Float32Array.from(this.xyz.subarray(0, 3 * this.count)), indices: this.idx.slice(0, this.nIdx) };
+  }
+
   /** Adds triangle (a, b, c) of positions p; zero-area triangles (also after welding) are dropped. */
   tri(p: ArrayLike<number>, a: number, b: number, c: number): void {
     const P = (i: number, k: number) => p[i * 3 + k]!;
@@ -227,7 +342,7 @@ class SoupBuilder {
     const ia = this.vertex(P(a, 0), P(a, 1), P(a, 2));
     const ib = this.vertex(P(b, 0), P(b, 1), P(b, 2));
     const ic = this.vertex(P(c, 0), P(c, 1), P(c, 2));
-    if (ia !== ib && ib !== ic && ia !== ic) this.indices.push(ia, ib, ic);
+    if (ia !== ib && ib !== ic && ia !== ic) this.push(ia, ib, ic);
   }
 }
 
@@ -236,13 +351,14 @@ class SoupBuilder {
  * inside the world area) and, without `terrain`, one ground rectangle at y = 0 covering the boundary bbox + 200 m
  * (with `terrain` the physics heightfield collider is the ground instead).
  * Vertices are welded; zero-area triangles and overridden buildings are left out. `extra`: further world-space
- * triangle soups (9 floats per triangle), e.g. the collision meshes of override models.
+ * triangle soups (9 floats per triangle), e.g. the collision meshes of override models; they come first, then the
+ * buildings in `buildings` order (read one at a time: a BuildingStore's meshes()).
  * Not included: road, trackbed, tram, green and squares — they lie only centimetres above the ground, which covers them.
  */
-export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[]; terrain?: TerrainGrid }): CollisionAsset {
+export async function buildCollision(o: { buildings: Iterable<BuildingMesh> | AsyncIterable<BuildingMesh>; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[]; terrain?: TerrainGrid }): Promise<CollisionAsset> {
   const s = new SoupBuilder();
   for (const t of o.extra ?? []) for (let v = 0; v < t.length / 3; v += 3) s.tri(t, v, v + 1, v + 2);
-  for (const b of o.buildings) {
+  for await (const b of o.buildings) {
     if (o.overrides && b.id in o.overrides) continue;
     const skipRoofs = o.dropBackdropRoofs === true && (b.flags & FLAG_BACKDROP) !== 0;
     for (let v = 0; v < b.kind.length; v += 3) if (!(skipRoofs && b.kind[v] === 1)) s.tri(b.positions, v, v + 1, v + 2);
@@ -263,8 +379,7 @@ export function buildCollision(o: { buildings: BuildingMesh[]; curb: Mesh; sidew
     s.tri(ground, 0, 2, 3);
   }
   return {
-    vertices: Float32Array.from(s.vertices),
-    indices: Uint32Array.from(s.indices),
+    ...s.build(),
     boundary: Float32Array.from(o.boundary.flatMap((p) => [p.x, p.z])),
   };
 }

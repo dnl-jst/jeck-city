@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { boxBuilding, crossOf } from './fixture.js';
+import { boxRecord, crossOf } from './fixture.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { edgeAt } from './roadprofile.js';
 import { streetTrees, TREE_KERB_OFFSET, TREE_SPACING } from './streettrees.js';
@@ -11,7 +11,7 @@ const road = (over: Partial<Road> = {}): Road => ({
 });
 const KERB = edgeAt(road(), 1, 'kerb', 0);
 /** South facades 5 m behind the kerb (sidewalk 5 m), north facades 3 m behind it (too narrow for trees). */
-const blocks = (flags = 0) => [boxBuilding('S', -20, KERB + 5, 320, KERB + 25, 17, flags), boxBuilding('N', -20, -KERB - 25, 320, -KERB - 3, 17)];
+const blocks = (flags = 0) => [boxRecord('S', -20, KERB + 5, 320, KERB + 25, 17, flags), boxRecord('N', -20, -KERB - 25, 320, -KERB - 3, 17)];
 const far = { x: -1000, z: -1000 };
 const SEED = 7;
 
@@ -56,7 +56,7 @@ test('skips: OSM tree within 8 m, junctions (8 m from the crossing carriageway),
 
 test('not in front of shopfront buildings (bit 0) closer than 2.5 m to the tree', () => {
   // sidewalk 3.6 m: tree 1.2 m from the kerb is 2.4 m from the facade
-  const narrow = (flags: number) => [boxBuilding('S', -20, KERB + 3.6, 320, KERB + 25, 17, flags)];
+  const narrow = (flags: number) => [boxRecord('S', -20, KERB + 3.6, 320, KERB + 25, 17, flags)];
   expect(streetTrees({ ...empty, roads: [road()] }, narrow(0), far, SEED).length).toBeGreaterThan(15);
   expect(streetTrees({ ...empty, roads: [road()] }, narrow(1), far, SEED)).toEqual([]);
   // the 5 m sidewalk leaves 3.8 m to the shopfront: trees stay

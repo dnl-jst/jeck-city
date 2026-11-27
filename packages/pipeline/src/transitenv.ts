@@ -1,5 +1,5 @@
-import type { BuildingMesh } from './buildings.js';
-import { footprintContains, footprintOf } from './footprint.js';
+import type { BuildingRecord } from './buildingstore.js';
+import { footprintContains } from './footprint.js';
 import type { Pt } from './osm.js';
 
 /**
@@ -18,14 +18,16 @@ export type CityEnv = {
 
 /** Raster cell (m), cells per tile side, and how far beside a track the raster reaches (m). */
 const CELL = 0.5, TILE = 64, REACH = 48;
-const MAGIC = 'NNE1';
+const MAGIC = 'NNE2';
+/** Bytes before the first tile: magic, cell, tile, count, then the terrain stamp (32 hex characters). */
+const HEADER = 16 + 32;
 const BUILT = 1, PAVEMENT = 2, ROADWAY = 4;
 
 /** "Inside a building" with a grid over the footprints' boxes (the plain test walks every building). */
-export function footprintTest(buildings: BuildingMesh[], cell = 16): (p: Pt) => boolean {
-  const grid = new Map<string, BuildingMesh[]>();
+export function footprintTest(buildings: readonly BuildingRecord[], cell = 16): (p: Pt) => boolean {
+  const grid = new Map<string, BuildingRecord[]>();
   for (const b of buildings) {
-    const fp = footprintOf(b);
+    const fp = b.footprint;
     if (!Number.isFinite(fp.minX)) continue;
     for (let gx = Math.floor(fp.minX / cell); gx <= Math.floor(fp.maxX / cell); gx++) {
       for (let gz = Math.floor(fp.minZ / cell); gz <= Math.floor(fp.maxZ / cell); gz++) {
@@ -39,8 +41,12 @@ export function footprintTest(buildings: BuildingMesh[], cell = 16): (p: Pt) => 
   return (p) => (grid.get(`${Math.floor(p.x / cell)}_${Math.floor(p.z / cell)}`) ?? []).some((b) => footprintContains(b, p.x, p.z));
 }
 
-/** The raster of `env` within REACH of the tracks, encoded (see decodeEnv). */
-export function encodeEnv(env: CityEnv, tracks: Pt[][]): Uint8Array {
+/**
+ * The raster of `env` within REACH of the tracks, encoded (see decodeEnv), stamped with `terrain`: the contentHash of
+ * the terrain.bin bytes of the world it was built for (`--transit-only` refuses another world's raster).
+ */
+export function encodeEnv(env: CityEnv, tracks: Pt[][], terrain: string): Uint8Array {
+  if (!/^[0-9a-f]{32}$/.test(terrain)) throw new Error(`transit env: the terrain hash must be 32 hex characters, got ${JSON.stringify(terrain)}`);
   const size = CELL * TILE, tiles = new Set<string>();
   for (const line of tracks) {
     for (let i = 0; i < line.length; i++) {
@@ -53,12 +59,13 @@ export function encodeEnv(env: CityEnv, tracks: Pt[][]): Uint8Array {
       }
     }
   }
-  const out = new Uint8Array(16 + tiles.size * (8 + TILE * TILE)), view = new DataView(out.buffer);
+  const out = new Uint8Array(HEADER + tiles.size * (8 + TILE * TILE)), view = new DataView(out.buffer);
   for (let i = 0; i < 4; i++) out[i] = MAGIC.charCodeAt(i);
   view.setFloat32(4, CELL, true);
   view.setUint32(8, TILE, true);
   view.setUint32(12, tiles.size, true);
-  let o = 16;
+  for (let i = 0; i < 32; i++) out[16 + i] = terrain.charCodeAt(i);
+  let o = HEADER;
   for (const key of [...tiles].sort()) {
     const [tx, tz] = key.split('_').map(Number) as [number, number];
     view.setInt32(o, tx, true);
@@ -74,17 +81,30 @@ export function encodeEnv(env: CityEnv, tracks: Pt[][]): Uint8Array {
   return out;
 }
 
-/** The environment read back from encodeEnv's raster; outside it nothing is known: no building, pavement or road. */
-export function decodeEnv(buf: Uint8Array): CityEnv {
+/**
+ * The environment read back from encodeEnv's raster (outside it nothing is known: no building, pavement or road) and
+ * the terrain stamp it carries. Throws on anything that is not a whole raster of this format.
+ */
+export function decodeEnv(buf: Uint8Array): { terrain: string; env: CityEnv } {
+  const corrupt = (why: string) => new Error(`transit env: truncated or corrupt (${why})`);
+  if (buf.byteLength < HEADER) throw corrupt(`${buf.byteLength} bytes`);
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  if (String.fromCharCode(...buf.subarray(0, 4)) !== MAGIC) throw new Error('transit env: bad magic');
+  if (String.fromCharCode(...buf.subarray(0, 4)) !== MAGIC) throw corrupt('bad magic');
   const cell = view.getFloat32(4, true), tile = view.getUint32(8, true), count = view.getUint32(12, true), size = cell * tile;
+  const terrain = String.fromCharCode(...buf.subarray(16, HEADER));
+  if (!/^[0-9a-f]{32}$/.test(terrain)) throw corrupt('no terrain stamp');
+  if (buf.byteLength !== HEADER + count * (8 + tile * tile)) throw corrupt(`${buf.byteLength} bytes for ${count} tiles`);
   const tiles = new Map<string, number>();
-  for (let i = 0, o = 16; i < count; i++, o += 8 + tile * tile) tiles.set(`${view.getInt32(o, true)}_${view.getInt32(o + 4, true)}`, o + 8);
+  for (let i = 0, o = HEADER; i < count; i++, o += 8 + tile * tile) tiles.set(`${view.getInt32(o, true)}_${view.getInt32(o + 4, true)}`, o + 8);
   const at = (p: Pt): number => {
     const tx = Math.floor(p.x / size), tz = Math.floor(p.z / size), o = tiles.get(`${tx}_${tz}`);
     if (o === undefined) return 0;
     return buf[o + Math.min(tile - 1, Math.floor((p.z - tz * size) / cell)) * tile + Math.min(tile - 1, Math.floor((p.x - tx * size) / cell))]!;
   };
-  return { built: (p) => (at(p) & BUILT) !== 0, pavement: (p) => (at(p) & PAVEMENT) !== 0, roadway: (p) => (at(p) & ROADWAY) !== 0 };
+  return { terrain, env: { built: (p) => (at(p) & BUILT) !== 0, pavement: (p) => (at(p) & PAVEMENT) !== 0, roadway: (p) => (at(p) & ROADWAY) !== 0 } };
+}
+
+/** Throws unless the raster's terrain stamp is the hash of the world's terrain.bin (`terrain`). */
+export function checkEnvTerrain(stamp: string, terrain: string): void {
+  if (stamp !== terrain) throw new Error(`transit env: the cached city raster was built for another world (terrain ${stamp}, this world's terrain.bin ${terrain}): run the full pipeline into this folder first`);
 }

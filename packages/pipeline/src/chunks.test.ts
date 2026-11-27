@@ -2,12 +2,16 @@ import { NodeIO } from '@gltf-transform/core';
 import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { chunkKey, utmToLocal, type TerrainGrid } from '@nn/shared';
 import { MeshoptDecoder } from 'meshoptimizer';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { expect, test } from 'vitest';
-import { buildChunks, buildCollision, encodeChunkGlb, worldRect, type StreetMeshes } from './chunks.js';
+import { expect, test, vi } from 'vitest';
+import { buildChunks, buildCollision, chunkGeometries, encodeChunkGlb, meshSource, SoupBuilder, worldRect, type StreetMeshes, type StreetName } from './chunks.js';
+import { cropMesh, prepareFlat } from './chunkdrape.js';
+import { drapeMesh } from './drape.js';
 import { boxBuilding } from './fixture.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
+import * as ground from './ground.js';
 import { wallEaves } from '../../../apps/client/src/materials/facade';
 import type { Mesh } from './streets.js';
 
@@ -19,13 +23,18 @@ const twoTris = (y: number): Mesh => ({
   uv: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]),
 });
 const streets = (): StreetMeshes => ({ road: twoTris(0.01), sidewalk: empty(), curb: twoTris(0.12), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty(), water: empty(), bridge: empty(), steel: empty() });
+const collect = async <T>(it: AsyncIterable<T>): Promise<T[]> => {
+  const out: T[] = [];
+  for await (const x of it) out.push(x);
+  return out;
+};
 const buildings = () => [boxBuilding('A', 10, 10, 30, 30, 10, 1), boxBuilding('B', 50, 50, 60, 70, 12), boxBuilding('C', -30, 10, -10, 30, 8, 2)];
 const boundary = [{ x: 0, z: 0 }, { x: 300, z: 0 }, { x: 300, z: 300 }, { x: 0, z: 300 }];
 
 test('chunk key for point', () => expect(chunkKey(-1, 399)).toBe('-1_1'));
 
-test('buildings go to the chunk of their centroid with contiguous, welded vertex ranges', () => {
-  const chunks = buildChunks(buildings(), streets());
+test('buildings go to the chunk of their centroid with contiguous, welded vertex ranges', async () => {
+  const chunks = await buildChunks(buildings(), streets());
   expect(chunks.map((c) => c.key).sort()).toEqual(['-1_0', '0_0', '1_0']);
   const c = chunks.find((k) => k.key === '0_0')!;
   const b = c.buildings!;
@@ -41,8 +50,8 @@ test('buildings go to the chunk of their centroid with contiguous, welded vertex
   expect(chunks.find((k) => k.key === '-1_0')!.buildings!.flags[0]).toBe(2);
 });
 
-test('street triangles are split by triangle centroid, positions stay in world space', () => {
-  const chunks = buildChunks([], streets());
+test('street triangles are split by triangle centroid, positions stay in world space', async () => {
+  const chunks = await buildChunks([], streets());
   expect(chunks.map((c) => c.key).sort()).toEqual(['0_0', '1_0']);
   const far = chunks.find((c) => c.key === '1_0')!;
   expect(far.buildings).toBeUndefined();
@@ -51,25 +60,25 @@ test('street triangles are split by triangle centroid, positions stay in world s
   expect(Array.from(far.streets.road!.indices)).toEqual([0, 1, 2]);
 });
 
-test('street triangles outside the world area are dropped', () => {
-  const chunks = buildChunks([], streets(), {}, { minX: 0, minZ: 0, maxX: 100, maxZ: 100 });
+test('street triangles outside the world area are dropped', async () => {
+  const chunks = await buildChunks([], streets(), {}, { minX: 0, minZ: 0, maxX: 100, maxZ: 100 });
   expect(chunks.map((c) => c.key)).toEqual(['0_0']);
   expect(worldRect(boundary)).toEqual({ minX: -200, minZ: -200, maxX: 500, maxZ: 500 });
 });
 
-test('override entry removes the building from chunk geometry and collision', () => {
+test('override entry removes the building from chunk geometry and collision', async () => {
   const overrides = { B: 'models/b.glb' };
-  const c = buildChunks(buildings(), streets(), overrides).find((k) => k.key === '0_0')!;
+  const c = (await buildChunks(buildings(), streets(), overrides)).find((k) => k.key === '0_0')!;
   expect(c.buildings!.ranges.map((r) => r.id)).toEqual(['A']);
   expect(c.buildings!.positions.length).toBe(20 * 3);
-  const col = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, overrides });
+  const col = await buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, overrides });
   const xs = Array.from({ length: col.vertices.length / 3 }, (_, i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 2]!]);
   expect(xs.some(([x, z]) => x === 50 && z === 50)).toBe(false); // B's corner
   expect(xs.some(([x, z]) => x === 10 && z === 10)).toBe(true); // A's corner
 });
 
-test('collision has buildings, kerbs and a ground rectangle at y=0 over the boundary bbox + 200 m', () => {
-  const col = buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary });
+test('collision has buildings, kerbs and a ground rectangle at y=0 over the boundary bbox + 200 m', async () => {
+  const col = await buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary });
   const n = col.vertices.length / 3;
   const v = (i: number) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!];
   const all = Array.from({ length: n }, (_, i) => v(i));
@@ -84,7 +93,7 @@ test('collision has buildings, kerbs and a ground rectangle at y=0 over the boun
   expect(Array.from(col.boundary)).toEqual([0, 0, 300, 0, 300, 300, 0, 300]);
 });
 
-test('collision includes the walkable sidewalk surface at y = 0.12, welded with the kerb, without degenerate triangles', () => {
+test('collision includes the walkable sidewalk surface at y = 0.12, welded with the kerb, without degenerate triangles', async () => {
   const kerb = twoTris(0.12);
   // sidewalk shares the kerb triangle's edge (20,10)-(10,20) and adds one degenerate (collinear) triangle
   const sidewalk: Mesh = {
@@ -92,8 +101,8 @@ test('collision includes the walkable sidewalk surface at y = 0.12, welded with 
     indices: new Uint32Array([0, 1, 2, 3, 4, 5]),
     uv: new Float32Array(12),
   };
-  const kerbOnly = buildCollision({ buildings: [], curb: kerb, sidewalk: empty(), boundary });
-  const col = buildCollision({ buildings: [], curb: kerb, sidewalk, boundary });
+  const kerbOnly = await buildCollision({ buildings: [], curb: kerb, sidewalk: empty(), boundary });
+  const col = await buildCollision({ buildings: [], curb: kerb, sidewalk, boundary });
   expect(col.indices.length - kerbOnly.indices.length).toBe(3); // one sidewalk triangle; the collinear one is dropped
   const tri = Array.from(col.indices.slice(-9, -6), (i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!]);
   expect(tri).toContainEqual([20, Math.fround(0.12), 20]);
@@ -101,14 +110,68 @@ test('collision includes the walkable sidewalk surface at y = 0.12, welded with 
   expect(col.vertices.length - kerbOnly.vertices.length).toBe(3 * 1); // only (20, 0.12, 20) is new: the shared edge is welded
 });
 
-test('collision can drop backdrop roofs', () => {
-  const full = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary });
-  const lean = buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, dropBackdropRoofs: true });
+/** The collision welder as it was, with string keys: what SoupBuilder must reproduce exactly. */
+function stringKeyedSoup(input: { p: ArrayLike<number>; tris: number[] }[]): { vertices: Float32Array; indices: Uint32Array } {
+  const seen = new Map<string, number>();
+  const vertices: number[] = [], indices: number[] = [];
+  const vertex = (x: number, y: number, z: number) => {
+    const key = `${x},${y},${z}`;
+    let i = seen.get(key);
+    if (i === undefined) {
+      i = vertices.length / 3;
+      seen.set(key, i);
+      vertices.push(x, y, z);
+    }
+    return i;
+  };
+  for (const { p, tris } of input) {
+    for (let t = 0; t < tris.length; t += 3) {
+      const [a, b, c] = [tris[t]!, tris[t + 1]!, tris[t + 2]!];
+      const P = (i: number, k: number) => p[i * 3 + k]!;
+      const ux = P(b, 0) - P(a, 0), uy = P(b, 1) - P(a, 1), uz = P(b, 2) - P(a, 2);
+      const vx = P(c, 0) - P(a, 0), vy = P(c, 1) - P(a, 1), vz = P(c, 2) - P(a, 2);
+      if (Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) < 1e-6) continue;
+      const ia = vertex(P(a, 0), P(a, 1), P(a, 2)), ib = vertex(P(b, 0), P(b, 1), P(b, 2)), ic = vertex(P(c, 0), P(c, 1), P(c, 2));
+      if (ia !== ib && ib !== ic && ia !== ic) indices.push(ia, ib, ic);
+    }
+  }
+  return { vertices: Float32Array.from(vertices), indices: Uint32Array.from(indices) };
+}
+
+test('SoupBuilder welds exactly the points the string keys welded, -0 with 0 and NaN with NaN, in the same order', () => {
+  // few distinct values, so most points repeat; doubles that differ only below float32 precision stay apart
+  const values = [0, -0, 1, -1, 0.1, Math.fround(0.1), 2.5, 1e-7, -1e-7, 1000.125, NaN, Infinity, -Infinity, 3, 4, 5, 6, 7, 8, 9];
+  let seed = 12345;
+  const rand = (n: number) => ((seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 8) % n;
+  const input: { p: ArrayLike<number>; tris: number[] }[] = [];
+  for (let s = 0; s < 200; s++) {
+    const n = 30 + rand(30);
+    const xs = Array.from({ length: n * 3 }, () => values[rand(values.length)]!);
+    const p = s % 2 ? Float32Array.from(xs) : xs; // float32 input (as in the pipeline) and plain doubles
+    input.push({ p, tris: Array.from({ length: 3 * (20 + rand(40)) }, () => rand(n)) });
+  }
+  const want = stringKeyedSoup(input);
+  const soup = new SoupBuilder();
+  for (const { p, tris } of input) for (let t = 0; t < tris.length; t += 3) soup.tri(p, tris[t]!, tris[t + 1]!, tris[t + 2]!);
+  const got = soup.build();
+  // (the data does exercise the welder, past the first growth of its arrays and hash table)
+  expect(want.vertices.length / 3).toBeGreaterThan(2100);
+  expect(want.indices.length / 3).toBeGreaterThan(5000);
+  expect(got.indices).toEqual(want.indices);
+  // bit for bit, so a -0 kept as -0 (the first point of a welded pair) counts
+  expect(new Uint8Array(got.vertices.buffer)).toEqual(new Uint8Array(want.vertices.buffer));
+  const one = new SoupBuilder();
+  expect([one.vertex(0, -0, 0), one.vertex(-0, 0, -0), one.vertex(NaN, 1, 1), one.vertex(NaN, 1, 1), one.vertex(0.1, 0, 0), one.vertex(Math.fround(0.1), 0, 0)]).toEqual([0, 0, 1, 1, 2, 3]);
+});
+
+test('collision can drop backdrop roofs', async () => {
+  const full = await buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary });
+  const lean = await buildCollision({ buildings: buildings(), curb: empty(), sidewalk: empty(), boundary, dropBackdropRoofs: true });
   expect(full.indices.length - lean.indices.length).toBe(2 * 3); // C's two roof triangles
 });
 
 test('chunk GLB is meshopt-compressed and keeps custom attributes and building ranges', async () => {
-  const chunk = buildChunks(buildings(), streets()).find((k) => k.key === '0_0')!;
+  const chunk = (await buildChunks(buildings(), streets())).find((k) => k.key === '0_0')!;
   const glb = await encodeChunkGlb(chunk);
   const json = JSON.parse(new TextDecoder().decode(glb.subarray(20, 20 + new DataView(glb.buffer, glb.byteOffset).getUint32(12, true))));
   expect(json.extensionsUsed).toContain('EXT_meshopt_compression');
@@ -138,8 +201,8 @@ const terrain = (): TerrainGrid => {
 };
 const noStreets = (): StreetMeshes => ({ road: empty(), sidewalk: empty(), curb: empty(), trackbed: empty(), tram: empty(), green: empty(), squares: empty(), markings: empty(), parking: empty(), water: empty(), bridge: empty(), steel: empty() });
 
-test('terrain creates ground-only chunks', () => {
-  const chunks = buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain());
+test('terrain creates ground-only chunks', async () => {
+  const chunks = await buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain());
   expect(chunks.map((c) => c.key)).toEqual(['0_0', '1_0', '0_1', '1_1']);
   for (const c of chunks) {
     expect(c.ground!.positions.length / 3).toBe(201 * 201);
@@ -147,12 +210,12 @@ test('terrain creates ground-only chunks', () => {
     expect(c.streets).toEqual({});
   }
   // existing chunks get ground too; no terrain → no ground
-  expect(buildChunks(buildings(), streets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain()).find((c) => c.key === '0_0')!.ground).toBeDefined();
-  expect(buildChunks(buildings(), streets()).every((c) => c.ground === undefined)).toBe(true);
+  expect((await buildChunks(buildings(), streets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain())).find((c) => c.key === '0_0')!.ground).toBeDefined();
+  expect((await buildChunks(buildings(), streets())).every((c) => c.ground === undefined)).toBe(true);
 });
 
 test('glb carries ground with normals', async () => {
-  const chunk = buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 200, maxZ: 200 }, terrain())[0]!;
+  const chunk = (await buildChunks([], noStreets(), {}, { minX: 0, minZ: 0, maxX: 200, maxZ: 200 }, terrain()))[0]!;
   await MeshoptDecoder.ready;
   const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
   const doc = await io.readBinary(await encodeChunkGlb(chunk));
@@ -165,24 +228,24 @@ test('glb carries ground with normals', async () => {
   expect(Array.from(prim.getIndices()!.getArray()!)).toEqual(Array.from(chunk.ground!.indices));
 });
 
-test('collision without ground rectangle when terrain is given', () => {
-  const col = buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary, terrain: terrain() });
+test('collision without ground rectangle when terrain is given', async () => {
+  const col = await buildCollision({ buildings: buildings(), curb: streets().curb, sidewalk: empty(), boundary, terrain: terrain() });
   const all = Array.from({ length: col.vertices.length / 3 }, (_, i) => [col.vertices[i * 3]!, col.vertices[i * 3 + 1]!, col.vertices[i * 3 + 2]!]);
   expect(all).not.toContainEqual([-200, 0, -200]);
   expect(all).not.toContainEqual([500, 0, 500]);
   expect(col.indices.length).toBe((30 + 2) * 3); // 3 boxes × 10 + 2 kerb
 });
 
-test('plinths do not change the client eave heights of a merged building batch', () => {
+test('plinths do not change the client eave heights of a merged building batch', async () => {
   const gml = readFileSync(new URL('../fixtures/gable-house.gml', import.meta.url), 'utf8');
   const b = parseCityGml(gml)[0]!;
-  const eaves = (m: BuildingMesh) => {
-    const [chunk] = buildChunks([m], streets()).filter((c) => c.buildings);
+  const eaves = async (m: BuildingMesh) => {
+    const [chunk] = (await buildChunks([m], streets())).filter((c) => c.buildings);
     const batch = chunk!.buildings!;
     const e = wallEaves(batch.indices, batch.kind, batch.facadeUv, batch.positions.length / 3, batch.positions);
     return [...new Set([...e].filter((_, i) => batch.kind[i] === 0))].sort((p, q) => p - q);
   };
-  const flat = eaves(buildBuildingMesh(b)!);
+  const flat = await eaves(buildBuildingMesh(b)!);
   // terrain falling 1.5 m across the house: plinths reach 1.8 m below the base
   const pts = [[356000, 5647000], [356010, 5647008]].map(([e, n]) => utmToLocal(e!, n!));
   const x0 = Math.floor(Math.min(pts[0]!.x, pts[1]!.x)) - 3, z0 = Math.floor(Math.min(pts[0]!.z, pts[1]!.z)) - 3;
@@ -191,13 +254,13 @@ test('plinths do not change the client eave heights of a merged building batch',
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) heights[r * cols + c] = 5 - (1.5 * (x0 + c - xa)) / (xb - xa);
   const plinthed = buildBuildingMesh(b, { datum: 35, terrain: { x0, z0, cols, rows, datum: 35, heights } })!;
   expect(Math.min(...plinthed.facadeUv.filter((_, i) => i % 2 === 1))).toBeLessThan(-1);
-  expect(eaves(plinthed)).toEqual(flat);
+  expect(await eaves(plinthed)).toEqual(flat);
   expect(flat).not.toContain(0);
 });
 
 test('markings keep their per-vertex _MARK through chunk split and GLB', async () => {
   const markings = { ...twoTris(0.014), mark: new Float32Array([0, 1, 0, 1, 1, 0]) };
-  const c = buildChunks([], { ...streets(), markings }).find((k) => k.key === '1_0')!;
+  const c = (await buildChunks([], { ...streets(), markings })).find((k) => k.key === '1_0')!;
   expect(Array.from(c.streets.markings!.mark!)).toEqual([1, 0, 1]); // first-use order 3, 5, 4
   await MeshoptDecoder.ready;
   const io = new NodeIO().registerExtensions([EXTMeshoptCompression]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
@@ -205,4 +268,83 @@ test('markings keep their per-vertex _MARK through chunk split and GLB', async (
   const prim = doc.getRoot().listMeshes().find((m) => m.getName() === 'markings')!.listPrimitives()[0]!;
   expect(prim.listSemantics().sort()).toEqual(['POSITION', 'TEXCOORD_0', '_MARK']);
   expect(Array.from(prim.getAttribute('_MARK')!.getArray()!)).toEqual([1, 0, 1]);
+});
+
+/**
+ * A content hash of a whole chunk: every field, keys sorted, each typed array by its type, length and bytes. Frozen
+ * values of it pin the output as it was before the chunk-by-chunk build (not against buildChunks, which wraps it).
+ */
+function chunkDigest(chunk: unknown): string {
+  const h = createHash('sha256');
+  const walk = (v: unknown): void => {
+    if (ArrayBuffer.isView(v)) {
+      h.update(`${v.constructor.name}[${(v as unknown as ArrayLike<number>).length}]`).update(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+    } else if (Array.isArray(v)) {
+      h.update('[');
+      v.forEach(walk);
+      h.update(']');
+    } else if (v && typeof v === 'object') {
+      for (const k of Object.keys(v).sort()) { h.update(`{${k}:`); walk((v as Record<string, unknown>)[k]); h.update('}'); }
+    } else h.update(`${typeof v}:${String(v)};`);
+  };
+  walk(chunk);
+  return h.digest('hex').slice(0, 16);
+}
+
+test('chunkGeometries yields the chunks as frozen before the chunk-by-chunk build: same keys in the same order, identical typed arrays', async () => {
+  const area = { minX: 0, minZ: 0, maxX: 400, maxZ: 400 };
+  const extra = { road: twoTris(0.5), tram: twoTris(0.6) }; // bridge-deck pieces: appended to road, alone in tram
+  const yielded = await collect(chunkGeometries(meshSource(buildings()), streets(), { B: 'models/b.glb' }, area, terrain(), extra));
+  // union of building chunks (-1_0 lies outside the area), street chunks and ground squares, by (iz, ix)
+  expect(yielded.map((c) => c.key)).toEqual(['-1_0', '0_0', '1_0', '0_1', '1_1']);
+  // (the digests of main's buildChunks for this fixture, before chunkGeometries existed)
+  expect(Object.fromEntries(yielded.map((c) => [c.key, chunkDigest(c)]))).toEqual({
+    '-1_0': '3a49a4203b8dfc79', '0_0': '32965cebc9126320', '1_0': 'ff517f1540f7bd74', '0_1': '35db6c3a791e8c63', '1_1': '19ab07fcf3470b37',
+  });
+  const c = yielded.find((k) => k.key === '1_0')!;
+  expect(c.ground).toEqual(ground.groundMesh(terrain(), 1, 0));
+  expect(Array.from(c.streets.road!.positions)).toEqual([210, 0.01, 10, 210, 0.01, 20, 220, 0.01, 10, 210, 0.5, 10, 210, 0.5, 20, 220, 0.5, 10].map(Math.fround));
+  expect(Array.from(c.streets.road!.indices)).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(Array.from(c.streets.tram!.indices)).toEqual([0, 1, 2]);
+  expect(yielded.find((k) => k.key === '0_0')!.buildings!.ranges.map((r) => r.id)).toEqual(['A']);
+  expect(yielded.find((k) => k.key === '-1_0')!.ground).toBeUndefined();
+});
+
+test('the ground mesh of a chunk is built when the chunk is yielded, not before', async () => {
+  const spy = vi.spyOn(ground, 'groundMesh');
+  try {
+    const it = chunkGeometries(meshSource([]), noStreets(), {}, { minX: 0, minZ: 0, maxX: 400, maxZ: 400 }, terrain(), {});
+    expect(spy).toHaveBeenCalledTimes(0);
+    expect((await it.next()).value!.key).toBe('0_0');
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((await it.next()).value!.key).toBe('1_0');
+    expect(spy).toHaveBeenCalledTimes(2);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+test('draped sources give the chunks of the globally draped meshes: same keys, same street meshes, drape counts', async () => {
+  // terrain over x ∈ [0, 400]: chunks 2_* have no ground
+  const area = { minX: 0, minZ: 0, maxX: 800, maxZ: 400 };
+  // the big triangle's bbox reaches chunk 2_1, the triangle itself does not (x + z ≤ 600); 2_0 gets pieces of it
+  const big: Mesh = {
+    positions: new Float32Array([250, 0.01, 150, 250, 0.01, 350, 450, 0.01, 150]),
+    indices: new Uint32Array([0, 1, 2]),
+    uv: new Float32Array([0, 0, 0, 1, 1, 0]),
+  };
+  const flat = { ...noStreets(), road: twoTris(0.01), green: big };
+  const extra = { road: twoTris(0.5) };
+  const t = terrain();
+  const global = { ...flat };
+  for (const name of ['road', 'green'] as const) global[name] = drapeMesh(cropMesh(flat[name], area), t);
+  const expected = await collect(chunkGeometries(meshSource(buildings()), global, {}, area, t, extra));
+  const counts: Partial<Record<StreetName, number>> = {};
+  const { road: _r, green: _g, ...rest } = flat;
+  const got = await collect(chunkGeometries(meshSource(buildings()), rest, {}, area, t, extra, { road: prepareFlat(flat.road, area), green: prepareFlat(big, area) }, counts));
+  expect(got.map((c) => c.key)).toEqual(expected.map((c) => c.key));
+  expect(got.map((c) => c.key)).toContain('2_0');
+  expect(got.map((c) => c.key)).not.toContain('2_1');
+  expect(got).toEqual(expected);
+  expect(counts).toEqual({ road: global.road.indices.length / 3, green: global.green.indices.length / 3 });
 });

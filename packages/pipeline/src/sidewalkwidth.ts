@@ -1,5 +1,5 @@
-import type { BuildingMesh } from './buildings.js';
-import { footprintContains, footprintOf } from './footprint.js';
+import type { BuildingRecord } from './buildingstore.js';
+import { footprintContains } from './footprint.js';
 import type { Pt, Road } from './osm.js';
 import { edgeAt } from './roadprofile.js';
 import { cumulative, dedupe, DRIVABLE } from './polyline.js';
@@ -13,12 +13,12 @@ const NEAR = 10; // a facade closer than this to the kerb defines the building l
 const CELL = 50;
 
 /** Uniform grid over building footprint bboxes, for the "buildings near a point" query. */
-export type BuildingGrid = { near(p: Pt, r: number): BuildingMesh[] };
+export type BuildingGrid = { near(p: Pt, r: number): BuildingRecord[] };
 
-export function buildingGrid(buildings: BuildingMesh[]): BuildingGrid {
-  const cells = new Map<string, BuildingMesh[]>();
+export function buildingGrid(buildings: readonly BuildingRecord[]): BuildingGrid {
+  const cells = new Map<string, BuildingRecord[]>();
   for (const b of buildings) {
-    const fp = footprintOf(b);
+    const fp = b.footprint;
     if (!fp.tris.length) continue;
     for (let i = Math.floor(fp.minX / CELL); i <= Math.floor(fp.maxX / CELL); i++) {
       for (let k = Math.floor(fp.minZ / CELL); k <= Math.floor(fp.maxZ / CELL); k++) {
@@ -31,11 +31,11 @@ export function buildingGrid(buildings: BuildingMesh[]): BuildingGrid {
   }
   return {
     near(p, r) {
-      const out = new Set<BuildingMesh>();
+      const out = new Set<BuildingRecord>();
       for (let i = Math.floor((p.x - r) / CELL); i <= Math.floor((p.x + r) / CELL); i++) {
         for (let k = Math.floor((p.z - r) / CELL); k <= Math.floor((p.z + r) / CELL); k++) {
           for (const b of cells.get(`${i},${k}`) ?? []) {
-            const fp = footprintOf(b);
+            const fp = b.footprint;
             if (p.x >= fp.minX - r && p.x <= fp.maxX + r && p.z >= fp.minZ - r && p.z <= fp.maxZ + r) out.add(b);
           }
         }
@@ -51,12 +51,12 @@ export function buildingGrid(buildings: BuildingMesh[]): BuildingGrid {
  * Infinity if none. Unlike a single ray it sees a facade that steps forward beside k and does not pass through gaps
  * narrower than 2a.
  */
-export function facadeDistance(buildings: BuildingMesh[], k: Pt, d: Pt, a: number, tmax: number): number {
+export function facadeDistance(buildings: readonly BuildingRecord[], k: Pt, d: Pt, a: number, tmax: number): number {
   const tx = -d.z, tz = d.x; // lateral axis
   let best = Infinity;
   for (const b of buildings) {
     if (footprintContains(b, k.x, k.z)) return 0;
-    const t = footprintOf(b).tris;
+    const t = b.footprint.tris;
     for (let i = 0; i < t.length; i += 6) {
       for (let e = 0; e < 3; e++) {
         const ax = t[i + e * 2]! - k.x, az = t[i + e * 2 + 1]! - k.z;
@@ -117,7 +117,7 @@ const median3 = (v: number[]): number[] =>
  * facade within 10 m of the kerb at all. Smoothed with a median over 3 samples on kerb + width (the outer edge's
  * distance from the centre line, so kerb ramps keep the facade line) that may only narrow a sample, never widen it.
  */
-export function sidewalkWidths(road: Road, buildings: BuildingMesh[], grid: BuildingGrid = buildingGrid(buildings)): SidewalkWidths {
+export function sidewalkWidths(road: Road, buildings: readonly BuildingRecord[], grid: BuildingGrid = buildingGrid(buildings)): SidewalkWidths {
   const pts = dedupe(road.points);
   const cum = cumulative(pts);
   const s = sampleArcs(cum, SIDEWALK_STEP);
@@ -180,7 +180,7 @@ function simplify(w: SidewalkWidths, keep: ReadonlySet<number>): SidewalkWidths 
 }
 
 /** Sidewalk widths of every drivable way, computed once from one building set (street meshes, trees and metrics share them). */
-export function allSidewalkWidths(roads: Road[], buildings: BuildingMesh[]): Map<Road, SidewalkWidths> {
+export function allSidewalkWidths(roads: Road[], buildings: readonly BuildingRecord[]): Map<Road, SidewalkWidths> {
   const grid = buildingGrid(buildings);
   const out = new Map<Road, SidewalkWidths>();
   for (const r of roads) if (DRIVABLE.has(r.kind) && dedupe(r.points).length >= 2) out.set(r, sidewalkWidths(r, buildings, grid));

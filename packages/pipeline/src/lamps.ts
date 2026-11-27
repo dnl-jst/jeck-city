@@ -1,4 +1,4 @@
-import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { footprintContains } from './footprint.js';
 import type { OsmFeatures, Pt } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, junctions, pointAt } from './polyline.js';
@@ -30,7 +30,7 @@ const inBox = (p: Pt, b: Box) => p.x >= b.minX && p.x <= b.maxX && p.z >= b.minZ
  * OSM lamp (20 m), a junction (6 m), a tram track, on another road's carriageway or inside a building footprint.
  * Deterministic: depends only on the input order. OSM lamps are not included.
  */
-export function generatedLamps(f: OsmFeatures, buildings: BuildingMesh[]): Pt[] {
+export function generatedLamps(f: OsmFeatures, buildings: readonly BuildingRecord[]): Pt[] {
   const roads = f.roads.filter((r) => DRIVABLE.has(r.kind)).map((r) => ({ r, pts: dedupe(r.points) })).filter((x) => x.pts.length >= 2);
   const carriageways = f.roads
     .filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service')

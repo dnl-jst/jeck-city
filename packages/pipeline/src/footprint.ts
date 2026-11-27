@@ -2,13 +2,15 @@ import type { BuildingMesh } from './buildings.js';
 import type { Pt } from './osm.js';
 
 export type Footprint = { minX: number; minZ: number; maxX: number; maxZ: number; tris: number[] };
-const cache = new WeakMap<BuildingMesh, Footprint>();
+/** Anything that carries its footprint (a BuildingRecord). */
+type Footprinted = { footprint: Footprint };
 
-/** Roof triangles projected onto x/z (LoD2 roofs cover the footprint, flat x,z triples) plus their bbox. */
+/**
+ * Roof triangles projected onto x/z (LoD2 roofs cover the footprint, flat x,z triples) plus their bbox. A triangle's
+ * kind is read from its first vertex: buildBuildingMesh gives all three the same kind (map.ts relies on that too).
+ */
 export function footprintOf(b: BuildingMesh): Footprint {
-  let fp = cache.get(b);
-  if (fp) return fp;
-  fp = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity, tris: [] };
+  const fp: Footprint = { minX: Infinity, minZ: Infinity, maxX: -Infinity, maxZ: -Infinity, tris: [] };
   const p = b.positions;
   for (let v = 0; v < b.kind.length; v += 3) {
     if (b.kind[v] !== 1) continue;
@@ -19,7 +21,6 @@ export function footprintOf(b: BuildingMesh): Footprint {
       fp.minZ = Math.min(fp.minZ, z); fp.maxZ = Math.max(fp.maxZ, z);
     }
   }
-  cache.set(b, fp);
   return fp;
 }
 
@@ -34,19 +35,19 @@ function inTri(t: number[], i: number, x: number, z: number): boolean {
 }
 
 /** Whether (x, z) lies under the building's roof, i.e. inside its footprint. */
-export function footprintContains(b: BuildingMesh, x: number, z: number): boolean {
-  const fp = footprintOf(b);
+export function footprintContains(b: Footprinted, x: number, z: number): boolean {
+  const fp = b.footprint;
   if (x < fp.minX || x > fp.maxX || z < fp.minZ || z > fp.maxZ) return false;
   for (let i = 0; i < fp.tris.length; i += 6) if (inTri(fp.tris, i, x, z)) return true;
   return false;
 }
 
-export const insideAnyFootprint = (p: Pt, buildings: BuildingMesh[]): boolean => buildings.some((b) => footprintContains(b, p.x, p.z));
+export const insideAnyFootprint = (p: Pt, buildings: readonly Footprinted[]): boolean => buildings.some((b) => footprintContains(b, p.x, p.z));
 
 /** Horizontal distance from (x, z) to the footprint: 0 inside, else to the nearest roof-triangle edge. */
-export function footprintDistance(b: BuildingMesh, x: number, z: number): number {
+export function footprintDistance(b: Footprinted, x: number, z: number): number {
   if (footprintContains(b, x, z)) return 0;
-  const t = footprintOf(b).tris;
+  const t = b.footprint.tris;
   let best = Infinity;
   for (let i = 0; i < t.length; i += 6) {
     for (let k = 0; k < 3; k++) {

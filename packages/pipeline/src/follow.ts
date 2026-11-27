@@ -40,7 +40,7 @@ export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, toleranc
     }
     remap[v] = id;
   }
-  const idx: number[] = [];
+  const idx = new Triangles();
   const mids = new Map<number, number>();
   const ek = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
   const max2 = maxEdge * maxEdge;
@@ -94,7 +94,7 @@ export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, toleranc
       const e = [len2(t3[0], t3[1]), len2(t3[1], t3[2]), len2(t3[2], t3[0])];
       const k = longest(e);
       if (e[k]! > max2) halve(t3, k, stack);
-      else idx.push(...t3);
+      else idx.push(t3[0], t3[1], t3[2]);
     }
   };
   for (let i = 0; i < m.indices.length; i += 3) {
@@ -103,7 +103,7 @@ export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, toleranc
       const tri = stack.pop()!;
       const split = [needs(tri[0], tri[1]), needs(tri[1], tri[2]), needs(tri[2], tri[0])];
       const n = split.filter(Boolean).length;
-      if (n === 0) { idx.push(...tri); continue; }
+      if (n === 0) { idx.push(tri[0], tri[1], tri[2]); continue; }
       if (n === 3) { halve(tri, longest([len2(tri[0], tri[1]), len2(tri[1], tri[2]), len2(tri[2], tri[0])]), stack); continue; }
       if (n === 1) {
         // fan from the corner opposite the cut edge p → q
@@ -131,54 +131,100 @@ export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, toleranc
     }
   }
 
-  let tris: Tri[] = [];
-  for (let i = 0; i < idx.length; i += 3) tris.push([idx[i]!, idx[i + 1]!, idx[i + 2]!]);
-  if (tolerance !== Infinity) tris = refine(tris);
+  const tris = tolerance === Infinity ? idx.done() : refine(idx.done());
   const out = Float32Array.from(pos);
   for (let v = 0; v < out.length / 3; v++) out[v * 3 + 1] = pos[v * 3 + 1]! + h(pos[v * 3]!, pos[v * 3 + 2]!);
-  return { positions: out, uv: Float32Array.from(uv), indices: Uint32Array.from(tris.flat()) };
+  return { positions: out, uv: Float32Array.from(uv), indices: tris };
 
-  /** The 2D-adaptive rounds (see above). */
-  function refine(start: Tri[]): Tri[] {
+  /**
+   * The 2D-adaptive rounds (see above), on flat vertex triples: millions of triangles, so no object per triangle (the
+   * per-round garbage of those set the pipeline's peak memory).
+   */
+  function refine(start: Uint32Array): Uint32Array {
     const hv = (v: number) => h(pos[v * 3]!, pos[v * 3 + 2]!);
-    const dev = ([a, b, c]: Tri) => triangleDeviation(t, pos[a * 3]!, pos[a * 3 + 2]!, hv(a), pos[b * 3]!, pos[b * 3 + 2]!, hv(b), pos[c * 3]!, pos[c * 3 + 2]!, hv(c)).dev;
-    const edgesOf = (tri: Tri) => [0, 1, 2].map((k) => ({ k, key: ek(tri[k]!, tri[(k + 1) % 3]!), l: len2(tri[k]!, tri[(k + 1) % 3]!) }));
-    const longestOf = (tri: Tri) => edgesOf(tri).reduce((p, q) => (q.l > p.l ? q : p));
-    let cur = start.map((tri) => ({ tri, ok: false }));
+    const dev = (a: number, b: number, c: number) => triangleDeviation(t, pos[a * 3]!, pos[a * 3 + 2]!, hv(a), pos[b * 3]!, pos[b * 3 + 2]!, hv(b), pos[c * 3]!, pos[c * 3 + 2]!, hv(c)).dev;
+    // the edges of triangle (a, b, c): k = 0: a → b, 1: b → c, 2: c → a
+    const ends = (tri: ArrayLike<number>, o: number, k: number): [number, number] => [tri[o + k]!, tri[o + ((k + 1) % 3)]!];
+    /**
+     * Of the edges k (in k order) of the triangle at o that pass `use`, the first longest; -1 only if none passes. Like
+     * the reduce it replaces, it starts from the first edge that passes, so a NaN length can never give -1.
+     */
+    const longestEdge = (tri: ArrayLike<number>, o: number, use: (key: number) => boolean): number => {
+      let best = -1, bestL = 0;
+      for (let k = 0; k < 3; k++) {
+        const [p, q] = ends(tri, o, k);
+        if (!use(ek(p, q))) continue;
+        const l = len2(p, q);
+        if (best < 0 || l > bestL) { best = k; bestL = l; }
+      }
+      return best;
+    };
+    const any = () => true;
+    let cur = start, ok = new Uint8Array(start.length / 3);
     for (let round = 0; round < 40; round++) {
       const marked = new Set<number>();
-      for (const c of cur) {
-        if (c.ok) continue;
-        const L = longestOf(c.tri);
-        if (L.l > min2 && dev(c.tri) > tolerance) marked.add(L.key);
-        else c.ok = true; // stays ok until it is split
+      const isMarked = (key: number) => marked.has(key);
+      for (let c = 0; c < ok.length; c++) {
+        if (ok[c]) continue;
+        const o = c * 3, k = longestEdge(cur, o, any);
+        const [p, q] = ends(cur, o, k);
+        if (len2(p, q) > min2 && dev(cur[o]!, cur[o + 1]!, cur[o + 2]!) > tolerance) marked.add(ek(p, q));
+        else ok[c] = 1; // stays ok until it is split
       }
       if (!marked.size) break;
       // closure: whoever has a marked edge splits its longest edge first
       for (let changed = true; changed;) {
         changed = false;
-        for (const c of cur) {
-          const e = edgesOf(c.tri);
-          if (!e.some((x) => marked.has(x.key))) continue;
-          const L = e.reduce((p, q) => (q.l > p.l ? q : p));
-          if (!marked.has(L.key)) { marked.add(L.key); changed = true; }
+        for (let o = 0; o < cur.length; o += 3) {
+          if (longestEdge(cur, o, isMarked) < 0) continue;
+          const [p, q] = ends(cur, o, longestEdge(cur, o, any));
+          if (!marked.has(ek(p, q))) { marked.add(ek(p, q)); changed = true; }
         }
       }
-      const next: { tri: Tri; ok: boolean }[] = [];
-      for (const c of cur) {
-        const stack: Tri[] = [c.tri];
+      const next = new Triangles(), nextOk: number[] = [];
+      const stack: number[] = [];
+      for (let c = 0; c < ok.length; c++) {
+        stack.push(cur[c * 3]!, cur[c * 3 + 1]!, cur[c * 3 + 2]!);
         let split = false;
         while (stack.length) {
-          const tri = stack.pop()!;
-          const e = edgesOf(tri).filter((x) => marked.has(x.key));
-          if (!e.length) { next.push({ tri, ok: c.ok && !split }); continue; }
+          const o = stack.length - 3, k = longestEdge(stack, o, isMarked);
+          if (k < 0) {
+            next.push(stack[o]!, stack[o + 1]!, stack[o + 2]!);
+            nextOk.push(ok[c] && !split ? 1 : 0);
+            stack.length = o;
+            continue;
+          }
           split = true;
-          halve(tri, e.reduce((p, q) => (q.l > p.l ? q : p)).k, stack);
+          // halve at edge k: [p, s, r] below [s, q, r], so [s, q, r] is taken first
+          const p = stack[o + k]!, q = stack[o + ((k + 1) % 3)]!, r = stack[o + ((k + 2) % 3)]!;
+          const m = mid(p, q);
+          stack.length = o;
+          stack.push(p, m, r, m, q, r);
         }
       }
-      cur = next;
+      cur = next.done();
+      ok = Uint8Array.from(nextOk);
     }
-    return cur.map((c) => c.tri);
+    return cur;
+  }
+}
+
+/** A growing list of vertex triples. */
+class Triangles {
+  private a = new Uint32Array(3 * 1024);
+  private n = 0;
+  push(p: number, q: number, r: number): void {
+    if (this.n + 3 > this.a.length) {
+      const a = new Uint32Array(this.a.length * 2);
+      a.set(this.a);
+      this.a = a;
+    }
+    this.a[this.n++] = p;
+    this.a[this.n++] = q;
+    this.a[this.n++] = r;
+  }
+  done(): Uint32Array {
+    return this.a.slice(0, this.n);
   }
 }
 

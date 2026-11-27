@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { expect, test } from 'vitest';
 import { heightAt, type TerrainGrid } from '@nn/shared';
 import { drapeMesh } from './drape.js';
@@ -166,6 +167,41 @@ test('triangleDeviation is the exact maximum over the triangle (dense sampling n
   // a kerb face whose corners float32 rounding moved off their line counts as vertical, not as a wild plane
   expect(triangleDeviation(hilly, 0, 0, 0, 1, 1.00001, 5, 2, 2, 0).dev).toBe(0);
 });
+
+/** A street-corner-like mesh: 24 kerb strips at different angles and widths, sharing no vertices (as on the hilly grid). */
+function strips(): Mesh {
+  const pos: number[] = [], uv: number[] = [], idx: number[] = [];
+  for (let i = 0; i < 24; i++) {
+    const a = -0.5 + i / 23, len = 18 + (i % 5) * 4, w = 0.3 + (i % 3) * 1.1;
+    const x0 = 5 + (i % 6) * 18, z0 = -6 + Math.floor(i / 6) * 5;
+    const dx = Math.cos(a), dz = Math.sin(a), nx = -dz * w, nz = dx * w;
+    const base = pos.length / 3;
+    for (let k = 0; k <= 3; k++) {
+      const x = x0 + (dx * len * k) / 3, z = z0 + (dz * len * k) / 3;
+      pos.push(x, 0.12, z, x + nx, 0.12, z + nz);
+      uv.push(k, 0, k, 1);
+    }
+    for (let k = 0; k < 3; k++) idx.push(base + 2 * k, base + 2 * k + 1, base + 2 * k + 2, base + 2 * k + 2, base + 2 * k + 1, base + 2 * k + 3);
+  }
+  return { positions: Float32Array.from(pos), uv: Float32Array.from(uv), indices: Uint32Array.from(idx) };
+}
+
+test('followTerrain output is frozen: byte for byte what it was before its rounds moved to typed arrays', () => {
+  const digest = (m: Mesh) => {
+    const h = createHash('sha256');
+    for (const a of [m.positions, m.uv, m.indices]) h.update(new Uint8Array(a.buffer, a.byteOffset, a.byteLength));
+    return `${m.indices.length / 3}:${h.digest('hex').slice(0, 16)}`;
+  };
+  const got = [
+    ...CONFIGS.map(run),
+    followTerrain(strips(), hilly, 8, 0.02, 0.05),
+    followTerrain(strips(), street, 8, 0.02, 0.05),
+    followTerrain(strips(), hilly, 3),
+  ].map(digest);
+  expect(got).toEqual(FROZEN);
+});
+/** triangles:digest of each case above, from the implementation before (commit 029c953). */
+const FROZEN = ['240:9f8642e2f2949585', '154:b7d44f6f7e5fc9b9', '10184:11c0bedb70eda95a', '30331:eb778fe336f40b3a', '344:e84e78a20831a250', '1044:f5ed20a9e6f6b24a'];
 
 /** y of the (upward-facing) coarse triangle containing (x, z) in xz, undefined if none. */
 function coarseY(m: Mesh, x: number, z: number): number | undefined {

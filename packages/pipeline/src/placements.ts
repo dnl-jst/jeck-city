@@ -1,5 +1,6 @@
 import { carTypeFor, SIGN_Y, type WorldManifest } from '@nn/shared';
 import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { FLAG_BACKDROP } from './chunks.js';
 import { footprintDistance } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
@@ -10,8 +11,8 @@ export const BACKDROP_DISTANCE = 150;
 const SHOP_BUILDING_DISTANCE = 15;
 
 /** Centroid inside the boundary: kept as is; outside but ≤ 150 m away: flags |= 2 (backdrop); farther: dropped. */
-export function classifyBuildings(buildings: BuildingMesh[], boundary: Pt[]): BuildingMesh[] {
-  const out: BuildingMesh[] = [];
+export function classifyBuildings<B extends { centroid: Pt; flags: number }>(buildings: B[], boundary: Pt[]): B[] {
+  const out: B[] = [];
   for (const b of buildings) {
     if (pointInPolygon(b.centroid, boundary)) out.push(b);
     else if (distToPolyline(b.centroid, boundary) <= BACKDROP_DISTANCE) out.push({ ...b, flags: b.flags | FLAG_BACKDROP });
@@ -25,13 +26,13 @@ export function classifyBuildings(buildings: BuildingMesh[], boundary: Pt[]): Bu
  * `roads`, where the sign board goes on that building (see shopSign).
  */
 export function assignShops(
-  shops: (OsmFeatures['shops'][number] & { label?: string })[], boundary: Pt[], buildings: BuildingMesh[], roads: Road[] = [],
+  shops: (OsmFeatures['shops'][number] & { label?: string })[], boundary: Pt[], buildings: readonly BuildingRecord[], roads: Road[] = [],
 ): WorldManifest['shops'] {
   const candidates = buildings.filter((b) => (b.flags & FLAG_BACKDROP) === 0);
   const out: WorldManifest['shops'] = [];
   for (const s of shops) {
     if (!pointInPolygon(s.pos, boundary)) continue;
-    let best: BuildingMesh | undefined;
+    let best: BuildingRecord | undefined;
     let bestD = SHOP_BUILDING_DISTANCE;
     for (const b of candidates) {
       // cheap reject before the exact footprint distance
@@ -59,10 +60,10 @@ const SIGN_OFFSET = 0.06;
 /** A wall faces a street if a road centreline lies in front of it within this distance (m). */
 const SIGN_ROAD_REACH = 40;
 
-type Wall = { nx: number; nz: number; d: number; s0: number; s1: number };
+export type Wall = { nx: number; nz: number; d: number; s0: number; s1: number };
 
 /** Vertical wall planes of a building: triangles merged by plane, as an interval along the wall tangent (−nz, nx). */
-function wallsOf(b: BuildingMesh): Wall[] {
+export function wallsOf(b: BuildingMesh): Wall[] {
   const walls: Wall[] = [];
   const p = b.positions, n = b.normals;
   for (let v = 0; v < b.kind.length; v += 3) {
@@ -104,11 +105,11 @@ function roadInFront(p: Pt, nx: number, nz: number, roads: Road[]): number {
  * within 40 m) and lies nearest the shop point. x/z = board centre just in front of the wall, y = LoD2 base + SIGN_Y, heading =
  * outward wall normal (forward = (sin h, cos h)), width ≤ 6 m and fitting the wall. undefined without such a wall.
  */
-export function shopSign(b: BuildingMesh, shop: Pt, roads: Road[]): ShopSign | undefined {
+export function shopSign(b: Pick<BuildingRecord, 'centroid' | 'base' | 'walls'>, shop: Pt, roads: Road[]): ShopSign | undefined {
   const near = roads.filter((r) => (DRIVABLE.has(r.kind) || r.kind === 'pedestrian')
     && r.points.some((q) => Math.abs(q.x - b.centroid.x) < 150 && Math.abs(q.z - b.centroid.z) < 150));
   let best: { w: Wall; s: number; score: number } | undefined;
-  for (const w of wallsOf(b)) {
+  for (const w of b.walls) {
     if (w.s1 - w.s0 < 2) continue;
     const sm = (w.s0 + w.s1) / 2;
     const mid = { x: w.nx * w.d - w.nz * sm, z: w.nz * w.d + w.nx * sm };

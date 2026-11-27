@@ -1,5 +1,4 @@
-import type { BuildingMesh } from './buildings.js';
-import { footprintOf } from './footprint.js';
+import type { BuildingRecord } from './buildingstore.js';
 import type { Mesh } from './streets.js';
 
 /** Grid spacing of the fit metric (m): sample points are the cell centres of a world-aligned grid. */
@@ -17,7 +16,7 @@ const SIDEWALK = 1, SURFACE = 2, BUILDING = 4, GAP = 8;
  * footprint) between a sidewalk's edge and a facade at most 6.5 m beyond it, walked along x and z from the edge.
  * `surfaces`: the other street meshes (road, curb, parking, …), which end such a walk.
  */
-export function sidewalkFit(sidewalk: Mesh, surfaces: Mesh[], buildings: BuildingMesh[]): { area: number; overshoot: number; undershoot: number } {
+export function sidewalkFit(sidewalk: Mesh, surfaces: Mesh[], buildings: readonly BuildingRecord[]): { area: number; overshoot: number; undershoot: number } {
   const pos = sidewalk.positions;
   if (!sidewalk.indices.length) return { area: 0, overshoot: 0, undershoot: 0 };
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -57,7 +56,7 @@ export function sidewalkFit(sidewalk: Mesh, surfaces: Mesh[], buildings: Buildin
   rasterMesh(sidewalk, SIDEWALK);
   for (const m of surfaces) rasterMesh(m, SURFACE);
   for (const b of buildings) {
-    const fp = footprintOf(b);
+    const fp = b.footprint;
     if (fp.maxX < minX - pad || fp.minX > maxX + pad || fp.maxZ < minZ - pad || fp.minZ > maxZ + pad) continue;
     const t = fp.tris;
     for (let i = 0; i < t.length; i += 6) raster(t[i]!, t[i + 1]!, t[i + 2]!, t[i + 3]!, t[i + 4]!, t[i + 5]!, BUILDING);

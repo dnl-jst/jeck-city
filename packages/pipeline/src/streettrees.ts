@@ -1,4 +1,5 @@
-import { FLAG_NEUSSER, type BuildingMesh } from './buildings.js';
+import { FLAG_NEUSSER } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import { footprintContains, footprintDistance } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { cumulative, dedupe, DRIVABLE, dist, distToPolyline, pointAt } from './polyline.js';
@@ -43,7 +44,7 @@ function rand(seed: number, id: number, side: number, k: number): number {
  * Deterministic: depends on the seed and the input order. OSM trees are not included.
  */
 export function streetTrees(
-  f: OsmFeatures, buildings: BuildingMesh[], spawn: Pt, seed: number, lamps: Pt[] = f.lamps,
+  f: OsmFeatures, buildings: readonly BuildingRecord[], spawn: Pt, seed: number, lamps: Pt[] = f.lamps,
   widths: Map<Road, SidewalkWidths> = allSidewalkWidths(f.roads, buildings),
 ): Pt[] {
   const net = f.roads.filter((r) => (DRIVABLE.has(r.kind) || r.kind === 'service') && dedupe(r.points).length >= 2).map((r) => {

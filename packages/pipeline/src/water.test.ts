@@ -1,7 +1,7 @@
 import { CHUNK_SIZE } from '@nn/shared';
 import { expect, test } from 'vitest';
 import { centreLine, riverTerrain } from './riverfixture.js';
-import { boxBuilding } from './fixture.js';
+import { boxRecord } from './fixture.js';
 import { carveRiverBed, findWater, LEVEL_TOL, WATER_DEPTH, waterOutlines, waterShare, waterSurface } from './water.js';
 
 test('findWater floods the river from its centre line and stops at the banks', () => {
@@ -71,6 +71,6 @@ test('waterOutlines traces the water as rings whose signed areas add up to the w
 test('waterShare: a block across the river is mostly over the water, a house on the bank not at all', () => {
   const t = riverTerrain();
   const w = findWater(t, [centreLine]);
-  expect(waterShare(t, w, boxBuilding('bridge', 140, 140, 260, 160, 10))).toBeGreaterThan(0.8);
-  expect(waterShare(t, w, boxBuilding('house', 60, 60, 80, 80, 10))).toBe(0);
+  expect(waterShare(t, w, boxRecord('bridge', 140, 140, 260, 160, 10))).toBeGreaterThan(0.8);
+  expect(waterShare(t, w, boxRecord('house', 60, 60, 80, 80, 10))).toBe(0);
 });

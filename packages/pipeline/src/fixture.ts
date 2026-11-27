@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import type { BuildingMesh } from './buildings.js';
+import { recordOf, type BuildingRecord } from './buildingstore.js';
 import { crossSectionFromTags, type CrossSection } from './crosssection.js';
 import { parseOsm, type OsmFeatures } from './osm.js';
 
@@ -38,3 +39,6 @@ export function boxBuilding(id: string, x0: number, z0: number, x1: number, z1: 
     flags,
   };
 }
+
+/** Test helper: the light record (as a BuildingStore keeps it) of a boxBuilding. */
+export const boxRecord = (...args: Parameters<typeof boxBuilding>): BuildingRecord => recordOf(boxBuilding(...args), 0);

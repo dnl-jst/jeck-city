@@ -1,5 +1,5 @@
 import { TUNING } from '@nn/shared';
-import type { BuildingMesh } from './buildings.js';
+import type { BuildingRecord } from './buildingstore.js';
 import type { ParkOrientation } from './crosssection.js';
 import { insideAnyFootprint } from './footprint.js';
 import type { OsmFeatures, Pt, Road } from './osm.js';
@@ -68,7 +68,7 @@ function parkHeading(dir: Pt, side: 1 | -1, oneway: boolean, angle: number): num
  * Which candidates are taken (occupancy) and the subset beyond 2600 are drawn per position (placeRand), so cars stay
  * put on streets the OSM data did not change.
  */
-export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: BuildingMesh[]): Spot[] {
+export function parkedCarSpots(f: OsmFeatures, seed: number, buildings: readonly BuildingRecord[]): Spot[] {
   const roads = f.roads.filter((r) => DRIVABLE.has(r.kind) || r.kind === 'service');
   const junc = [...junctions(roads.map((r) => dedupe(r.points))).values()];
   const blockers = [...junc, ...f.tramStops.map((s) => s.pos)];
