@@ -4,7 +4,7 @@ import { DEFAULT_QUALITY, DEFAULT_TOUCH_QUALITY, MAX_LAMP_LIGHTS, nextQuality, Q
 test('high is the original look, low is the default', () => {
   expect(QUALITY.high).toEqual({
     pixelRatio: 2, antialias: true, lampLights: 8, discoDots: 8, tailLights: true, beamShadow: 1024, sunShadow: 2048, shadowRadius: 150, treeShadowRadius: 80,
-    viewDistance: 650, loadRadius: 600, unloadRadius: 800, treeRadius: 250, carRadius: 150, precipDrops: 20000,
+    viewDistance: 650, loadRadius: 800, unloadRadius: 950, treeRadius: 250, carRadius: 150, precipDrops: 20000,
   });
   expect(DEFAULT_QUALITY).toBe('low');
   expect(MAX_LAMP_LIGHTS).toBe(8);
@@ -25,9 +25,14 @@ test('each level draws more rain and snow than the one below', () => {
   expect(QUALITY.medium.precipDrops).toBeLessThan(QUALITY.high.precipDrops);
 });
 
-test('every level loads the world a little short of its fog end and the shadows inside it', () => {
-  for (const q of Object.values(QUALITY)) {
-    expect(q.loadRadius).toBeLessThan(q.viewDistance);
+test('every level loads the world beyond its fog end and the shadows inside it', () => {
+  // a chunk counts by its centre, and its nearest corner is up to 141 m (half a diagonal) closer: only a load radius
+  // of the view distance plus that much has every chunk in the scene before any of it comes into view
+  const halfDiagonal = Math.hypot(100, 100);
+  for (const [level, q] of Object.entries(QUALITY)) {
+    // phones (minimal) keep a smaller margin: less memory, and the last metres before the fog end are almost opaque
+    expect(q.loadRadius - q.viewDistance).toBeGreaterThanOrEqual(level === 'minimal' ? 80 : halfDiagonal);
+    expect(q.unloadRadius - q.loadRadius).toBeGreaterThanOrEqual(100); // hysteresis
     expect(q.unloadRadius).toBeGreaterThan(q.loadRadius);
     expect(q.loadRadius).toBeGreaterThanOrEqual(250); // READY_RADIUS: the spawn chunks stay loaded
     expect(q.treeShadowRadius).toBeLessThan(q.treeRadius);

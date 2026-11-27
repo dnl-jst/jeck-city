@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, test, vi } from 'vitest';
 import { BufferAttribute, BufferGeometry, Group, Mesh, MeshStandardMaterial, Scene, Texture } from 'three';
 import type { WorldIndex, WorldManifest } from '@nn/shared';
 import { FetchError } from './errors';
-import { chunksToLoad, chunksToUnload, disposeGltf, fetchOk, markSigned, nextRetryAt, WorldLoader } from './loader';
+import {
+  chunksToLoad, chunksToUnload, concurrentLoads, disposeGltf, FAST_CONCURRENT, fetchOk, LEAD_MAX, loadCentre, markSigned, MAX_CONCURRENT,
+  nextRetryAt, trackVelocity, WorldLoader,
+} from './loader';
 import { WorldFiles } from './world-files';
 
 /** Manifest with a grid of chunks ix, iz ∈ [-5, 4] (min corners -1000 … 800). */
@@ -58,6 +61,45 @@ describe('chunksToUnload', () => {
   });
 });
 
+describe('loading ahead', () => {
+  it('centres the loading on where the camera will be in a few seconds, at most LEAD_MAX ahead', () => {
+    expect(loadCentre({ x: 10, z: 20 }, { x: 0, z: 0 })).toEqual({ x: 10, z: 20 });
+    const heli = loadCentre({ x: 0, z: 0 }, { x: 38, z: 0 }); // the helicopter's top speed
+    expect(heli.x).toBeGreaterThanOrEqual(100);
+    expect(heli.x).toBeLessThanOrEqual(LEAD_MAX);
+    expect(heli.z).toBe(0);
+    const absurd = loadCentre({ x: 0, z: 0 }, { x: 300, z: -400 });
+    expect(Math.hypot(absurd.x, absurd.z)).toBeCloseTo(LEAD_MAX, 6);
+    expect(absurd.x / absurd.z).toBeCloseTo(-0.75, 6); // the direction is kept
+  });
+
+  it('follows the camera speed smoothly and forgets it after a jump or a pause', () => {
+    let v = { x: 0, z: 0 };
+    let p = { x: 0, z: 0 };
+    for (let i = 0; i < 300; i++) { // 5 s at 60 fps, 30 m/s east
+      const next = { x: p.x + 0.5, z: 0 };
+      v = trackVelocity(v, p, next, 1 / 60);
+      p = next;
+    }
+    expect(v.x).toBeCloseTo(30, 0);
+    expect(v.z).toBe(0);
+    const one = trackVelocity({ x: 0, z: 0 }, { x: 0, z: 0 }, { x: 0.5, z: 0 }, 1 / 60);
+    expect(one.x).toBeGreaterThan(0);
+    expect(one.x).toBeLessThan(5); // one frame does not set the speed
+    expect(trackVelocity(v, p, { x: p.x + 500, z: 0 }, 1 / 60)).toEqual({ x: 0, z: 0 }); // teleport (respawn)
+    expect(trackVelocity(v, p, { x: p.x + 60, z: 0 }, 2)).toEqual({ x: 0, z: 0 }); // the tab was in the background
+    expect(trackVelocity(v, p, p, 0)).toEqual(v); // same instant: unchanged
+    expect(trackVelocity(v, p, p, Number.NaN)).toEqual({ x: 0, z: 0 }); // the first update has no previous time
+  });
+
+  it('downloads more chunks at once when moving fast', () => {
+    expect(concurrentLoads(0)).toBe(MAX_CONCURRENT);
+    expect(concurrentLoads(5)).toBe(MAX_CONCURRENT); // walking, cycling slowly
+    expect(concurrentLoads(38)).toBe(FAST_CONCURRENT);
+    expect(FAST_CONCURRENT).toBeGreaterThan(MAX_CONCURRENT);
+  });
+});
+
 describe('WorldLoader', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -89,6 +131,29 @@ describe('WorldLoader', () => {
     void new WorldLoader(new Scene(), gridFiles()).init(() => {}, { x: -900, z: -900 });
     await new Promise((r) => setTimeout(r, 0));
     expect(urls.slice(1)).toEqual(['/world/chunk_-5_-5.glb', expect.stringMatching(/chunk_(-4_-5|-5_-4)\.glb/)]);
+  });
+
+  it('flying east loads the chunks ahead before the ones behind, several at once', async () => {
+    const m = gridManifest();
+    const urls: string[] = [];
+    vi.stubGlobal('fetch', (url: string) => {
+      urls.push(url);
+      if (url.endsWith('manifest.json')) return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(m) });
+      return new Promise(() => {});
+    });
+    const loader = new WorldLoader(new Scene(), gridFiles());
+    loader.setRadii(250, 400);
+    await loader.init(() => {}, { x: 5000, z: 5000 }); // nothing within READY_RADIUS
+    // 3 s at 60 fps, 38 m/s east along z = 0, ending at x = 0
+    for (let i = 180; i >= 0; i--) loader.update({ x: -i * (38 / 60), z: 0 }, 100_000 - i * (1000 / 60));
+    const chunks = urls.filter((u) => u.includes('chunk_'));
+    expect(chunks).toHaveLength(FAST_CONCURRENT);
+    // every download started lies east of the first one or beside it: none behind the camera's start
+    const ix = chunks.map((u) => Number(/chunk_(-?\d+)_/.exec(u)![1]));
+    expect(Math.max(...ix)).toBeGreaterThanOrEqual(0);
+    // at rest the two nearest to (0, 0) would be among 0_0, -1_0, 0_-1, -1_-1; ahead, the queue prefers x ≥ 0
+    const last = urls[urls.length - 1]!;
+    expect(Number(/chunk_(-?\d+)_/.exec(last)![1])).toBeGreaterThanOrEqual(0);
   });
 
   it('retries a failed chunk after 5 s, 15 s and 45 s, then gives up', async () => {
