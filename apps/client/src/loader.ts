@@ -14,6 +14,17 @@ export const LOAD_RADIUS = 600;
 export const READY_RADIUS = 250;
 export const UNLOAD_RADIUS = 800;
 export const MAX_CONCURRENT = 2;
+/** Chunks downloading at once while the camera is at least FAST_SPEED (m/s) fast: by car, tram or helicopter. */
+export const FAST_CONCURRENT = 4;
+export const FAST_SPEED = 12;
+/** Loading is centred on where the camera will be in LEAD_S seconds, at most LEAD_MAX metres ahead. */
+export const LEAD_S = 4;
+export const LEAD_MAX = 200;
+/** The tracked camera speed follows the measured one with this time constant (s): a camera orbit averages out. */
+const VELOCITY_EASE_S = 0.5;
+/** A step faster than this (m/s) or after a longer pause than this (s) is a jump, not a movement. */
+const JUMP_SPEED = 120;
+const JUMP_PAUSE_S = 1;
 
 /** Wait before the 1st, 2nd and 3rd retry of a chunk whose download failed; after that it stays missing. */
 export const RETRY_DELAYS_MS = [5_000, 15_000, 45_000] as const;
@@ -24,6 +35,30 @@ type XZ = { x: number; z: number };
 export function nextRetryAt(failures: number, lastAt: number): number | null {
   const d = RETRY_DELAYS_MS[failures - 1];
   return d === undefined ? null : lastAt + d;
+}
+
+/** The camera's smoothed horizontal velocity (m/s) after it moved from `from` to `to` in `dt` seconds. */
+export function trackVelocity(vel: XZ, from: XZ, to: XZ, dt: number): XZ {
+  if (dt === 0) return vel;
+  if (!(dt > 0) || dt > JUMP_PAUSE_S) return { x: 0, z: 0 };
+  const vx = (to.x - from.x) / dt;
+  const vz = (to.z - from.z) / dt;
+  if (Math.hypot(vx, vz) > JUMP_SPEED) return { x: 0, z: 0 };
+  const k = 1 - Math.exp(-dt / VELOCITY_EASE_S);
+  return { x: vel.x + (vx - vel.x) * k, z: vel.z + (vz - vel.z) * k };
+}
+
+/** The point chunks are loaded and unloaded around: `pos` moved ahead along the velocity. */
+export function loadCentre(pos: XZ, vel: XZ): XZ {
+  const speed = Math.hypot(vel.x, vel.z);
+  if (speed === 0) return { x: pos.x, z: pos.z };
+  const lead = Math.min(speed * LEAD_S, LEAD_MAX) / speed;
+  return { x: pos.x + vel.x * lead, z: pos.z + vel.z * lead };
+}
+
+/** How many chunks may download at once at a camera speed (m/s). */
+export function concurrentLoads(speed: number): number {
+  return speed >= FAST_SPEED ? FAST_CONCURRENT : MAX_CONCURRENT;
 }
 
 const centreDistance = (c: WorldManifest['chunks'][number], p: XZ): number =>
@@ -57,8 +92,13 @@ export class WorldLoader {
   private queue: string[] = [];
   /** Buildings that carry a real shop sign: their facade sign band gets no pseudo lettering. */
   private signed = new Set<string>();
+  /** The camera at the last update(), when that was (ms; NaN before the first) and its smoothed velocity (m/s). */
   private lastPos: XZ = { x: 0, z: 0 };
-  /** Chunks load within this radius of the camera and unload beyond the other (quality level). */
+  private lastAt = Number.NaN;
+  private vel: XZ = { x: 0, z: 0 };
+  /** Where loading and unloading are centred: the camera, moved ahead while it is fast (loadCentre). */
+  private centre: XZ = { x: 0, z: 0 };
+  /** Chunks load within this radius of `centre` and unload beyond the other (quality level). */
   private radii = { load: LOAD_RADIUS, unload: UNLOAD_RADIUS };
   /** Incremented whenever a chunk is added to or removed from the scene. */
   revision = 0;
@@ -87,6 +127,7 @@ export class WorldLoader {
     this.signed = new Set(manifest.shops.flatMap((s) => (s.sign && s.buildingId ? [s.buildingId] : [])));
     const from = start ?? manifest.spawn;
     this.lastPos = { x: from.x, z: from.z };
+    this.centre = { x: from.x, z: from.z };
     const keys = chunksToLoad(manifest, from, new Set(this.loaded.keys()), READY_RADIUS);
     let done = 0;
     onStatus(`Straßen und Häuser 0/${keys.length}`);
@@ -106,19 +147,26 @@ export class WorldLoader {
   }
 
   /**
-   * Unloads far chunks and starts downloads of near ones (at most MAX_CONCURRENT in flight).
+   * Unloads far chunks and starts downloads of near ones, nearest first, around the camera moved ahead by a few seconds
+   * of its movement – so the chunks in front arrive before they come into view (at most MAX_CONCURRENT in flight, more
+   * when fast).
    * A failed chunk is retried with backoff (RETRY_DELAYS_MS); `now` is in ms.
    */
   update(cameraPos: { x: number; z: number }, now = performance.now()): void {
     for (const mat of this.glow) mat.emissiveIntensity = 0.12 + 1.4 * this.facade.userData.nightFactor.value;
     const m = this.manifest;
     if (!m || !this.ready) return;
-    this.lastPos = { x: cameraPos.x, z: cameraPos.z };
-    for (const key of chunksToUnload(m, cameraPos, new Set(this.loaded.keys()), this.radii.unload)) this.unload(key);
+    const pos = { x: cameraPos.x, z: cameraPos.z };
+    this.vel = trackVelocity(this.vel, this.lastPos, pos, (now - this.lastAt) / 1000);
+    this.lastPos = pos;
+    this.lastAt = now;
+    const centre = this.centre = loadCentre(pos, this.vel);
+    for (const key of chunksToUnload(m, centre, new Set(this.loaded.keys()), this.radii.unload)) this.unload(key);
     const waiting = [...this.failed].filter(([, f]) => f.retryAt > now).map(([key]) => key);
     const busy = new Set([...this.loaded.keys(), ...this.pending, ...waiting]);
-    this.queue = chunksToLoad(m, cameraPos, busy, this.radii.load);
-    while (this.pending.size < MAX_CONCURRENT && this.queue.length > 0) {
+    this.queue = chunksToLoad(m, centre, busy, this.radii.load);
+    const atOnce = concurrentLoads(Math.hypot(this.vel.x, this.vel.z));
+    while (this.pending.size < atOnce && this.queue.length > 0) {
       const key = this.queue.shift()!;
       this.load(key).then(
         () => this.failed.delete(key),
@@ -140,7 +188,7 @@ export class WorldLoader {
       const gltf = await this.gltf.parseAsync(buf, ''); // self-contained GLBs: no resource path
       const root = gltf.scene;
       // the player may have moved away while this chunk was downloading
-      if (centreDistance(chunk, this.lastPos) > this.radii.unload) {
+      if (centreDistance(chunk, this.centre) > this.radii.unload) {
         disposeGltf(root); // its own materials and textures were not swapped for the shared ones yet
         return;
       }
