@@ -518,7 +518,15 @@ Promise.all([world.init((p) => hud.setProgress(p), start, (s) => { worldStatus =
       sim.setTransitEpoch(Date.now() + (at.h * 3600 + at.m * 60 - (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds())) * 1000);
     }
   }
-  game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, audio: gameAudio, bikeModels, carModels, characters, character });
+  // dev only: T in free-fly puts the figure below the camera (online the dev-mode server does it, as for ?cam)
+  const me = session.me;
+  const teleport = !allowed.fly ? undefined : conn
+    ? (x: number, z: number) => conn.sendTeleport(x, z)
+    : (x: number, z: number) => {
+      sim.removePlayer(me);
+      sim.addPlayer(me, { x, z });
+    };
+  game = new Game(session, m, { scene, camera, input, hud, flyAllowed: allowed.fly, devCam, teleport, audio: gameAudio, bikeModels, carModels, characters, character });
   applyQuality(); // before the first frame with the world's lights: materials compile once, for this level
   if (devCam && allowed.fly && devCam.y - heightAt(terrain, devCam.x, devCam.z) > 20) {
     // an aerial debug link: open in free-fly at that camera instead of dropping the player onto a roof

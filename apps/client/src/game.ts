@@ -35,9 +35,15 @@ import type { Quality } from './quality';
 type Vec3 = { x: number; y: number; z: number };
 const DEG = Math.PI / 180;
 
+/** A teleport from free-fly has arrived when the figure is this close (m) to the target; given up after this many frames. */
+const LANDING_NEAR = 5;
+const LANDING_FRAMES = 180;
+
 /** What the game needs from the page: scene and camera, input, HUD, the dev URL parameters and (optionally) sound. */
 export type GameContext = {
   scene: Scene; camera: PerspectiveCamera; input: Input; hud: Hud; /** F toggles free-fly. */ flyAllowed: boolean; devCam: DevCam | null;
+  /** Dev only: puts the own figure onto the surface at (x, z). With it, T in free-fly lands the player below the camera. */
+  teleport?: (x: number, z: number) => void;
   audio?: GameAudio;
   /** Bike and rack model templates (WorldLoader.loadBikeModels); without them bikes still ride, just unseen. */
   bikeModels?: { bikes: ReadonlyMap<BikeType, Object3D>; racks: ReadonlyMap<0 | 1, Object3D> };
@@ -59,6 +65,8 @@ export class Game {
   /** 'sit': riding along in a car as a passenger. */
   mode: 'walk' | 'drive' | 'ride' | 'sit' = 'walk';
   flying = false;
+  /** A teleport from free-fly is under way: free-fly ends once the figure is there (online a moment later) or `frames` ran out. */
+  private landing: { x: number; z: number; frames: number } | null = null;
   readonly figure: PlayerFigure;
   readonly cars: ParkedCars;
   readonly driven: DrivenCar;
@@ -317,6 +325,17 @@ export class Game {
     const mouse = input.takeMouse();
     const notches = input.takeWheel();
     if (flyAllowed && input.consume('KeyF')) this.toggleFly();
+    if (this.flying && this.ctx.teleport && !this.landing && input.consume('KeyT')) {
+      const c = this.ctx.camera.position;
+      this.ctx.teleport(c.x, c.z);
+      this.landing = { x: c.x, z: c.z, frames: LANDING_FRAMES };
+    } else if (this.landing) {
+      const at = this.focus();
+      if (Math.hypot(at.x - this.landing.x, at.z - this.landing.z) < LANDING_NEAR || --this.landing.frames <= 0) {
+        this.landing = null;
+        if (this.flying) this.toggleFly();
+      }
+    }
     if (input.consume('KeyN')) audio?.toggleMute();
     if (input.consume('KeyC')) this.switchCharacter();
     if (!this.flying && input.consume('KeyM')) {
