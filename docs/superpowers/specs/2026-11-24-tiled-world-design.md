@@ -299,6 +299,28 @@ Gelände in Durchgängen pro Kachel mit Rand, nachladende Quelle für die global
 Fenstern, absolute Rundung. Erst damit hängt der Speicherbedarf der ganzen Pipeline nicht mehr von der Fläche ab. Bis
 dahin schneiden die Stufen 2 und 3 das Gelände der `sim`-Kacheln aus dem Raster im Speicher.
 
+*Beim Planen geändert (25.11.2026):* Stufe 4 wird auf Daniels Wunsch direkt nach Stufe 1 gebaut. Die Rundung bleibt
+dabei wie heute relativ zum tiefsten Punkt der jeweiligen Geländefassung (als ausdrückliche globale Vorberechnung),
+damit der Bytevergleich mit der Referenzwelt erhalten bleibt; die absolute Rundung kommt mit dem Kachelformat in
+Stufe 2. Plan: `docs/superpowers/plans/2026-11-25-tiled-world-stage-4-terrain.md`.
+
+*Umgesetzt (25.11.2026):* Kein Pipeline-Code legt mehr ein Feld mit einem Eintrag je Rasterpunkt an (ein Test prüft
+das an den Quellen). Die Fassungen T0–T3 sind Dateien im Format von `terrain.bin` in einem Arbeitsordner je Lauf;
+T0 entsteht Band für Band aus den DGM-Kacheln, Einschnitte, Flussbett und Aufschüttungen sind dünne Änderungen, die
+beim Schreiben der nächsten Fassung eingerechnet werden, Wasser liegt in dünnen Rastern, und jeder Leser holt sich
+Fenster (höchstens 4 Mio. Punkte, sonst Fehler) oder Punktabfragen über einen Block-Cache. Die Welt bleibt bytegleich
+mit der Referenz (`4f2df36c7e41`). Gemessen mit vorhandenem Gebäude-Cache: 350 s, Spitzen-RSS ≈ 2,07 GB (vorher
+≈ 414 s und ≈ 2,9 GB); RSS nach den Geländefassungen ≈ 1,26 GB (vorher ≈ 1,7 GB nach der Geländephase). Weiter mit
+der Fläche wachsen: das Planen auf den Vektordaten der ganzen Stadt, der globale Kollisionsschritt (`followTerrain`
+über alle Bordsteine und `buildCollision`, zusammen ≈ 54 s und der größte Speicherbedarf des Laufs), die dünnen
+Wasser-Raster entlang des Flusses, der Arbeitsordner auf der Platte (8 Byte je Rasterpunkt für T0–T3, 6 Byte,
+solange die Zwischendatei von T0 besteht), das DGM-Band beim Bau von T0 (wächst mit der BREITE des Rasters: eine
+Kachelzeile plus die Zeilen der Unschärfe), und die Höhen werden weiter relativ zum globalen tiefsten Punkt jeder
+Fassung gerundet (absolute Rundung mit dem Kachelformat in Stufe 2). Die Aussage über Speicher und Laufzeit ist an
+nur einer Weltgröße gemessen. Zur Abnahme durch Daniel, drei Abweichungen vom Plan: Arbeitsordner je Lauf, deren
+Reste toter Läufe der nächste Lauf wegräumt (statt „zu Beginn jedes Laufs geleert“), Fenster in Zellkoordinaten des
+ganzen Rasters ausgewertet (R3), und 256 Cache-Blöcke für den Kollisionsschritt (R5).
+
 ## Prüfungen und Budgets
 
 - **Parität (Stufe 1):** Bytevergleich alt gegen neu, als Befehl im Repository, solange die alte Pipeline existiert.

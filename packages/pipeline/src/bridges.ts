@@ -1,7 +1,8 @@
-import { heightAt, type TerrainGrid } from '@nn/shared';
 import type { OsmFeatures, Pt, Road } from './osm.js';
 import { ptKey } from './polyline.js';
 import type { Mesh } from './streets.js';
+import type { TerrainFile } from './terrain/file.js';
+import { heightAt, type Heights, TerrainSampler } from './terrain/height.js';
 import { WATER_DEPTH, type Water } from './water.js';
 
 /**
@@ -125,11 +126,11 @@ function pointAt(pts: Pt[], cum: number[], s: number): { p: Pt; dir: Pt } {
   return { p: { x: a.x + (b.x - a.x) * u, z: a.z + (b.z - a.z) * u }, dir: { x: (b.x - a.x) / l, z: (b.z - a.z) / l } };
 }
 
-function isWater(t: TerrainGrid, w: Water, p: Pt): number | undefined {
+/** The water level at the grid point nearest to p, or undefined if that point is not water (or off the grid). */
+function isWater(t: TerrainFile, w: Water, p: Pt): number | undefined {
   const c = Math.round(p.x - t.x0), r = Math.round(p.z - t.z0);
   if (c < 0 || r < 0 || c >= t.cols || r >= t.rows) return undefined;
-  const i = r * t.cols + c;
-  return w.mask[i] ? w.level[i]! : undefined;
+  return w.mask.get(c, r) ? w.level.get(c, r) : undefined;
 }
 
 /**
@@ -137,7 +138,7 @@ function isWater(t: TerrainGrid, w: Water, p: Pt): number | undefined {
  * wall, which the (blurred) DGM turns into a slope down to the water; the deck continues the upper level.
  */
 const ABUTMENT_R = 6;
-function abutment(t: TerrainGrid, p: Pt): number {
+function abutment(t: Heights, p: Pt): number {
   let h = -Infinity;
   for (let dz = -ABUTMENT_R; dz <= ABUTMENT_R; dz++) {
     for (let dx = -ABUTMENT_R; dx <= ABUTMENT_R; dx++) if (dx * dx + dz * dz <= ABUTMENT_R * ABUTMENT_R) h = Math.max(h, heightAt(t, p.x + dx, p.z + dz));
@@ -145,8 +146,9 @@ function abutment(t: TerrainGrid, p: Pt): number {
   return h;
 }
 
-/** Finds the bridges over the water and their deck heights. */
-export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePlan {
+/** Finds the bridges over the water of terrain version `t` (T2: after the river bed) and their deck heights. */
+export function planBridges(f: OsmFeatures, t: TerrainFile, w: Water): BridgePlan {
+  const ground = new TerrainSampler(t);
   type El = { pts: Pt[]; road?: Road; track?: Pt[]; rail?: Pt[] };
   const els: El[] = [
     ...f.roads.filter((r) => r.bridge).map((r) => ({ pts: r.points, road: r })),
@@ -201,7 +203,7 @@ export function planBridges(f: OsmFeatures, t: TerrainGrid, w: Water): BridgePla
     const fixed = new Set(g.nodes.filter((n) => (adj.get(n)?.length ?? 0) === 1 && isWater(t, w, pos[n]!) === undefined));
     if (!fixed.size) continue;
     for (const n of fixed) {
-      h[n] = abutment(t, pos[n]!);
+      h[n] = abutment(ground, pos[n]!);
       const nb = pos[adj.get(n)![0]!.j]!, p = pos[n]!, l = Math.hypot(p.x - nb.x, p.z - nb.z) || 1;
       const el = els[g.els.find((e) => elNodes[e]![0] === n || elNodes[e]!.at(-1) === n)!]!;
       const half = el.road ? el.road.width / 2 + 3 : el.rail ? 3 : 2;
@@ -461,7 +463,7 @@ const sideOut = (from: V3, other: V3): V3 => [from[0] - other[0], 0, from[2] - o
  * parapets along both edges where the deck is clear of the ground, and piers in the water. Returns the body mesh
  * (uv: metres along / up) and its collision triangles (slab, parapets, piers).
  */
-export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): { mesh: Mesh; steel: Mesh; collision: Float32Array } {
+export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: Heights): { mesh: Mesh; steel: Mesh; collision: Float32Array } {
   const bins = plan.structures.map((s) => {
     const n = Math.max(2, Math.ceil((s.s1 - s.s0) / BIN) + 1);
     return { lo: new Array<number>(n).fill(Infinity), hi: new Array<number>(n).fill(-Infinity), y: new Array<number>(n).fill(Infinity) };
@@ -599,7 +601,7 @@ export function bridgeBodies(plan: BridgePlan, decks: Mesh[], t: TerrainGrid): {
 }
 
 /** True if p lies on a bridge structure (within its profile, at least 1 m above the ground), e.g. to keep props off. */
-export function onBridge(plan: BridgePlan, t: TerrainGrid, p: Pt): boolean {
+export function onBridge(plan: BridgePlan, t: Heights, p: Pt): boolean {
   const at = deckAt(plan, p.x, p.z);
   if (!at || at.d > 40) return false;
   const s = plan.structures[at.st]!;

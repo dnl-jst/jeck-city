@@ -1,14 +1,16 @@
-import { chunkKey, type TerrainGrid } from '@nn/shared';
+import { chunkKey, utmToLocal } from '@nn/shared';
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { endianness } from 'node:os';
 import { join } from 'node:path';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
-import { parseCityGml } from './citygml.js';
+import { parseCityGml, type CityBuilding } from './citygml.js';
 import { CODE_ROOTS, codeHash } from './codehash.js';
 import { footprintOf, type Footprint } from './footprint.js';
 import type { Pt } from './osm.js';
 import { classifyBuildings, wallsOf, type Wall } from './placements.js';
+import type { TerrainFile } from './terrain/file.js';
+import { type Heights, TerrainSampler } from './terrain/height.js';
 import { contentHash } from './worldindex.js';
 
 /** What every step except chunk batches and collision needs of a building. */
@@ -37,11 +39,43 @@ const sha = (...parts: (string | Uint8Array)[]) => {
 const f64bytes = (v: number[]) => new Uint8Array(Float64Array.from(v).buffer);
 
 /** The key of everything a tile's meshes depend on besides the tile itself (and the tiles before it). */
-async function baseKey(terrain: TerrainGrid, datum: number, boundary: Pt[]): Promise<string> {
-  const t = terrain.heights;
+async function baseKey(terrain: TerrainFile, datum: number, boundary: Pt[]): Promise<string> {
   return sha(`format ${FORMAT} ${endianness()} node ${process.version}`, await codeHash(CODE_ROOTS), await readFile(PACKAGE_LOCK),
-    f64bytes([terrain.x0, terrain.z0, terrain.cols, terrain.rows, terrain.datum, datum]), new Uint8Array(t.buffer, t.byteOffset, t.byteLength),
+    f64bytes([terrain.x0, terrain.z0, terrain.cols, terrain.rows, terrain.datum, datum]), `terrain ${terrain.contentHash()}`,
     f64bytes(boundary.flatMap((p) => [p.x, p.z])));
+}
+
+/**
+ * The largest window groundOf reads (cells): a LoD2 tile is 1 km square, its buildings reach a little beyond it.
+ * A bogus coordinate far off (a broken building, dropped later) would widen the window towards the whole grid.
+ */
+export const GROUND_WINDOW_CELLS = 1300 * 1300;
+
+/**
+ * The ground under a tile's buildings: point queries on the terrain file, with a window over the buildings' extent
+ * (clipped to the grid, one cell of margin) as the fast way – if that window has at most GROUND_WINDOW_CELLS cells
+ * (else point queries alone; the heights are the same either way).
+ */
+function groundOf(terrain: TerrainFile, buildings: CityBuilding[]): Heights {
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  for (const b of buildings)
+    for (const s of b.surfaces)
+      for (const [e, n] of s.outer) {
+        const { x, z } = utmToLocal(e, n);
+        minX = Math.min(minX, x);
+        maxX = Math.max(maxX, x);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+      }
+  minX = Math.max(minX, terrain.x0);
+  minZ = Math.max(minZ, terrain.z0);
+  maxX = Math.min(maxX, terrain.x0 + terrain.cols - 1);
+  maxZ = Math.min(maxZ, terrain.z0 + terrain.rows - 1);
+  if (!(minX <= maxX && minZ <= maxZ)) return new TerrainSampler(terrain);
+  const rect = { minX, minZ, maxX, maxZ };
+  const b = terrain.windowBounds(rect, 1);
+  if ((b.c1 - b.c0 + 1) * (b.r1 - b.r0 + 1) > GROUND_WINDOW_CELLS) return new TerrainSampler(terrain);
+  return new TerrainSampler(terrain, terrain.windowAt(rect, 1));
 }
 
 type TileFile = {
@@ -176,10 +210,11 @@ export class BuildingStore {
   /**
    * Parses the tiles in order, keeps records, writes each tile's full meshes to `cacheDir`. Same order and
    * de-duplication as one loop over all tiles: a building on a tile border is in both tiles, the first one keeps it.
-   * A tile whose cache file matches its key (raw tile, the tiles before it, terrain, datum, boundary, code) is read
-   * from there instead of being parsed.
+   * A tile whose cache file matches its key (raw tile, the tiles before it, the terrain file's content, datum,
+   * boundary, code) is read from there instead of being parsed. The buildings stand on `terrain` (T0, read through
+   * point queries).
    */
-  static async build(o: { tiles: string[]; rawDir: string; cacheDir: string; datum: number; terrain: TerrainGrid; boundary: Pt[]; maxTiles?: number; log?: (line: string) => void }): Promise<BuildingStore> {
+  static async build(o: { tiles: string[]; rawDir: string; cacheDir: string; datum: number; terrain: TerrainFile; boundary: Pt[]; maxTiles?: number; log?: (line: string) => void }): Promise<BuildingStore> {
     await mkdir(o.cacheDir, { recursive: true });
     const base = await baseKey(o.terrain, o.datum, o.boundary);
     const seen = new Set<string>();
@@ -200,14 +235,16 @@ export class BuildingStore {
       if (cached) f = cached;
       else {
         const meshes: BuildingMesh[] = [], fresh: string[] = [];
-        for (const parsed of parseCityGml(raw.toString('utf8'))) {
+        const tileBuildings = parseCityGml(raw.toString('utf8'));
+        const ground = { datum: o.datum, terrain: groundOf(o.terrain, tileBuildings) };
+        for (const parsed of tileBuildings) {
           // the parsed id is a slice of the tile's XML text: kept in `seen` and the records, it would keep all of
           // that text alive (~2 GB over all tiles); a copy of its own does not
           const b = { ...parsed, id: Buffer.from(parsed.id, 'utf8').toString('utf8') };
           if (seen.has(b.id)) continue;
           seen.add(b.id);
           fresh.push(b.id);
-          const m = buildBuildingMesh(b, { datum: o.datum, terrain: o.terrain });
+          const m = buildBuildingMesh(b, ground);
           if (m) meshes.push(m);
         }
         f = { key, parsed: meshes.length, seen: fresh, meshes: classifyBuildings(meshes, o.boundary) };

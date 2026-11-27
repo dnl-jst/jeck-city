@@ -1,5 +1,6 @@
-import { heightAt, TERRAIN_DIAGONAL, type TerrainGrid } from '@nn/shared';
+import { TERRAIN_DIAGONAL } from '@nn/shared';
 import type { Mesh } from './streets.js';
+import { heightAt, type Heights } from './terrain/height.js';
 
 /**
  * Coarse terrain-following copy of a flat mesh (input y = offset above terrain), for collision: triangles are split
@@ -24,7 +25,7 @@ import type { Mesh } from './streets.js';
  * Input vertices are welded by position first, so neighbouring input triangles share their edges. Winding and uv
  * (interpolated; of the first welded vertex) are kept.
  */
-export function followTerrain(m: Mesh, t: TerrainGrid, maxEdge: number, tolerance = Infinity, minEdge = 0.5): Mesh {
+export function followTerrain(m: Mesh, t: Heights, maxEdge: number, tolerance = Infinity, minEdge = 0.5): Mesh {
   // weld by position, so edges shared by input triangles are recognised as shared
   const pos: number[] = [], uv: number[] = [];
   const weld = new Map<string, number>();
@@ -241,7 +242,7 @@ const KEY = 1 << 22;
  * diagonal. 0 for vertical triangles (narrower than VERTICAL_WIDTH in xz: kerb faces, whose corners float32 rounding
  * moves off their common line — the plane through them would be meaningless). Returns the worst point too.
  */
-export function triangleDeviation(t: TerrainGrid, ax: number, az: number, ha: number, bx: number, bz: number, hb: number, cx: number, cz: number, hc: number): { dev: number; x: number; z: number } {
+export function triangleDeviation(t: Heights, ax: number, az: number, ha: number, bx: number, bz: number, hb: number, cx: number, cz: number, hc: number): { dev: number; x: number; z: number } {
   const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
   let best = { dev: 0, x: ax, z: az };
   const long = Math.sqrt(Math.max((ax - bx) ** 2 + (az - bz) ** 2, (bx - cx) ** 2 + (bz - cz) ** 2, (cx - ax) ** 2 + (cz - az) ** 2));
@@ -279,7 +280,7 @@ export function triangleDeviation(t: TerrainGrid, ax: number, az: number, ha: nu
  * non-vertical triangle (see triangleDeviation; the offset is linear across a triangle, so only terrain heights
  * matter). max, 99th percentile over triangles, and where the maximum is.
  */
-export function followDeviation(m: Mesh, t: TerrainGrid): { max: number; p99: number; triangles: number; at: { x: number; z: number } } {
+export function followDeviation(m: Mesh, t: Heights): { max: number; p99: number; triangles: number; at: { x: number; z: number } } {
   const P = m.positions;
   const devs: number[] = [];
   let worst = { dev: 0, x: 0, z: 0 };
