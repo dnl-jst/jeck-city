@@ -25,6 +25,8 @@ const VELOCITY_EASE_S = 0.5;
 /** A step faster than this (m/s) or after a longer pause than this (s) is a jump, not a movement. */
 const JUMP_SPEED = 120;
 const JUMP_PAUSE_S = 1;
+/** Pause (ms) between decoding one downloaded chunk and the next: at least one frame is drawn in between. */
+const DECODE_GAP_MS = 20;
 
 /** Wait before the 1st, 2nd and 3rd retry of a chunk whose download failed; after that it stays missing. */
 export const RETRY_DELAYS_MS = [5_000, 15_000, 45_000] as const;
@@ -90,6 +92,11 @@ export class WorldLoader {
   /** Chunks whose download failed: how often, and when they may be retried (Infinity = given up). */
   private readonly failed = new Map<string, { count: number; retryAt: number }>();
   private queue: string[] = [];
+  /**
+   * Downloads run side by side, but only one chunk at a time is decoded and put into the scene (both on the main
+   * thread), DECODE_GAP_MS apart: several that arrive together would otherwise stall a single frame for all of them.
+   */
+  private decoding: Promise<void> = Promise.resolve();
   /** Buildings that carry a real shop sign: their facade sign band gets no pseudo lettering. */
   private signed = new Set<string>();
   /** The camera at the last update(), when that was (ms; NaN before the first) and its smoothed velocity (m/s). */
@@ -179,14 +186,27 @@ export class WorldLoader {
     }
   }
 
+  /** Resolves when it is this caller's turn to decode, with the function that passes the turn on. */
+  private decodeTurn(): Promise<() => void> {
+    let pass!: () => void;
+    const before = this.decoding;
+    this.decoding = new Promise((resolve) => { pass = resolve; });
+    return before.then(() => pass);
+  }
+
   private async load(key: string): Promise<void> {
     const chunk = this.manifest!.chunks.find((c) => c.key === key);
     if (!chunk) throw new Error(`unknown chunk ${key}`);
     this.pending.add(key);
     try {
       const buf = await (await this.files.fetch(chunk.file)).arrayBuffer();
-      const gltf = await this.gltf.parseAsync(buf, ''); // self-contained GLBs: no resource path
-      const root = gltf.scene;
+      const decoded = await this.decodeTurn();
+      let root: Object3D;
+      try {
+        root = (await this.gltf.parseAsync(buf, '')).scene; // self-contained GLBs: no resource path
+      } finally {
+        setTimeout(decoded, DECODE_GAP_MS);
+      }
       // the player may have moved away while this chunk was downloading
       if (centreDistance(chunk, this.centre) > this.radii.unload) {
         disposeGltf(root); // its own materials and textures were not swapped for the shared ones yet
