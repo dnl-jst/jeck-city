@@ -1,4 +1,4 @@
-import { heightAt, STATION, TRAIN_LENGTH, transitModel, type TerrainGrid, type Transit } from '@nn/shared';
+import { STATION, TRAIN_LENGTH, transitModel, type Transit } from '@nn/shared';
 import type { Rect } from './chunks.js';
 import type { OsmFeatures, Pt } from './osm.js';
 import { pointInPolygon } from './polyline.js';
@@ -6,6 +6,7 @@ import {
   buildStair, CEIL, ColorMesh, COLORS, DEPTH, EDGE, encodeModels, FLOOR, GAUGE, hash, PAVEMENT_H, PLATFORM_H, RAIL_W, STAIR_SLOPE, STAIR_W, STATION_LOOK,
   TILE_TONES, TILE_W, type RGB, type Stair, type TransitBuild, type V3,
 } from './transit.js';
+import { heightAt, type Heights } from './terrain/height.js';
 import type { CityEnv } from './transitenv.js';
 import type { RailWay, Route } from './transitnet.js';
 
@@ -63,7 +64,7 @@ type Way = {
 };
 
 export async function buildNetwork(
-  routes: Route[], rail: Map<number, RailWay>, f: OsmFeatures, env: CityEnv & { terrain: TerrainGrid; area: Rect },
+  routes: Route[], rail: Map<number, RailWay>, f: OsmFeatures, env: CityEnv & { terrain: Heights; area: Rect },
 ): Promise<TransitBuild | null> {
   if (routes.length === 0) return null;
   const { terrain, area } = env;

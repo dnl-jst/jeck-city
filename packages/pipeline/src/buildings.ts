@@ -1,5 +1,6 @@
-import { heightAt, utmToLocal, type TerrainGrid } from '@nn/shared';
+import { utmToLocal } from '@nn/shared';
 import type { CityBuilding } from './citygml.js';
+import { heightAt, type Heights } from './terrain/height.js';
 import { triangulatePolygon3d } from './triangulate.js';
 
 export type BuildingMesh = {
@@ -127,7 +128,7 @@ const PLINTH_SAMPLE_STEP = 1;
  * gets a plinth quad down to 0.3 m below the lowest terrain point (sampled every 1 m along those edges
  * and at the ground-surface corners).
  */
-export function buildBuildingMesh(b: CityBuilding, ground?: { datum: number; terrain: TerrainGrid }): BuildingMesh | null {
+export function buildBuildingMesh(b: CityBuilding, ground?: { datum: number; terrain: Heights }): BuildingMesh | null {
   const groundSurfaces = b.surfaces.filter((s) => s.kind === 'ground');
   const groundPts = groundSurfaces.flatMap((s) => s.outer);
   const allPts = b.surfaces.flatMap((s) => s.outer);

@@ -1,12 +1,24 @@
-import { heightAt } from '@nn/shared';
-import { expect, test } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { decodeTerrain, heightAt } from '@nn/shared';
+import { afterAll, expect, test } from 'vitest';
 import { abutmentFills, bridgeBodies, CLEARANCE, deckAt, liftOntoDecks, onBridge, planBridges } from './bridges.js';
 import { crossSectionFromTags } from './crosssection.js';
 import { densify, type OsmFeatures, type Road } from './osm.js';
 import { buildStreetGeometry, railMesh } from './streets.js';
 import { allSidewalkWidths } from './sidewalkwidth.js';
-import { centreLine, riverTerrain } from './riverfixture.js';
+import { centreLine, riverTerrain } from './riverfixture.test-util.js';
+import { commitVersion, type TerrainFile, writeTerrainFile } from './terrain/file.js';
 import { carveRiverBed, findWater } from './water.js';
+
+const dir = mkdtempSync(join(tmpdir(), 'nn-bridges-'));
+const opened: TerrainFile[] = [];
+afterAll(() => {
+  for (const f of opened) f.close();
+  rmSync(dir, { recursive: true, force: true });
+});
+let files = 0;
 
 const road = (id: number, kind: string, pts: [number, number][], bridge: boolean): Road => {
   const cross = crossSectionFromTags({}, kind);
@@ -17,9 +29,16 @@ const road = (id: number, kind: string, pts: [number, number][], bridge: boolean
 
 /** A street crossing the river (x 150..250) on a bridge from x = 120 to 280, with ground streets beyond. */
 function world() {
-  const t = riverTerrain();
-  const w = findWater(t, [centreLine]);
-  carveRiverBed(t, w);
+  const g = riverTerrain();
+  const t0 = writeTerrainFile(join(dir, `t${files++}.bin`), g, (r, out) => out.set(g.heights.subarray(r * g.cols, (r + 1) * g.cols)));
+  const w = findWater(t0, [centreLine]);
+  const bed = carveRiverBed(t0, w);
+  // T2, the terrain after the river bed, as a file (planBridges) and decoded (the readers that still take a grid)
+  const file = commitVersion(t0, bed.edits, bed.edited, join(dir, `t${files++}.bin`));
+  t0.close();
+  opened.push(file);
+  const bytes = readFileSync(file.path);
+  const t = decodeTerrain(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
   const roads = [
     road(1, 'residential', [[60, 150], [120, 150]], false),
     road(2, 'residential', [[120, 150], [280, 150]], true),
@@ -30,7 +49,7 @@ function world() {
     boundary: [], roads, tramTracks: [], bridgeTracks: [], railBridges: [], rivers: [centreLine], tramStops: [], tunnelTracks: [], tunnelPlatforms: [], platforms: [], greens: [], trees: [], lamps: [],
     shops: [], squares: [], bikeParking: [],
   };
-  return { t, w, f, plan: planBridges(f, t, w) };
+  return { t, file, w, f, plan: planBridges(f, file, w) };
 }
 
 test('deck heights meet the terrain at the abutments and clear the water in between', () => {
@@ -76,10 +95,10 @@ test('bridge geometry is lifted onto the deck; the bodies close the deck and kee
 });
 
 test('a railway bridge gets steel arches over its spans; abutment fills sit at the deck ends', () => {
-  const { t, w, f } = world();
+  const { t, file, w, f } = world();
   const rails = [212, 220, 228].map((z) => densify([{ x: 120, z }, { x: 280, z }], 8));
   const withRail: OsmFeatures = { ...f, roads: f.roads.slice(0, 3), railBridges: rails };
-  const plan = planBridges(withRail, t, w);
+  const plan = planBridges(withRail, file, w);
   const st = plan.structures.find((s) => s.rails)!;
   expect(st).toBeDefined();
   const geo = buildStreetGeometry(withRail, allSidewalkWidths(withRail.roads, []), { roads: plan.roads, tracks: plan.tracks });

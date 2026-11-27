@@ -2,10 +2,16 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { WORLD_INDEX_FILE, type WorldIndex } from '@nn/shared';
+import type { TerrainFile } from './terrain/file.js';
 
 /** First 32 hex characters of the SHA-256 over the (uncompressed) bytes. */
 export function contentHash(data: Uint8Array): string {
   return createHash('sha256').update(data).digest('hex').slice(0, 32);
+}
+
+/** contentHash of a terrain file's bytes, streamed from the file (its SHA-256, cut the same way). */
+export function fileContentHash(file: TerrainFile): string {
+  return file.contentHash().slice(0, 32);
 }
 
 /** Hashes every file of the (flat) world folder, except index.json itself and dot files. Keys are sorted by name. */

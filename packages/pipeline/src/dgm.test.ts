@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { ORIGIN_UTM } from '@nn/shared';
-import { gaussBlur, mosaic, readDgmTile, terrainFromMosaic, type Mosaic } from './dgm';
+import { readDgmTile, type Mosaic } from './dgm';
+import { gaussBlur, mosaic, terrainFromMosaic } from './dgm.dense.test-util';
 
 function ramp(e0: number, n0: number, w: number, h: number, f: (e: number, n: number) => number): Mosaic {
   const data = new Float32Array(w * h);

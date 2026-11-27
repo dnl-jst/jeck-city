@@ -5,9 +5,11 @@ import { EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { CHUNK_SIZE, chunkKey, type CollisionAsset, type TerrainGrid } from '@nn/shared';
 import { MeshoptEncoder } from 'meshoptimizer';
 import type { BuildingMesh } from './buildings.js';
-import { groundMesh, groundSpan, type GroundMesh } from './ground.js';
+import { chunkWindow, groundMesh, groundSpan, type GroundMesh } from './ground.js';
 import type { Pt } from './osm.js';
 import type { Mesh } from './streets.js';
+import { TerrainFile } from './terrain/file.js';
+import { type Heights, TerrainSampler } from './terrain/height.js';
 
 export const STREET_MESHES = ['road', 'sidewalk', 'curb', 'trackbed', 'tram', 'green', 'squares', 'markings', 'parking', 'water', 'bridge', 'steel'] as const;
 export type StreetName = (typeof STREET_MESHES)[number];
@@ -144,12 +146,14 @@ export function splitMesh(m: Mesh, area?: Rect): Map<string, Mesh> {
  * Yields the chunks one at a time, sorted by (iz, ix): the set of keys is fixed up front, a chunk's building batch
  * (its full meshes loaded from `buildings` just then) and ground mesh are built when it is yielded, and nothing of a
  * yielded chunk is kept.
+ * `terrain` may be the TerrainFile: each chunk then reads only its window (chunkWindow) for its ground, and drapes
+ * through a sampler of the file with that window as its fast path.
  * `draped`: flat street meshes draped onto `terrain` chunk by chunk (drapeChunk; needs `terrain` and `area`) in place
  * of the same name in `streets`; the draped triangles per name are added up in `drapedTriangles`. A chunk that only
  * such a mesh might reach (its triangles' bounding boxes) is left out when no draped triangle falls into it.
  */
 export async function* chunkGeometries(buildings: BuildingSource, streets: Partial<StreetMeshes>, overrides: Overrides = {}, area?: Rect,
-  terrain?: TerrainGrid, extra: Partial<StreetMeshes> = {}, draped: Partial<Record<StreetName, FlatSource>> = {},
+  terrain?: TerrainGrid | TerrainFile, extra: Partial<StreetMeshes> = {}, draped: Partial<Record<StreetName, FlatSource>> = {},
   drapedTriangles: Partial<Record<StreetName, number>> = {}): AsyncGenerator<ChunkGeometry> {
   const sources = STREET_MESHES.map((name) => draped[name]);
   if (sources.some(Boolean) && (!terrain || !area)) throw new Error('chunkGeometries: draping needs terrain and area');
@@ -193,16 +197,19 @@ export async function* chunkGeometries(buildings: BuildingSource, streets: Parti
       for (const i of list) batch.add(await buildings.mesh(i));
       c.buildings = batch.build();
     }
+    // the heights of this chunk: from a file, its window (where the chunk has ground) as the fast path of a sampler
+    const win = terrain instanceof TerrainFile && grounded.has(key) ? chunkWindow(terrain, ix, iz) : undefined;
+    const heights: Heights | undefined = terrain instanceof TerrainFile ? new TerrainSampler(terrain, win) : terrain;
     STREET_MESHES.forEach((name, i) => {
       const src = sources[i];
-      const have = src ? drapeChunk(src, terrain!, ix, iz, area!) : own[i]!.get(key), deck = more[i]!.get(key);
+      const have = src ? drapeChunk(src, heights!, ix, iz, area!) : own[i]!.get(key), deck = more[i]!.get(key);
       if (src && have) drapedTriangles[name] = (drapedTriangles[name] ?? 0) + have.indices.length / 3;
       own[i]!.delete(key);
       more[i]!.delete(key);
       if (have || deck) c.streets[name] = have && deck ? concatMeshes([have, deck]) : (have ?? deck)!;
     });
     if (!certain.has(key) && Object.keys(c.streets).length === 0) continue;
-    if (terrain && grounded.has(key)) c.ground = groundMesh(terrain, ix, iz)!;
+    if (terrain && grounded.has(key)) c.ground = groundMesh(win ?? (terrain as TerrainGrid), ix, iz)!;
     yield c;
   }
 }
@@ -355,7 +362,7 @@ export class SoupBuilder {
  * buildings in `buildings` order (read one at a time: a BuildingStore's meshes()).
  * Not included: road, trackbed, tram, green and squares — they lie only centimetres above the ground, which covers them.
  */
-export async function buildCollision(o: { buildings: Iterable<BuildingMesh> | AsyncIterable<BuildingMesh>; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[]; terrain?: TerrainGrid }): Promise<CollisionAsset> {
+export async function buildCollision(o: { buildings: Iterable<BuildingMesh> | AsyncIterable<BuildingMesh>; curb: Mesh; sidewalk: Mesh; boundary: Pt[]; overrides?: Overrides; dropBackdropRoofs?: boolean; extra?: Float32Array[]; terrain?: TerrainGrid | TerrainFile }): Promise<CollisionAsset> {
   const s = new SoupBuilder();
   for (const t of o.extra ?? []) for (let v = 0; v < t.length / 3; v += 3) s.tri(t, v, v + 1, v + 2);
   for await (const b of o.buildings) {

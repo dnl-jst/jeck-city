@@ -1,13 +1,14 @@
-import type { TerrainGrid } from '@nn/shared';
+import { decodeTerrain, encodeTerrain, type TerrainGrid } from '@nn/shared';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, test } from 'vitest';
-import { BuildingStore, decodeTileFile } from './buildingstore.js';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { BuildingStore, decodeTileFile, GROUND_WINDOW_CELLS } from './buildingstore.js';
 import { codeHash } from './codehash.js';
 import { buildBuildingMesh, type BuildingMesh } from './buildings.js';
 import { parseCityGml } from './citygml.js';
 import { footprintOf } from './footprint.js';
+import { TerrainFile, writeTerrainFile } from './terrain/file.js';
 
 const fixture = (n: string) => readFileSync(new URL(`../fixtures/${n}.gml`, import.meta.url), 'utf8');
 /** The <core:cityObjectMember> blocks of a fixture (one building each). */
@@ -20,25 +21,35 @@ const TILES = ['a.gml', 'b.gml', 'c.gml'];
 const TEXT = [tileOf(gable), tileOf(broken, uHouse, gable), tileOf(uHouse, gable.replaceAll('FIXTURE_GABLE', 'FIXTURE_GABLE2'))];
 /** Around the two fixture houses (local x ≈ −190, z ≈ 710). */
 const boundary = [{ x: -250, z: 650 }, { x: -130, z: 650 }, { x: -130, z: 770 }, { x: -250, z: 770 }];
-/** A gentle slope (y 4.6 … 5.8 at datum 35; the houses' base is 5), so the meshes get plinths. */
+/** A gentle slope (y 4.6 … 5.8 at datum 35; the houses' base is 5), so the meshes get plinths; quantised as terrain.bin. */
 const terrain = (): TerrainGrid => {
   const cols = 141, rows = 141;
-  return { x0: -260, z0: 640, cols, rows, datum: 35, heights: Float32Array.from({ length: cols * rows }, (_, i) => 4.6 + 0.006 * (i % cols) + 0.003 * Math.floor(i / cols)) };
+  return decodeTerrain(encodeTerrain({ x0: -260, z0: 640, cols, rows, datum: 35, heights: Float32Array.from({ length: cols * rows }, (_, i) => 4.6 + 0.006 * (i % cols) + 0.003 * Math.floor(i / cols)) }));
 };
 
-let raw: string, cache: string;
+let raw: string, cache: string, terrainDir: string;
+const files: TerrainFile[] = [];
 beforeEach(() => {
   raw = mkdtempSync(join(tmpdir(), 'nn-raw-'));
   cache = mkdtempSync(join(tmpdir(), 'nn-buildings-'));
+  terrainDir = mkdtempSync(join(tmpdir(), 'nn-terrain-'));
   TILES.forEach((t, i) => writeFileSync(join(raw, t), TEXT[i]!));
 });
 afterEach(() => {
+  for (const f of files.splice(0)) f.close();
   rmSync(raw, { recursive: true, force: true });
   rmSync(cache, { recursive: true, force: true });
+  rmSync(terrainDir, { recursive: true, force: true });
 });
+/** The grid as a terrain file (the store reads T0 from one). */
+const fileOf = (t: TerrainGrid): TerrainFile => {
+  const f = writeTerrainFile(join(terrainDir, `t${files.length}.bin`), t, (r, out) => out.set(t.heights.subarray(r * t.cols, (r + 1) * t.cols)));
+  files.push(f);
+  return f;
+};
 
 const build = (o: { maxTiles?: number; terrain?: TerrainGrid; log?: (s: string) => void } = {}) =>
-  BuildingStore.build({ tiles: TILES, rawDir: raw, cacheDir: cache, datum: 35, terrain: o.terrain ?? terrain(), boundary, maxTiles: o.maxTiles, log: o.log });
+  BuildingStore.build({ tiles: TILES, rawDir: raw, cacheDir: cache, datum: 35, terrain: fileOf(o.terrain ?? terrain()), boundary, maxTiles: o.maxTiles, log: o.log });
 /** What the pipeline built before the store: buildBuildingMesh on the building as parsed from `tile`. */
 const direct = (tile: number, id: string): BuildingMesh => buildBuildingMesh(parseCityGml(TEXT[tile]!).find((b) => b.id === id)!, { datum: 35, terrain: terrain() })!;
 const bytes = (a: Float32Array | Uint8Array) => Buffer.from(a.buffer, a.byteOffset, a.byteLength);
@@ -118,7 +129,7 @@ test('a changed raw tile or terrain rebuilds the cache instead of using it', asy
 
 test('a cache file that no longer matches its key is refused when meshes are loaded', async () => {
   const store = await build();
-  const other = await BuildingStore.build({ tiles: TILES, rawDir: raw, cacheDir: cache, datum: 35, terrain: { ...terrain(), datum: 36 }, boundary });
+  const other = await BuildingStore.build({ tiles: TILES, rawDir: raw, cacheDir: cache, datum: 35, terrain: fileOf({ ...terrain(), datum: 36 }), boundary });
   expect(other.records).toHaveLength(3);
   await expect(store.mesh(0)).rejects.toThrow(/changed/);
 });
@@ -129,6 +140,32 @@ test('buildings dropped by classifyBuildings are in neither records nor cache', 
   expect(store.records.map((r) => r.id)).not.toContain('FIXTURE_BROKEN');
   const cached = readdirSync(cache).flatMap((f) => decodeTileFile(readFileSync(join(cache, f))).meshes.map((m) => m.id));
   expect(cached.sort()).toEqual(['FIXTURE_GABLE', 'FIXTURE_GABLE2', 'FIXTURE_U']);
+});
+
+test('a far-off building in a tile never widens the ground window beyond GROUND_WINDOW_CELLS; the meshes stay the same', async () => {
+  // a terrain larger than the limit (1500 × 1500 cells, the houses near its north-east corner): tile B's broken
+  // building lies ~356 km west and ~5600 km south, so the window over tile B's buildings would span the whole grid
+  expect(GROUND_WINDOW_CELLS).toBe(1300 * 1300);
+  const cols = 1500, rows = 1500;
+  const big = decodeTerrain(encodeTerrain({ x0: -1600, z0: 640, cols, rows, datum: 35, heights: Float32Array.from({ length: cols * rows }, (_, i) => 4.0 + 0.0006 * (i % cols) + 0.0003 * Math.floor(i / cols)) }));
+  const sizes: number[] = [];
+  const original = TerrainFile.prototype.window;
+  const spy = vi.spyOn(TerrainFile.prototype, 'window').mockImplementation(function (this: TerrainFile, ...a: [number, number, number, number]) {
+    const [c0, r0, c1, r1] = a;
+    sizes.push((Math.min(c1, this.cols - 1) - Math.max(c0, 0) + 1) * (Math.min(r1, this.rows - 1) - Math.max(r0, 0) + 1));
+    return original.apply(this, a);
+  });
+  try {
+    const store = await build({ terrain: big });
+    expect(sizes.length).toBeGreaterThan(0); // tiles A and C still use a window
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(GROUND_WINDOW_CELLS);
+    const want = (tile: number, id: string) => buildBuildingMesh(parseCityGml(TEXT[tile]!).find((b) => b.id === id)!, { datum: 35, terrain: big })!;
+    sameMesh(await store.mesh(0), want(0, 'FIXTURE_GABLE'));
+    sameMesh(await store.mesh(1), want(1, 'FIXTURE_U'));
+    sameMesh(await store.mesh(2), want(2, 'FIXTURE_GABLE2'));
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 test('inChunk lists the records whose centroid lies in the chunk, in global order', async () => {

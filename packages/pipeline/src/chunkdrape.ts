@@ -1,7 +1,8 @@
-import { CHUNK_SIZE, type TerrainGrid } from '@nn/shared';
+import { CHUNK_SIZE } from '@nn/shared';
 import type { Rect } from './chunks.js';
 import { DrapeOut, drapeTriangle } from './drape.js';
 import type { Mesh } from './streets.js';
+import type { Heights } from './terrain/height.js';
 
 /**
  * Draping street meshes chunk by chunk instead of for the whole world at once. The result for a chunk is the same,
@@ -82,8 +83,13 @@ export function prepareFlat(mesh: Mesh, area: Rect): FlatSource {
   return { mesh: crop, trianglesByChunk, ...(markOrder ? { markOrder } : {}) };
 }
 
-/** The draped part of `src` that belongs to chunk (ix, iz): byte-identical to splitMesh(drapeMesh(cropMesh(mesh, area), terrain), area).get(key). */
-export function drapeChunk(src: FlatSource, terrain: TerrainGrid, ix: number, iz: number, area: Rect): Mesh | undefined {
+/**
+ * The draped part of `src` that belongs to chunk (ix, iz): byte-identical to
+ * splitMesh(drapeMesh(cropMesh(mesh, area), terrain), area).get(key).
+ * `terrain`: the whole grid, or a TerrainSampler of its file (best with the chunk's window as its fast path: vertical
+ * faces are draped whole and may reach beyond any window, those points go to the file).
+ */
+export function drapeChunk(src: FlatSource, terrain: Heights, ix: number, iz: number, area: Rect): Mesh | undefined {
   const list = src.trianglesByChunk.get(`${ix}_${iz}`);
   if (!list) return undefined;
   const m = src.mesh;
