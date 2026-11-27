@@ -88,6 +88,7 @@ describe('loading ahead', () => {
     expect(one.x).toBeLessThan(5); // one frame does not set the speed
     expect(trackVelocity(v, p, { x: p.x + 500, z: 0 }, 1 / 60)).toEqual({ x: 0, z: 0 }); // teleport (respawn)
     expect(trackVelocity(v, p, { x: p.x + 60, z: 0 }, 2)).toEqual({ x: 0, z: 0 }); // the tab was in the background
+    expect(trackVelocity({ x: 0, z: 0 }, p, { x: p.x + 2.5, z: 0 }, 1 / 60).x).toBeGreaterThan(0); // the free-fly camera at 150 m/s is no jump
     expect(trackVelocity(v, p, p, 0)).toEqual(v); // same instant: unchanged
     expect(trackVelocity(v, p, p, Number.NaN)).toEqual({ x: 0, z: 0 }); // the first update has no previous time
   });

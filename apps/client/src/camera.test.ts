@@ -1,7 +1,8 @@
-import { PerspectiveCamera } from 'three';
-import { expect, test } from 'vitest';
+import { PerspectiveCamera, type Vector3 } from 'three';
+import { describe, expect, it, test } from 'vitest';
+import type { Input } from './input';
 import type { PhysicsWorld } from '@nn/shared';
-import { CAMERA_FOV, CAMERA_RIDE, CAMERA_WALK, FollowCamera, shakeAmount, shakeOffset, speedFov } from './camera';
+import { CAMERA_FOV, CAMERA_RIDE, CAMERA_WALK, FLY_FAST, FLY_SPEED, FollowCamera, FreeFly, shakeAmount, shakeOffset, speedFov } from './camera';
 
 /** Physics stub: the ray never hits anything. */
 const open = { rapier: { Ray: class { constructor(readonly o: unknown, readonly d: unknown) {} } }, world: { castRay: () => null } } as unknown as PhysicsWorld;
@@ -83,4 +84,22 @@ test('fast on a bike: wider view (smoothed), camera a little further back, shake
   expect(Math.abs(cam.position.y - CAMERA_RIDE.up)).toBeLessThan(0.05);
   f.resetFov();
   expect(cam.fov).toBe(CAMERA_FOV);
+});
+
+describe('FreeFly', () => {
+  /** The camera after flying forward (heading 0: +z) for a second. */
+  const flown = (run: boolean): Vector3 => {
+    const cam = new PerspectiveCamera();
+    const input = { held: () => false, axes: () => ({ forward: 1, right: 0 }), run: () => run } as unknown as Input;
+    const fly = new FreeFly(cam, input);
+    fly.setHeading(0);
+    for (let i = 0; i < 60; i++) fly.update(1 / 60);
+    return cam.position;
+  };
+
+  it('flies at FLY_SPEED and with Shift at FLY_FAST', () => {
+    expect(flown(false).z).toBeCloseTo(FLY_SPEED, 3);
+    expect(flown(true).z).toBeCloseTo(FLY_FAST, 3);
+    expect(FLY_FAST).toBeGreaterThanOrEqual(100); // across the 4 km of the city in well under a minute
+  });
 });

@@ -23,7 +23,7 @@ export const LEAD_MAX = 200;
 /** The tracked camera speed follows the measured one with this time constant (s): a camera orbit averages out. */
 const VELOCITY_EASE_S = 0.5;
 /** A step faster than this (m/s) or after a longer pause than this (s) is a jump, not a movement. */
-const JUMP_SPEED = 120;
+const JUMP_SPEED = 250; // (the dev free-fly camera does 150 m/s)
 const JUMP_PAUSE_S = 1;
 /** Pause (ms) between decoding one downloaded chunk and the next: at least one frame is drawn in between. */
 const DECODE_GAP_MS = 20;

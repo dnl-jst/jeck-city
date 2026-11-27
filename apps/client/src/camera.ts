@@ -203,7 +203,13 @@ export class FollowCamera {
   }
 }
 
-/** Dev free-fly camera (`?debug=1`, toggled with F): WASD, mouse look, Q/E down/up, Shift fast. */
+/** Free-fly speed (m/s), and with Shift: across the whole city in half a minute. */
+export const FLY_SPEED = 6, FLY_FAST = 150;
+
+/**
+ * Dev free-fly camera (`?debug=1` or a dev-mode server, toggled with F): WASD, mouse look, Q/E down/up, Shift fast;
+ * T puts the player onto the ground below the camera and ends the flight (Game).
+ */
 export class FreeFly {
   /** three.js yaw (camera looks along −z at 0). */
   yaw = 0;
@@ -232,7 +238,7 @@ export class FreeFly {
     this.cam.quaternion.setFromEuler(new Euler(this.pitch, this.yaw, 0, 'YXZ'));
     const k = (c: string) => (this.input.held(c) ? 1 : 0);
     const a = this.input.axes();
-    const speed = (this.input.run() ? 40 : 6) * dt;
+    const speed = (this.input.run() ? FLY_FAST : FLY_SPEED) * dt;
     const fwd = new Vector3(0, 0, -1).applyQuaternion(this.cam.quaternion);
     const right = new Vector3(1, 0, 0).applyQuaternion(this.cam.quaternion);
     this.cam.position.addScaledVector(fwd, a.forward * speed).addScaledVector(right, a.right * speed);
