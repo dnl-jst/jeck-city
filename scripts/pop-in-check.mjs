@@ -3,7 +3,9 @@
 // Chromium (?offline=1: no server session) in a straight line through the middle of the world at the helicopter's top
 // speed and compares, for every chunk, the moment its nearest point comes within the view distance of the camera with
 // the moment its download finished (resource timing). Decoding comes on top of the download and is not measured.
-// Reports only; it fails on nothing. A dev server must be running (npm run dev).
+// Reports only; it fails on nothing. A dev server must be running (npm run dev). The frame rate it prints tells how far
+// the result can be trusted: the loader runs once per frame, so a browser that draws a few frames per second (no GPU)
+// loads late whatever the loader does. NN_ANGLE=metal (macOS) picks another ANGLE backend than browser-args.mjs.
 import { chromium } from 'playwright';
 import { browserArgs } from './browser-args.mjs';
 
@@ -33,7 +35,8 @@ const length = speed * seconds;
 const x0 = midX - length / 2;
 console.log(`flying ${length.toFixed(0)} m east at ${speed} m/s through z = ${midZ.toFixed(0)}, ${quality} quality (view ${view} m)`);
 
-const browser = await chromium.launch({ args: browserArgs });
+const args = process.env.NN_ANGLE ? [`--use-angle=${process.env.NN_ANGLE}`, '--enable-gpu', '--ignore-gpu-blocklist'] : browserArgs;
+const browser = await chromium.launch({ args });
 const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
 page.on('pageerror', (e) => console.error('page error:', e.message));
 try {
@@ -53,16 +56,24 @@ try {
   const result = await page.evaluate(async ([x0, z, height, speed, seconds]) => {
     performance.setResourceTimingBufferSize(5000);
     const t0 = performance.now();
+    let frames = 0;
+    let last = t0;
+    const gaps = [];
     await new Promise((done) => {
       const frame = () => {
-        const t = (performance.now() - t0) / 1000;
+        const now = performance.now();
+        const t = (now - t0) / 1000;
+        frames++;
+        gaps.push(now - last);
+        last = now;
         window.__nnFlyTo(x0 + Math.min(t, seconds) * speed, height, z, 90, -15);
         if (t < seconds + 3) requestAnimationFrame(frame);
         else done();
       };
       frame();
     });
-    return { t0, entries: performance.getEntriesByType('resource').map((e) => ({ name: e.name, end: e.responseEnd })) };
+    gaps.sort((a, b) => b - a);
+    return { t0, frames, gaps: gaps.slice(0, 5), over250: gaps.filter((g) => g > 250).length, entries: performance.getEntriesByType('resource').map((e) => ({ name: e.name, start: e.startTime, end: e.responseEnd })) };
   }, [x0, midZ, HEIGHT, speed, seconds]);
 
   /** Seconds into the flight at which each downloaded file had arrived, by URL ending. */
@@ -93,6 +104,17 @@ try {
   console.log(`  downloaded in time: ${early.length} (median ${median(early).toFixed(1)} s before coming into view)`);
   console.log(`  downloaded late:    ${late.length} (median ${median(late).toFixed(1)} s, worst ${Math.max(0, ...late).toFixed(1)} s after coming into view)`);
   console.log(`  not downloaded during the flight: ${missing}`);
+  console.log(`frames: ${(result.frames / (seconds + 3)).toFixed(0)} per second; ${result.over250} longer than 0.25 s; the longest ${result.gaps.map((g) => (g / 1000).toFixed(2)).join(', ')} s`);
+  // what limited it: the chunk downloads that started during the flight
+  const flown = [];
+  for (const c of manifest.chunks) {
+    const hash = index.files[c.file]?.hash;
+    const e = result.entries.find((r) => r.name.endsWith(`/${c.file}`) || (hash && r.name.includes(hash)));
+    if (e && e.start >= result.t0) flown.push({ s: (e.end - e.start) / 1000, mb: c.bytes / 1e6 });
+  }
+  const mb = flown.reduce((sum, d) => sum + d.mb, 0);
+  console.log(`downloads during the flight: ${flown.length} chunks, ${mb.toFixed(0)} MB uncompressed, ${(mb / (seconds + 3)).toFixed(1)} MB/s; ` +
+    `one chunk took ${median(flown.map((d) => d.s)).toFixed(1)} s (median), ${Math.max(0, ...flown.map((d) => d.s)).toFixed(1)} s at worst`);
 } finally {
   await browser.close();
 }
